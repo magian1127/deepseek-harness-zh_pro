@@ -295,6 +295,15 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
      省略号截断（`lib/client.js` 的 STATS_FULL 逻辑）。
 - **增强设置页（用户确认）**：`settings.section` 分区「增强设置」；三项开关
   （中文补全 / 统计全显示 / 对话宽度总开关+比例）本地持久化，详见第 1 节与 AGENTS。
+- **信任与数据边界（对外承诺）**：不注册任何模型工具、不注入提示词、零 token 消耗、
+  不上传任何数据、不写任何存储文件（唯一的例外：增强设置在浏览器 localStorage）。
+- **已知限制（对外承诺）**：词典管不到的硬编码英文只覆盖内置清单；未列入清单的
+  文本保持英文，用户反馈后补充（这是旧 README FAQ 的开发者版）。
+- **兼容性要求**：DeepSeek Harness Web GUI（`web` profile）；Node.js
+  `^22.19.0 || >=24.0.0`；仅中文界面生效，英文界面零影响。
+- **Roadmap**：
+  - [ ] 覆盖更多组件的硬编码英文；
+  - [ ] 术语叫法可配置（按用户偏好开关）。
 - 词典补丁两层（见 `lib/client.js`）：
   - `ZH` 整句覆盖：仅保留必须改写整句的键（`message.retry.status` 兜底、`model.retry`、`'*'` 通用词）；
     `settings.models` 的 K/M 数字换算整句覆盖已按用户决定删除 —— 用户需按 K/M 输入，

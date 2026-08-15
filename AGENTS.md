@@ -62,6 +62,10 @@
 5. 改动行为契约后同步更新 `README.md` 与 `DEVELOPMENT.md`。
 6. 任何改动（哪怕一行）后跑：`node --check lib/client.js` +
    `node --check lib/index.js` + `node --check bin/dsh-zh.mjs` + `node verify-pairs.cjs`。
+7. **信任边界**：不注册工具、不注入提示词、零 token 消耗、不上传数据、不写存储
+   （增强设置的 localStorage 除外）。
+8. **已知限制与 Roadmap**：硬编码英文只覆盖内置清单，未收录的保持原样（用户反馈后
+   补充）；Roadmap = 覆盖更多硬编码英文、术语叫法可配置。
 
 ## 五、常用命令
 
