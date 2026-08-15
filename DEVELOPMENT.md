@@ -331,8 +331,11 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
     fiber 上（「Disposed with the fiber」），本插件热重载后旧目录条目残留，
     因此 provider 键固定 + apply 时先 `listConfigurableProviders()` 查重，
     已存在则跳过（否则 DUPLICATE_DIRECTORY）；b) 副作用：Models 设置页会
-    显示该目录条目（「提示词注入（deepseek-harness-zh_pro）」行），无害；
-    c) 用户页面已加载的旧 scope 不会自动重试，暴露后需刷新页面。
+    显示该目录条目（「提示词注入（deepseek-harness-zh_pro）」行）。当前
+    DSH 目录类型没有 hidden 字段，客户端 DOM 层在中文界面按 displayName
+    精确匹配隐藏该行（`li` 行卡片与 `option` 下拉项都处理，英文界面还原），
+    目录注册保留、网页「提示词注入」开关不受影响；c) 用户页面已加载的旧
+    scope 不会自动重试，暴露后需刷新页面。
 22. **`useSyncExternalStore` 的 getSnapshot 必须换引用（本会话实测坑）**：
     `settingsScope` 的 scope 对象引用在内部 snapshot 更新时不变。若把 scope
     本身作为 store 快照返回，React 收到 notify 后比较快照引用相同，会跳过
@@ -346,7 +349,7 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
 ## 6. 当前插件行为契约（用户已确认，改动需同步本文件）
 
 - **只在中文界面生效**；不强制中文、不改标题；不做全局页面翻译。
-- **DOM 例外（用户确认，两处）**：
+- **DOM 例外（用户确认，三处）**：
   a) 权限预设标签（`Workspace Write`→工作区写入、`Read Only`→只读、
      `Full access`→完全访问、`Custom`→自定义，及悬停描述）、斜杠命令菜单说明
      （/compact、/goal、/feedback、/plan、/permission、/export 六条英文说明，
@@ -359,6 +362,11 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
   b) 聊天统计行（`N 轮 · N 步 | …`）在中文界面保持单行完整显示：放宽到输入区全宽
      + 自动缩小字号（12px 起步、最低 9px），极端超长改横向滚动；英文界面还原默认
      省略号截断（`lib/client.js` 的 STATS_FULL 逻辑）。
+  c) Models 设置页的「提示词注入（deepseek-harness-zh_pro）」目录行（主机侧为
+     暴露 settings 命名空间而注册的可配置提供方，见第 5 节第 21 条）：中文界面由
+     DOM 层按精确文本隐藏（`PROMPT_PROVIDER_KEY` 标记；`li` 行卡片用
+     `display:none!important`、`option` 下拉项用 `hidden`），英文界面还原。目录
+     注册保留，网页「提示词注入」开关与注入文本编辑不受影响。
 - **增强设置页（用户确认）**：`settings.section` 分区「增强设置」；三项本地开关
   （中文补全 / 统计全显示 / 对话宽度总开关+比例）走 localStorage，一项
   「提示词注入」（默认关闭）走官方 settingsScope 服务 → 主机 settings
