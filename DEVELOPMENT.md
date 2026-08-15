@@ -378,7 +378,9 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
      暴露 settings 命名空间而注册的可配置提供方，见第 5 节第 21 条）：中文界面由
      DOM 层按精确文本隐藏（`PROMPT_PROVIDER_KEY` 标记；`li` 行卡片用
      `display:none!important`、`option` 下拉项用 `hidden`），英文界面还原。目录
-     注册保留，网页「提示词注入」开关与注入文本编辑不受影响。
+     注册保留，网页「提示词注入」开关与注入文本编辑不受影响。**该去噪是实现
+     副作用、仅记开发文档：README 面向用户，不把它列为功能，也不写入 FAQ
+     （用户无需知道这个内部目录条目）。**
   d) 自动展开最新思考输出（默认开启）：DOM 层定位 ReasoningRow
      （`[data-variant="think"]`），点击 `[data-disclosure-row]` 切换
      DisclosureRow 的展开状态。流式思考（`data-state="running"`）出现时自动
@@ -415,6 +417,10 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
 - **兼容性要求**：DeepSeek Harness Web GUI（`web` profile）；Node.js
   `^22.19.0 || >=24.0.0`；界面增强仅中文界面生效，英文界面零影响；
   「提示词注入」为显式开关，默认关闭，不受界面语言限制。
+- **Git 提交与推送纪律（用户确认）**：不允许主动 `git commit` / `git push`；
+  任何提交与推送都必须等用户审核改动并明确批准后才执行。commit message
+  必须全中文；英文专业术语可以写在中文后的括号内（例：
+  `feat: 默认展开思考（thinking）输出`）。
 - **Roadmap**：
   - [ ] 覆盖更多组件的硬编码英文；
   - [ ] 术语叫法可配置（按用户偏好开关）。
