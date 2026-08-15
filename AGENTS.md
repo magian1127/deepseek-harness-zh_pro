@@ -118,3 +118,6 @@ node bin\dsh-zh.mjs remove --profile web
 - profile 被重置会清掉挂载/依赖/工作区注册：重跑
   `node bin/dsh-zh.mjs install --link <本仓库>`（服务在跑即热，否则重启生效）。
 - 服务重启会清掉所有动态插件（cordis_define/run）；常驻 bundle 行不受影响。
+- **npm 发布必须在交互式终端跑**：后台/非交互 pwsh 中 npm 12 会把 2FA 认证链接
+  脱敏成 `https://www.npmjs.com/auth/cli/***` 并 EOTP 退出，只有交互式终端才显示
+  完整 `<uuid>` 链接并等浏览器二次验证（详见 DEVELOPMENT.md 第 5 节第 23 条）。

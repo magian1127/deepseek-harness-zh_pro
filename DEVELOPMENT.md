@@ -343,6 +343,18 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
     store 保存 `{ scope, snapshot }` 绑定对象，每次 scope 通知都替换整个绑定
     对象；组件从绑定里取 scope 与 snapshot（见 `lib/client.js` 的
     `zhPromptStore`）。
+23. **npm publish 的 2FA web 认证只能在交互式终端完成（2026-08-15 实测）**：
+    npm 12 在非 TTY 环境（后台 job / 非交互 pwsh，含 PowerShell 捕获其
+    stdout/stderr）遇到 EOTP 时，会把一次性认证链接脱敏打印为
+    `https://www.npmjs.com/auth/cli/***` 后直接退出——日志文件里同样是 `***`，
+    轮询重试也永远拿不到真实 URL，无法自动完成浏览器二次验证。只有交互式
+    终端才打印完整链接 `https://www.npmjs.com/auth/cli/<uuid>`（**UUID 每次
+    运行都会变**，是 npm web 认证会话 ID），用户在浏览器完成认证后 publish
+    即成功。结论：**发布必须由用户在交互式 pwsh 前台跑 `npm publish` 完成**，
+    不要试图用后台脚本自动化 OTP 发布；发布成功后用
+    `npm view deepseek-harness-zh_pro version --registry=https://registry.npmjs.org`
+    确认（重复发布会报 `You cannot publish over the previously published
+    versions`，这个报错反过来就是「已发布成功」的佐证）。
 
 ---
 
@@ -461,9 +473,18 @@ node 'verify-pairs.cjs'
   效果示例、功能特性、安装/更新/卸载、工作原理（数据与信任表）、常见问题、Roadmap。
 - **待办（推送到 GitHub 后）**：往 package.json 补 `repository`/`homepage`/`bugs` 字段
   （npm 发布不强制要求，可后补）。
-- 发布命令：先 `npm test`（即 `node verify-pairs.cjs`）+ `node --check lib/client.js`
-  + `node --check lib/index.js` + `node --check bin/dsh-zh.mjs`，
-  再 `npm publish`；包名 `deepseek-harness-zh_pro`。
+- 发布命令（顺序）：
+  1. `node --check lib/client.js` + `node --check lib/index.js` +
+     `node --check bin/dsh-zh.mjs` + `node verify-pairs.cjs`（或 `npm test`）；
+  2. 更新版本号（package.json + README 徽章）→ 提交 → `git tag 0.x.0` →
+     `git push origin master` + `git push origin tag 0.x.0`；
+  3. **在交互式 pwsh 前台**运行 `npm publish --registry=https://registry.npmjs.org`
+     （包名 `deepseek-harness-zh_pro`）。npm 会打印
+     `https://www.npmjs.com/auth/cli/<uuid>` 并等待浏览器完成 2FA 二次验证；
+     **后台/非交互环境会把该链接脱敏成 `***` 并 EOTP 退出，无法自动发布**
+     （详见第 5 节第 23 条）；
+  4. `npm view deepseek-harness-zh_pro version --registry=https://registry.npmjs.org`
+     确认新版本已是 `latest`。
 - 发布后用户安装/卸载：
   - 裸 `dsh plugin --profile web add/remove deepseek-harness-zh_pro`：官方通道，
     add 后重启生效，remove 被监督器热卸载；
