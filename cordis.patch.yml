@@ -1,0 +1,25 @@
+# deepseek-harness-zh_pro bundle patch（持久挂载通道，行 id `dsh-zh`）
+#
+# 本文件随包发布并由 `package.json` 的 `dsh.bundle.patch` 引用。因此：
+#
+#   dsh plugin --profile web add deepseek-harness-zh_pro
+#
+# 会把本包编进 profile 的 `dsh.profile.bundles`；重启后由本行挂载（无需任何
+# 额外配置）。这是所有用户的兜底安装方式。
+#
+# 热安装（服务运行时一条命令，无需重启）：
+#
+#   npx -y deepseek-harness-zh_pro install --profile web
+#
+# 它会额外写一条「临时热行」（id `dsh-zh-hot`）立即热挂载，主机监督器随后
+# 自动迁移为运行时条目并删除该临时行，因此当前进程与下次启动都只有单实例。
+#
+# 卸载：
+#
+#   dsh plugin --profile web remove deepseek-harness-zh_pro
+#   # 或 npx -y deepseek-harness-zh_pro remove --profile web
+#
+# 主机监督器会自愈清理任何残留临时行并热卸载自己。
+- insert:
+    - id: dsh-zh
+      name: 'deepseek-harness-zh_pro'

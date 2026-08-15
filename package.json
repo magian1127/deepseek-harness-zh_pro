@@ -1,0 +1,45 @@
+{
+  "name": "deepseek-harness-zh_pro",
+  "version": "0.3.0",
+  "type": "module",
+  "description": "DSH 中文增强插件：仅在中文界面生效——修正残留英文、统一中文术语与格式，并让统计行等关键信息始终完整显示",
+  "main": "lib/index.js",
+  "bin": {
+    "deepseek-harness-zh_pro": "./bin/dsh-zh.mjs"
+  },
+  "files": [
+    "lib",
+    "bin",
+    "verify-pairs.cjs",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "test": "node verify-pairs.cjs"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  }
+}
