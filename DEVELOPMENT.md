@@ -2,7 +2,10 @@
 
 > 本文件记录本机 DSH（DeepSeek Harness）网页插件从零开发到常驻部署的全过程经验，
 > 供后续会话直接参考。当前插件：中文增强（仅中文界面生效，不强制中文；
-> 用户确认的 DOM 例外 = 文本层改写 + 统计行单行完整显示；另有「增强设置」分区）。
+> 用户确认的 DOM 例外 = 文本层改写 + 统计行单行完整显示；另有「增强设置」分区；
+> 独立开关「提示词注入」默认关闭，开启后经官方 settings 持久化；主机半边
+> 包装 `systemPrompt.assemble` 写入最终 system prompt（首次对话即生效），并
+> 插入可见上下文消息，注入文本可在设置页编辑）。
 
 ---
 
@@ -28,7 +31,7 @@
     （`# dsh-zh:begin/end`，id `dsh-zh-hot`），监督器会自动清理
 - 插件本体（本仓库）：`dsh.bundle.patch` 指向仓库 `cordis.patch.yml`
   （持久行 id `dsh-zh`）；`bin/dsh-zh.mjs` 是装卸 CLI；`lib/index.js`
-  是主机侧热装卸监督器（含自迁移逻辑）。
+  是主机侧热装卸监督器 + 「提示词注入」注册器（含自迁移逻辑）。
 
 ### 部署（双通道，任意方式安装都收敛为单实例）
 
@@ -57,8 +60,8 @@ npx -y deepseek-harness-zh_pro remove --profile web
 >   首页/端点立即消失；重启后 bundle 已不在，彻底干净。
 > - **实测通过**：裸 add（未重启不生效）→ 重启 bundle 挂载 ✓；npx install 热挂载+
 >   自迁移 ✓；裸 remove 热卸载 ✓；dshmarket 不冲突 ✓（bundle 声明使其跳过重挂载）。
-> - 主机半边改动同进程 ESM 缓存不重读：**必须重启服务**才加载新 host 代码；
->   客户端 `lib/client.js` 改动永远只需刷新网页。
+> - 主机半边改动**保存即热重载**（自监视官方 hmr 实例 + 官方 partialReload 管线，
+>   详见第 5 节第 18 条）；客户端 `lib/client.js` 改动永远只需刷新网页。
 
 ---
 
@@ -80,7 +83,7 @@ npx -y deepseek-harness-zh_pro remove --profile web
   },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
-    "client": { "platform": "web", "immediately": true, "inject": ["@deepseek-ai/dsh-client-locale"] }
+    "client": { "platform": "web", "immediately": true, "inject": ["@deepseek-ai/dsh-client-ui-settings", "@deepseek-ai/dsh-client-locale"] }
   }
 }
 ```
@@ -90,7 +93,14 @@ npx -y deepseek-harness-zh_pro remove --profile web
   CLI 的热通道临时行用**不同 id**（`dsh-zh-hot`）并由监督器自迁移删除，因此
   两个通道不会同 id 冲突，也不会重复加载。
 - `bin/dsh-zh.mjs` 是热装卸 CLI（install/remove/status）；`lib/index.js` 主机
-  半边是热装卸监督器（`export const inject = ['loader']`），不再是空实现。
+  半边是热装卸监督器 + 「提示词注入」注册器（`export const inject =
+  ['loader', 'settings', 'systemPrompt']`）：注册 settings 命名空间 `dsh-zh`
+  （`zhPrompt` 开关默认 false、`zhPromptText` 文本默认为 `ZH_PROMPT_TEXT`），
+  包装 `systemPrompt.assemble` 把该文本写进最终 system prompt（首次对话
+  即生效），同时作为 `user/message` 上下文插入（source=
+  `deepseek-harness-zh_pro`，form=`notice`；开关关闭或文本为空时
+  两处都不写，聊天记录显示「上下文注入 deepseek-harness-zh_pro」行）。
+  临时热行（id `dsh-zh-hot`）不注册这两项，避免自迁移窗口重复注册。
 - `dsh.client` 声明是「浏览器花名册」标记；`inject` 里写**依赖的包名**（图的边），服务注入写在模块 exports 的 `inject` 里。
 - **`"./package.json"` 导出绝不能省**：client-modules 节点半边用
   `require.resolve('<包名>/package.json')` 扫描；缺了它会**静默跳过**（404、启动图无此行）。
@@ -108,7 +118,7 @@ window.__ModuleLoader__.load({
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
     // ... 代码 ...
-    exports.inject = ['locale'];      // 服务名
+    exports.inject = ['locale', 'slots'];      // 服务名（settingsScope 用 ctx.inject 可选注入）
     exports.apply = apply;
     return module.exports;
   },
@@ -268,12 +278,68 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
 17. **pnpm 11 默认拦截依赖生命周期脚本**：`link:` 安装完全不跑 postinstall；
     `file:`/registry 安装会 `ERR_PNPM_IGNORED_BUILDS` 且退出码非 0。所以热装卸不能
     依赖 postinstall/preuninstall，只能走「CLI 写临时热行 + 监督器自迁移」。
-18. **主机半边同进程 ESM 缓存不重读**：改 `lib/index.js` 后删行重挂载也不会加载新代码
-    （同一 file URL 被模块缓存），必须重启 dsh web；`lib/client.js` 是每次请求实时读文件，
-    刷新即可。
+18. **主机半边热重载（自监视模式，2026-08-15 落地，取代「必须重启」）**：
+    改 `lib/index.js` / `bin/dsh-zh.mjs` 保存后 150ms 防抖内自动热重载，
+    无需重启 dsh web。机制（全部走官方 API，详见 `lib/index.js` 的
+    `installSelfHotReload`）：
+    a) web 模式下 CLI（`apps/cli/lib/types/profile-boot.js`）会在 composition
+       无 hmr 服务时创建 watch-only 的 hmr 实例（`config.root: []`，只用于
+       监视用户补丁层 cordis.patch.yml——`watchUserPatches` 依赖它，**不可
+       重启该实例**，否则 CLI 热安装的临时热行不再被热应用）；
+    b) 本插件把自身两个主机文件注册为该实例的精确监视目标
+       （`hmr.registerConfig`，官方为「root 之外的精确路径」设计的公开 API），
+       变化时把文件 URL 加入 `hmr.stashed` 并驱动官方 `partialReload` 管线
+       （清 ESM 缓存 → 重新 import → 旧 fiber 卸载 → 新代码 apply；这两个
+       名义 private 的成员是 TypeScript 编译期限定，JS 运行时可调用，
+       vendor 版本固定在 1.0.15）；
+    c) 自举：热重载后新 fiber 的 apply 重新注册监视，全部副作用挂
+       `ctx.effect`；`registerConfig` 的 watcher 开启初始扫描
+       （ignoreInitial: false），必须在注册 promise resolve 前忽略回调，
+       否则注册即自触发 reload 形成循环（本插件已用 ready 标志处理）；
+    d) 持久化：profile 补丁层 `cordis.patch.yml` 已写 `- id: hmr / disabled:
+       false / config.root: [插件目录]`——重启后官方 hmr 行启用并只监视插件
+       目录（官方 watcher 直接接管，CLI 不再创建 watch-only 实例），本插件
+       检测到 root 覆盖自身后自动跳过自监视，避免双触发；当前进程热应用该
+       patch 会与 watch-only 实例冲突回滚（服务重复注册），属预期，重启一次
+       后收敛。改 `lib/client.js` 仍是刷新网页即生效（浏览器 bundle 实时读）。
+    e) 兜底：hmr 服务缺失或 API 不齐时打印提示退回「重启生效」。
 19. **CLI 在 Windows 上不要 `process.exit()` 硬退**：出现过 libuv
     `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)`；改为设置
     `process.exitCode` 并自然返回后消失。
+20. **「提示词注入」跨半边协作要点**：客户端 `settingsScope.bind` 首次
+    describe 若看不到主机 namespace 会停留在 unavailable 且不自动重试。
+    主机半边把 `settings` 写进 `exports.inject`，保证注册
+    同步发生在服务就绪、Web 客户端加载之前，因此无此竞态；未来若改成
+    异步注册需重新处理。settings 注册与 `agent/pre-step` 监听都挂到
+    调用者 fiber，卸载会随 fiber 自动清理。
+    注意 `anchored-standard` preset 的 persona 是 `complete: true` 且
+    `includeRuntimeContext: false`：全局 `systemPrompt.section/context` 会
+    被完整 persona 丢弃/抑制，而 `agent/pre-step` 里改写返回的
+    `decision.assembly` 也会被 agent-loop 用原始 assembly 覆盖。因此本功能
+    包装 `systemPrompt.assemble`：在它返回完整 persona 之后、agent-loop
+    使用之前，把提示 section 插入返回的 assembly（卸载时还原原方法），
+    首次模型调用即可生效；同时插入 user/message notice 上下文行用于展示。
+21. **API 网关的 settings 面有显式 allowlist（关键坑）**：客户端
+    `settingsScope` 走 `dsh-host-apiproxy` 的 `settings.describe/mutate`，
+    它只暴露「可配置提供方目录」（`ctx.llm.listConfigurableProviders()` 的
+    settingsNs）+ 硬编码名单（locale/permission/ui-conversation/ui-theme/
+    agent-loop/bash/web-search-deepseek/ui-onboarding）。**仅 settings.register
+    注册命名空间不会对客户端可见**，未暴露时 scope 永远 unavailable、开关
+    永远禁用。正规暴露方式：`ctx.llm.registerConfigurableProviders([{
+    provider, displayName, settingsNs, settingsPath }])`——注册后网关 describe
+    与写路径（update/mutate/replace）都放行。注意：a) 注册挂在 llm 服务
+    fiber 上（「Disposed with the fiber」），本插件热重载后旧目录条目残留，
+    因此 provider 键固定 + apply 时先 `listConfigurableProviders()` 查重，
+    已存在则跳过（否则 DUPLICATE_DIRECTORY）；b) 副作用：Models 设置页会
+    显示该目录条目（「提示词注入（deepseek-harness-zh_pro）」行），无害；
+    c) 用户页面已加载的旧 scope 不会自动重试，暴露后需刷新页面。
+22. **`useSyncExternalStore` 的 getSnapshot 必须换引用（本会话实测坑）**：
+    `settingsScope` 的 scope 对象引用在内部 snapshot 更新时不变。若把 scope
+    本身作为 store 快照返回，React 收到 notify 后比较快照引用相同，会跳过
+    重渲染——开关点击后主机 settings 已写成功、页面却纹丝不动。正确做法：
+    store 保存 `{ scope, snapshot }` 绑定对象，每次 scope 通知都替换整个绑定
+    对象；组件从绑定里取 scope 与 snapshot（见 `lib/client.js` 的
+    `zhPromptStore`）。
 
 ---
 
@@ -293,14 +359,36 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
   b) 聊天统计行（`N 轮 · N 步 | …`）在中文界面保持单行完整显示：放宽到输入区全宽
      + 自动缩小字号（12px 起步、最低 9px），极端超长改横向滚动；英文界面还原默认
      省略号截断（`lib/client.js` 的 STATS_FULL 逻辑）。
-- **增强设置页（用户确认）**：`settings.section` 分区「增强设置」；三项开关
-  （中文补全 / 统计全显示 / 对话宽度总开关+比例）本地持久化，详见第 1 节与 AGENTS。
-- **信任与数据边界（对外承诺）**：不注册任何模型工具、不注入提示词、零 token 消耗、
-  不上传任何数据、不写任何存储文件（唯一的例外：增强设置在浏览器 localStorage）。
+- **增强设置页（用户确认）**：`settings.section` 分区「增强设置」；三项本地开关
+  （中文补全 / 统计全显示 / 对话宽度总开关+比例）走 localStorage，一项
+  「提示词注入」（默认关闭）走官方 settingsScope 服务 → 主机 settings
+  命名空间 `dsh-zh` 的 `zhPrompt`（开关）与 `zhPromptText`（注入文本）字段
+  （settings.yaml 持久化），详见第 1 节与 AGENTS。
+- **提示词注入（用户确认，默认关闭，文本可编辑）**：开启后主机半边包装
+  `systemPrompt.assemble`：在官方组装返回后（含 complete persona 场景）把
+  注入文本作为 `dsh-zh:language` section 插入返回的 assembly，首次对话即
+  写入 system prompt；同时在 `agent/pre-step` 阶段把注入文本作为一条
+  `user/message` 上下文消息插入（source.kind=`plugin`、
+  source.plugin=`deepseek-harness-zh_pro`、source.form=`notice`、
+  summary=`提示词注入：<文本>`）；注入文本取自 settings 的 `zhPromptText`
+  （默认值为主机 `ZH_PROMPT_TEXT`：「思考过程和回复始终使用中文输出」）。
+  聊天记录因此显示「上下文注入 deepseek-harness-zh_pro」行，展开可见完整
+  注入文本。设置页文本框可编辑该文本：编辑期间本地草稿即时回显，600ms
+  防抖写主机 settings，失焦立即写入；主机侧经 `scope.watch` 热生效。
+  开关关闭或文本为空时两处都不注入，对请求零影响。
+  该开关与界面语言解耦：只受用户显式开关控制；只允许持久行 `dsh-zh` 与运行时
+  条目 `dsh-zh-live` 注册，临时热行 `dsh-zh-hot` 跳过（防重复）。
+- **信任与数据边界（对外承诺）**：不注册任何模型工具、不上传任何数据。
+  提示词注入仅限上述「提示词注入」一项（用户显式开启才注入，默认关闭，
+  关闭时零 token 消耗；注入文本由用户编辑，编辑本身即显式同意）；其余情况
+  不注入提示词。不写任何存储文件，例外为：增强设置在浏览器 localStorage、
+  `zhPrompt` 开关与 `zhPromptText` 文本经官方 settings 服务写入
+  settings.yaml（命名空间 `dsh-zh`）。
 - **已知限制（对外承诺）**：词典管不到的硬编码英文只覆盖内置清单；未列入清单的
   文本保持英文，用户反馈后补充（这是旧 README FAQ 的开发者版）。
 - **兼容性要求**：DeepSeek Harness Web GUI（`web` profile）；Node.js
-  `^22.19.0 || >=24.0.0`；仅中文界面生效，英文界面零影响。
+  `^22.19.0 || >=24.0.0`；界面增强仅中文界面生效，英文界面零影响；
+  「提示词注入」为显式开关，默认关闭，不受界面语言限制。
 - **Roadmap**：
   - [ ] 覆盖更多组件的硬编码英文；
   - [ ] 术语叫法可配置（按用户偏好开关）。
@@ -324,7 +412,10 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
   - `stats.llm` / `stats.toolCall` / `stats.ttftAverage`：`48m48s`→`48分48秒`、`2.4s`→`2.4秒`；
   - `stats.tokens`：`K`→万、`M`→万（≥1 亿 显示亿）。
 - 修改流程：编辑 `lib/client.js` → `node --check` 校验 → `node verify-pairs.cjs` 回归 →
-  刷新网页 → 观察统计行/重试文案。
+  刷新网页 → 观察统计行/重试文案；编辑 `lib/index.js` / `bin/dsh-zh.mjs` → 同样校验后
+  **保存即热重载**（第 5 节第 18 条，日志出现「主机半边热重载已启用」）→
+  刷新网页检查设置页「提示词注入」行可用（含注入文本框）、开启后聊天记录
+  出现「上下文注入 deepseek-harness-zh_pro」行（展开可见完整注入文本）。
 - 上游更新检查流程：把**部署版**（profile node_modules，不是 checkout）的新 zh 值同步进
   `verify-pairs.cjs` 的 `UPSTREAM`，跑回归看哪些键不再命中（会显示英文），再调整 `TERMS` 片段。
 - 统计行「输入」含缓存重读（每步重读整个上下文计费），与 100万 窗口、37% 占用不冲突 —— 属正常现象，用户已了解。

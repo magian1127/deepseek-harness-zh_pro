@@ -1,7 +1,6 @@
 # AGENTS.md —— DSH 中文增强插件（deepseek-harness-zh_pro）工作区指引
 
-> **给后续代理的硬性要求：在本工作区工作时，思考过程（thinking）与对外回复一律使用中文。**
-> 代码注释与文档同样以中文为主；引用上游英文术语时保留原文。
+> 代码注释与文档以中文为主；引用上游英文术语时保留原文。
 
 本工作区是 DSH「中文增强」插件的源码目录，已通过 web profile 常驻部署。
 **详细经验文档：先读 `DEVELOPMENT.md`**，本文件是速览与红线。
@@ -28,18 +27,25 @@
 | 裸卸载 | `dsh plugin --profile web remove deepseek-harness-zh_pro` | 监督器按包名 `ctx.loader.remove` 全部条目，**立即热卸载** |
 | CLI 卸载 | `npx -y deepseek-harness-zh_pro remove` | 同上 |
 | 内容更新 | 改 `lib/client.js` → `node --check` → **刷新网页** | 立即生效 |
-| host 更新 | 改 `lib/index.js` | 同进程 ESM 缓存不重读，**必须重启** |
+| host 更新 | 改 `lib/index.js` / `bin/dsh-zh.mjs` | **保存即热重载**（自监视官方 hmr 实例，详见 DEVELOPMENT.md 第 5 节第 18 条） |
 | dshmarket | 注册表收录后市场可装 | 热挂载 + bundle 持久，不冲突 |
 
 `status` 显示：依赖 / 运行中 / bundle 通道 / 临时热行 / dshmarket。
 
-## 三、增强设置（客户端，localStorage）
+## 三、增强设置（客户端，localStorage + 主机 settings）
 
 - `settings.section` id `dsh-zh-enhance`（需要 `slots` 服务，bundle `exports.inject = ['locale','slots']`）
-- 存储键：`localStorage['deepseek-harness-zh_pro:enhancements']`
-- 字段：`zhComplete`（中文补全，默认开）、`statsFull`（统计全显示，默认开）、
+- localStorage 存储键：`localStorage['deepseek-harness-zh_pro:enhancements']`
+- localStorage 字段：`zhComplete`（中文补全，默认开）、`statsFull`（统计全显示，默认开）、
   `chatWidthEnabled`（对话宽度总开关，默认开）、`chatWidth`（50–100%，默认 90，
   仅中文界面且视口 ≥1200px 时覆盖 `--dsh-chat-content-width`）
+- `zhPrompt`（提示词注入，**默认关**）与 `zhPromptText`（注入文本，默认为主机
+  `ZH_PROMPT_TEXT`「思考过程和回复始终使用中文输出」）不走 localStorage：客户端经官方 `settingsScope`
+  服务读写主机 settings 命名空间 `dsh-zh`（写入 settings.yaml），主机半边包装
+  `systemPrompt.assemble` 把该文本写进最终 system prompt（首次对话即生效），
+  并插入一条 `user/message` 上下文消息（source=`deepseek-harness-zh_pro`，
+  form=`notice`），聊天记录显示「上下文注入 deepseek-harness-zh_pro」行；
+  关闭或文本为空时两处都不注入，对模型请求零影响
 
 ## 四、改插件必须遵守（红线）
 
@@ -47,7 +53,9 @@
    **绝不能写成 ESM export**，否则整页启动失败。
 2. `package.json` 必须保留 `"./package.json"` 导出；`dsh.bundle.patch` 与
    `cordis.patch.yml` 必须同时存在，行 id 固定为 `dsh-zh`。
-3. 只在中文界面生效（`locale.getLocale().active === 'zh'`）：不强制中文、不做全局翻译。
+3. 界面增强只在中文界面生效（`locale.getLocale().active === 'zh'`）：不强制中文、
+   不做全局翻译。**唯一例外（用户确认）**：「提示词注入」为显式开关，默认关闭，
+   开启后才向模型注入（注入文本可编辑），与界面语言解耦。
    **DOM 例外（用户确认，两处）**：
    a) 权限预设/斜杠命令说明/聊天区行标题/轨迹标签 → 整段精确匹配文本层改写，
       英文界面按反向表还原（映射表见 `lib/client.js`）；
@@ -62,8 +70,11 @@
 5. 改动行为契约后同步更新 `README.md` 与 `DEVELOPMENT.md`。
 6. 任何改动（哪怕一行）后跑：`node --check lib/client.js` +
    `node --check lib/index.js` + `node --check bin/dsh-zh.mjs` + `node verify-pairs.cjs`。
-7. **信任边界**：不注册工具、不注入提示词、零 token 消耗、不上传数据、不写存储
-   （增强设置的 localStorage 除外）。
+7. **信任边界**：不注册工具、不上传数据。提示词注入仅限「提示词注入」一项
+   （用户显式开启才注入，默认关闭，关闭时零 token 消耗；注入文本由用户在
+   设置页编辑，编辑本身即显式同意）；其余情况不注入提示词。
+   不写存储，例外为：增强设置的 localStorage，以及「提示词注入」开关与文本经官方
+   settings 服务写入 settings.yaml（命名空间 `dsh-zh`）。
 8. **已知限制与 Roadmap**：硬编码英文只覆盖内置清单，未收录的保持原样（用户反馈后
    补充）；Roadmap = 覆盖更多硬编码英文、术语叫法可配置。
 
@@ -88,7 +99,9 @@ node bin\dsh-zh.mjs remove --profile web
   运行时条目 `dsh-zh-live`，三个 id 永不混用。
 - **client-modules 按包名永久缓存**「非客户端包」判定：结构性修复后同进程不恢复，
   需改包名或重启；正常更新无此问题。
-- **主机半边同进程 ESM 缓存不重读**：改 `lib/index.js` 必须重启服务验证。
+- **主机半边热重载依赖 watch-only hmr 实例**：该实例（`config.root: []`）由 CLI
+  为监视用户补丁层创建，`watchUserPatches` 挂在它上面——**不要热重启/替换它**，
+  否则 CLI 热安装的临时热行不再被热应用（详见 DEVELOPMENT.md 第 5 节第 18 条）。
 - **卸载不能只 `fiber.dispose()`**：bundle 行条目会留在 Loader 表、首页图谱不消失；
   必须按包名遍历 `ctx.loader.remove(entry.options.id)`（监督器已这样做）。
 - **pnpm 11 默认拦截生命周期脚本**（link 不跑、普通安装被拦截且退出码非 0）：

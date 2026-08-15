@@ -1,8 +1,8 @@
 {
   "name": "deepseek-harness-zh_pro",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
-  "description": "DSH 中文增强插件：仅在中文界面生效——修正残留英文、统一中文术语与格式，并让统计行等关键信息始终完整显示",
+  "description": "DSH 中文增强插件：中文界面修正残留英文、统一术语与格式，统计行完整显示，并可注入「中文优先提示」让大模型优先用中文回复与思考（默认关闭）",
   "main": "lib/index.js",
   "bin": {
     "dsh-zh": "bin/dsh-zh.mjs"
@@ -52,6 +52,7 @@
       "platform": "web",
       "immediately": true,
       "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-locale"
       ]
     }
