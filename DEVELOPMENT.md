@@ -349,7 +349,7 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
 ## 6. 当前插件行为契约（用户已确认，改动需同步本文件）
 
 - **只在中文界面生效**；不强制中文、不改标题；不做全局页面翻译。
-- **DOM 例外（用户确认，三处）**：
+- **DOM 例外（用户确认，四处）**：
   a) 权限预设标签（`Workspace Write`→工作区写入、`Read Only`→只读、
      `Full access`→完全访问、`Custom`→自定义，及悬停描述）、斜杠命令菜单说明
      （/compact、/goal、/feedback、/plan、/permission、/export 六条英文说明，
@@ -367,8 +367,14 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
      DOM 层按精确文本隐藏（`PROMPT_PROVIDER_KEY` 标记；`li` 行卡片用
      `display:none!important`、`option` 下拉项用 `hidden`），英文界面还原。目录
      注册保留，网页「提示词注入」开关与注入文本编辑不受影响。
-- **增强设置页（用户确认）**：`settings.section` 分区「增强设置」；三项本地开关
-  （中文补全 / 统计全显示 / 对话宽度总开关+比例）走 localStorage，一项
+  d) 自动展开最新思考输出（默认开启）：DOM 层定位 ReasoningRow
+     （`[data-variant="think"]`），点击 `[data-disclosure-row]` 切换
+     DisclosureRow 的展开状态。流式思考（`data-state="running"`）出现时自动
+     展开最新一条；出现新的思考输出时把上一条由插件自动展开的块缩回；流式结束
+     保持最后一条展开，历史会话不自动展开。仅中文界面 + 增强设置
+     「自动展开最新思考」开启时生效，关闭或切英文界面时缩回插件自动展开的块。
+- **增强设置页（用户确认）**：`settings.section` 分区「增强设置」；四项本地开关
+  （中文补全 / 统计全显示 / 自动展开最新思考 / 对话宽度总开关+比例）走 localStorage，一项
   「提示词注入」（默认关闭）走官方 settingsScope 服务 → 主机 settings
   命名空间 `dsh-zh` 的 `zhPrompt`（开关）与 `zhPromptText`（注入文本）字段
   （settings.yaml 持久化），详见第 1 节与 AGENTS。
