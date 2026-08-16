@@ -281,7 +281,13 @@ const pluginExports = captured.factory(function (name) {
   if (name === 'react') {
     return {
       useSyncExternalStore: function (_subscribe, getSnapshot) { return getSnapshot() },
-      createElement: function () { return null },
+      useState: function (initial) { return [initial, function () {}] },
+      createElement: function (type, props) {
+        const children = Array.prototype.slice.call(arguments, 2)
+        const nextProps = Object.assign({}, props, { children: children })
+        if (typeof type === 'function') return type(nextProps)
+        return { type: type, props: nextProps }
+      },
     }
   }
   throw new Error('不应发生跨包 require: ' + name)
@@ -290,9 +296,15 @@ const pluginExports = captured.factory(function (name) {
 // ---------- mock locale / ctx ----------
 const COMMON = { submit: '提交', submitting: '正在提交…' }
 let active = 'zh'
+let localeRegisterDisposed = 0
+let settingsRender = null
+const registeredDicts = {}
+const localeListeners = []
 const locale = {
   getLocale: function () { return { active: active } },
   lookup: function (ns, key) {
+    const own = registeredDicts[ns] && registeredDicts[ns][active]
+    if (own && own[key] !== undefined) return own[key]
     const d = UPSTREAM[ns]
     if (d && d[key] !== undefined) return d[key]
     if (COMMON[key] !== undefined) return COMMON[key]
@@ -307,50 +319,133 @@ const locale = {
     }
     return out
   },
+  register: function (ns, dicts) {
+    registeredDicts[ns] = dicts
+    return function () {
+      if (registeredDicts[ns] === dicts) delete registeredDicts[ns]
+      localeRegisterDisposed += 1
+    }
+  },
+  bind: function (ns) {
+    return function (key, params) { return locale.translate(ns, key, params) }
+  },
+  subscribe: function (listener) {
+    localeListeners.push(listener)
+    return function () {
+      const i = localeListeners.indexOf(listener)
+      if (i !== -1) localeListeners.splice(i, 1)
+    }
+  },
 }
 const ctx = {
+  locale: locale,
+  slots: {
+    inject: function (_name, setup) {
+      const dispose = setup()
+      if (typeof dispose === 'function') ctx._effects.push(dispose)
+    },
+    register: function (_config, render) {
+      settingsRender = render
+      return function () { settingsRender = null }
+    },
+  },
+  _effects: [],
   get: function (name) { return name === 'locale' ? locale : undefined },
-  effect: function (fn) { this._dispose = fn() },
+  effect: function (fn) {
+    const dispose = fn()
+    if (typeof dispose === 'function') this._effects.push(dispose)
+  },
 }
 
-// ---------- 权限标签 DOM 文本层：用最小假 DOM 验证 ----------
+// ---------- 权限标签 / 设置开关 / 生命周期 DOM：用最小假 DOM 验证 ----------
 const fakeObserverCbs = []
 globalThis.MutationObserver = class {
   constructor(cb) { this.cb = cb; fakeObserverCbs.push(this) }
   observe() {}
   disconnect() {}
 }
-const fakeBody = {
+function makeStyle() {
+  const values = {}
+  return {
+    fontSize: '',
+    setProperty: function (name, value) { values[name] = String(value) },
+    removeProperty: function (name) {
+      delete values[name]
+      if (name === 'font-size') this.fontSize = ''
+    },
+    getPropertyValue: function (name) { return values[name] || '' },
+  }
+}
+function makeText(data) {
+  return { nodeType: 3, data: data, parentElement: null, nextSibling: null }
+}
+const permissionText = makeText('Workspace Write')
+const commandText = makeText('Compact older conversation history')
+const thinkText = makeText('Think')
+const toolText = makeText('Tool call')
+const deepThinkText = makeText('Deep diving...')
+const statsText = makeText('9 轮 · 203 步')
+const statsAttrs = {}
+const statsRow = {
   nodeType: 1,
+  tagName: 'DIV',
+  style: makeStyle(),
+  clientWidth: 240,
+  scrollWidth: 200,
+  parentElement: null,
+  nextSibling: null,
+  firstChild: null,
+  firstElementChild: null,
+  getAttribute: function (name) { return Object.prototype.hasOwnProperty.call(statsAttrs, name) ? statsAttrs[name] : null },
+  setAttribute: function (name, value) { statsAttrs[name] = String(value) },
+  removeAttribute: function (name) { delete statsAttrs[name] },
+  querySelectorAll: function () { return [] },
+}
+const statsGroup = {
+  nodeType: 1,
+  tagName: 'SPAN',
+  style: makeStyle(),
+  parentElement: statsRow,
+  nextSibling: null,
+  firstChild: statsText,
   getAttribute: function () { return null },
   setAttribute: function () {},
-  firstChild: {
-    nodeType: 3,
-    data: 'Workspace Write',
-    nextSibling: {
-      nodeType: 3,
-      data: 'Compact older conversation history',
-      nextSibling: {
-        nodeType: 3,
-        data: 'Think',
-        nextSibling: {
-          nodeType: 3,
-          data: 'Tool call',
-          nextSibling: {
-            nodeType: 3,
-            data: 'Deep diving...',
-            nextSibling: null,
-          },
-        },
-      },
-    },
-  },
-  nextSibling: null,
 }
+statsText.parentElement = statsGroup
+statsRow.firstChild = statsGroup
+statsRow.firstElementChild = statsGroup
+permissionText.nextSibling = commandText
+commandText.nextSibling = thinkText
+thinkText.nextSibling = toolText
+toolText.nextSibling = deepThinkText
+deepThinkText.nextSibling = statsRow
+const fakeBody = {
+  nodeType: 1,
+  tagName: 'BODY',
+  style: makeStyle(),
+  getAttribute: function () { return null },
+  setAttribute: function () {},
+  firstChild: permissionText,
+  nextSibling: null,
+  querySelector: function () { return null },
+  querySelectorAll: function (selector) {
+    if (selector === '[data-variant="think"]') return []
+    if (selector === '[data-dsh-zh-stats-full]') return statsRow.getAttribute('data-dsh-zh-stats-full') === null ? [] : [statsRow]
+    if (selector === '[data-dsh-zh-hide-prompt-provider]') return []
+    return []
+  },
+}
+statsRow.parentElement = fakeBody
+for (const node of [permissionText, commandText, thinkText, toolText, deepThinkText]) node.parentElement = fakeBody
+window.innerWidth = 1280
+window.getComputedStyle = function () { return { textOverflow: 'clip' } }
+window.addEventListener = function () {}
+window.removeEventListener = function () {}
 globalThis.document = {
   readyState: 'complete',
   documentElement: {},
   body: fakeBody,
+  contains: function () { return false },
   addEventListener: function () {},
   removeEventListener: function () {},
 }
@@ -374,6 +469,59 @@ check(fakeBody.firstChild.nextSibling.data, '压缩较早的对话历史', 'DOM 
 check(fakeBody.firstChild.nextSibling.nextSibling.data, '思考', 'DOM 文本层 Think 改写')
 check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.data, '工具调用', 'DOM 文本层 Tool call 改写')
 check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.nextSibling.data, '深度思考中…', 'DOM 文本层 Deep diving 改写')
+const incrementalText = makeText('Bash')
+incrementalText.parentElement = fakeBody
+permissionText.data = 'Workspace Write'
+fakeObserverCbs[0].cb([{ type: 'childList', addedNodes: [incrementalText], target: fakeBody }])
+check(incrementalText.data, '命令行', 'DOM 增量扫描 改写新增子树')
+check(permissionText.data, 'Workspace Write', 'DOM 增量扫描 不重扫无关子树')
+permissionText.data = '工作区写入'
+const proseAttrs = {}
+const proseRow = {
+  nodeType: 1,
+  tagName: 'DIV',
+  getAttribute: function (name) { return Object.prototype.hasOwnProperty.call(proseAttrs, name) ? proseAttrs[name] : null },
+  setAttribute: function (name, value) { proseAttrs[name] = String(value) },
+}
+const proseGroup = { nodeType: 1, tagName: 'P', parentElement: proseRow }
+const proseText = makeText('7 轮 · 8 步')
+proseText.parentElement = proseGroup
+fakeObserverCbs[0].cb([{ type: 'characterData', target: proseText }])
+check(proseRow.getAttribute('data-dsh-zh-stats-full'), null, '统计全显示 不误标正文计数文本')
+check(statsRow.getAttribute('data-dsh-zh-stats-full') !== null, true, '统计全显示 不依赖瞬时截断样式')
+check(statsRow.style.getPropertyValue('white-space'), 'nowrap', '统计全显示 样式应用')
+
+function findElement(node, predicate) {
+  if (node === null || node === undefined) return null
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const hit = findElement(child, predicate)
+      if (hit !== null) return hit
+    }
+    return null
+  }
+  if (typeof node !== 'object') return null
+  if (predicate(node)) return node
+  return findElement(node.props && node.props.children, predicate)
+}
+check(typeof settingsRender, 'function', '增强设置 已注册')
+let settingsTree = settingsRender()
+const promptToggle = findElement(settingsTree, function (node) {
+  return node.type === 'button' && node.props && node.props['aria-label'] === '提示词注入'
+})
+check(promptToggle !== null && promptToggle.props.disabled === true, true, '设置服务缺失时禁用提示词开关')
+let statsToggle = findElement(settingsTree, function (node) {
+  return node.type === 'button' && node.props && node.props['aria-label'] === '统计全显示'
+})
+check(statsToggle !== null, true, '统计全显示 开关可访问名称')
+statsToggle.props.onClick()
+check(statsRow.getAttribute('data-dsh-zh-stats-full'), null, '统计全显示 关闭即清理')
+settingsTree = settingsRender()
+statsToggle = findElement(settingsTree, function (node) {
+  return node.type === 'button' && node.props && node.props['aria-label'] === '统计全显示'
+})
+statsToggle.props.onClick()
+check(statsRow.getAttribute('data-dsh-zh-stats-full') !== null, true, '统计全显示 重新开启')
 
 for (const ns of Object.keys(EXPECT)) {
   for (const key of Object.keys(EXPECT[ns])) {
@@ -411,6 +559,12 @@ UPSTREAM['settings.models'].deleteDescriptionWithCredential = '删除 {provider}
 check(locale.lookup('settings.models', 'deleteDescriptionWithCredential'),
   '删除 {provider} 将移除其配置与保存的接口密钥，此操作不可恢复。', 'zh partial follows upstream')
 UPSTREAM['settings.models'].deleteDescriptionWithCredential = ORIGINAL_UPSTREAM
+
+for (let i = ctx._effects.length - 1; i >= 0; i -= 1) ctx._effects[i]()
+check(localeRegisterDisposed, 1, '设置词典 随生命周期卸载')
+check(localeListeners.length, 0, '插件卸载 取消语言监听')
+check(statsRow.getAttribute('data-dsh-zh-stats-full'), null, '插件卸载 清理统计样式')
+check(settingsRender, null, '插件卸载 清理设置分区')
 
 if (fail > 0) {
   console.error('\nFAIL: ' + fail + '/' + total + ' 项不符')

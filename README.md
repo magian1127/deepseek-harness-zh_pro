@@ -1,6 +1,6 @@
 # deepseek-harness-zh_pro
 
-### DeepSeek Harness 中文增强插件
+**DeepSeek Harness 中文增强插件**
 
 <p align="center">
   <img alt="版本 0.5.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.5.0-5965d8">
@@ -8,30 +8,53 @@
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
 
-让 DeepSeek Harness 的中文界面更好用。界面增强仅中文界面生效，英文界面零影响；
-另有「提示词注入」为显式开关（默认关闭，注入文本可编辑，聊天记录中可展开查看）。
+让 DeepSeek Harness 的中文界面更完整、更易读。所有界面增强只在中文界面生效；
+提示词注入是独立的显式开关，默认关闭。
 
 ## 功能
 
-| # | 功能 | 说明 |
+| 功能 | 默认值 | 说明 |
 | --- | --- | --- |
-| 1 | **中文补全** | 修正残留英文：`tok/s`→词元/秒、`LLM`→大模型、`API 密钥`→接口密钥、`Full access`→完全访问、`agent`→代理、`plan mode`→计划模式、`Cordis Plugin`→Cordis 插件、`0 running`→0 个运行中；时长/数量统一中文格式（`48m48s`→48分48秒、`46.7M`→4670万） |
-| 2 | **统计全显示** | 统计行 `9 轮 · 203 步 \| LLM 49分59秒 · …` 不再省略号截断：单行完整显示，自动缩字号适配，极端超长时同一行横向滚动 |
-| 3 | **自动展开最新思考** | **默认开启**。思考输出流式出现时自动展开最新一条；出现新的思考输出时，把上一条自动展开的缩回。流式结束后保持最后一条展开，历史会话不自动展开。仅中文界面生效，可在增强设置关闭 |
-| 4 | **对话宽度** | 大屏（≥1200px）下按百分比设置聊天列宽，例如 90% → 两侧各 5% 留白，不再有大片空白 |
-| 5 | **提示词注入** | **默认关闭**。开启后向大模型注入可编辑的提示词（默认文案：思考过程和回复始终使用中文输出），注入目标可在设置页下拉框选择：**初始系统提示**（写入 system prompt）或**首用户提示词**（作为首条用户消息旁的上下文消息，聊天记录显示「上下文注入 deepseek-harness-zh_pro」行，展开可见完整注入文本） |
+| 中文补全 | 开 | 修正残留英文，统一词元、接口密钥、模型标识、时长和数量格式 |
+| 统计全显示 | 开 | 聊天统计保持单行完整显示，自动缩小字号，极端超长时横向滚动 |
+| 自动展开最新思考 | 开 | 流式思考出现时展开最新一条，新思考出现时收起上一条自动展开内容 |
+| 对话宽度 | 开，90% | 大屏下按 50%–100% 调整聊天列宽，两侧留白均分 |
+| 提示词注入 | 关 | 向后续模型请求注入可编辑提示词，可选初始系统提示或首用户提示词 |
 
-功能都可在 **DSH 设置 → 增强设置** 中开关（对话宽度还带比例输入框），即时生效。
+所有功能都在 **DSH 设置 → 增强设置** 中配置。完整默认值和边界见
+[行为契约](https://github.com/magian1127/deepseek-harness-zh_pro/blob/master/docs/behavior.md)。
+
+## 环境要求
+
+- DeepSeek Harness Web GUI，默认 profile 为 `web`
+- Node.js `^22.19.0 || >=24.0.0`
 
 ## 安装
 
 ```sh
-# 方式一：官方命令，重启一次后生效
+# 官方通道：安装后重启一次 DSH
 dsh plugin --profile web add deepseek-harness-zh_pro
 
-# 方式二：npx 热安装（DSH 服务运行时，无需重启）
+# 热安装：DSH 正在运行时可立即生效
 npx -y deepseek-harness-zh_pro install --profile web
 ```
+
+本地源码联调：
+
+```powershell
+node bin/dsh-zh.mjs install --profile web --link $PWD
+```
+
+安装后可检查状态：
+
+```sh
+npx -y deepseek-harness-zh_pro status --profile web
+```
+
+## 更新
+
+重新执行安装命令即可更新依赖和持久 bundle。浏览器端内容更新后刷新页面；使用本地 link
+开发时，主机文件在 DSH HMR 服务可用时自动热重载，否则按日志提示重启。
 
 ## 卸载
 
@@ -41,18 +64,35 @@ dsh plugin --profile web remove deepseek-harness-zh_pro
 npx -y deepseek-harness-zh_pro remove --profile web
 ```
 
-两种卸载都是热卸载，无需重启。
+卸载会清理临时热行和运行中条目，不会删除 DSH 会话数据。localStorage 与 settings 中的
+已有设置值可能保留，重新安装后可继续使用。
+
+## 设置与数据
+
+| 数据 | 存储位置 |
+| --- | --- |
+| 中文补全、统计、思考展开、对话宽度 | 浏览器 localStorage：`deepseek-harness-zh_pro:enhancements` |
+| 提示词开关、文本、注入目标 | DSH `settings.yaml`，命名空间 `dsh-zh` |
+
+插件不注册模型工具、不上传数据。除用户显式开启的提示词注入外，其余功能不会修改模型请求。
+英文界面不应用上述界面增强；提示词注入仍只由自身开关决定。
 
 ## 常见问题
 
-**会影响英文界面吗？** 不会。界面增强只在界面语言为「中文」时生效。
-「提示词注入」则只受自身开关控制：默认关闭，显式开启后才注入。
+**提示词会自动开启吗？** 不会，默认关闭。编辑提示词文本并不等于开启注入。
 
-**更新需要重启吗？** 不需要。界面更新刷新网页（Ctrl+Shift+R）即生效；
-主机半边（`lib/index.js`、`bin/dsh-zh.mjs`）改动保存后自动热重载（插件自监视
-DSH 官方 HMR 服务，重启后由官方 watcher 接管，两种模式均无需重启）。
+**为什么还有少量英文？** DOM 硬编码文本只覆盖已确认的内置清单；未收录文本保持原样，
+避免误改正文或第三方插件内容。
 
-**能在 dshmarket 里装吗？** 可以。插件已声明 `dsh.bundle`，市场安装/重启后均正常挂载，不会重复加载。
+**可以通过 dshmarket 安装吗？** 可以。插件声明了持久 bundle，市场安装与重启挂载不会重复加载。
+
+## 开发文档
+
+- [行为契约](https://github.com/magian1127/deepseek-harness-zh_pro/blob/master/docs/behavior.md)
+- [运行架构](https://github.com/magian1127/deepseek-harness-zh_pro/blob/master/docs/architecture.md)
+- [开发指南](https://github.com/magian1127/deepseek-harness-zh_pro/blob/master/docs/development.md)
+- [故障排查](https://github.com/magian1127/deepseek-harness-zh_pro/blob/master/docs/troubleshooting.md)
+- [发布流程](https://github.com/magian1127/deepseek-harness-zh_pro/blob/master/docs/release.md)
 
 ## License
 

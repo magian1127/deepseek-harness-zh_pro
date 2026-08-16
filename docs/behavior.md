@@ -1,0 +1,122 @@
+# 行为契约
+
+本文档是用户可见行为的权威说明。实现变化若影响界面、默认值、存储或模型请求，必须同步更新
+本文档与 [`README.md`](../README.md)。
+
+## 适用范围
+
+- 支持 DeepSeek Harness Web GUI，默认 profile 为 `web`。
+- Node.js 要求：`^22.19.0 || >=24.0.0`。
+- 中文补全、统计样式、思考展开和对话宽度只在界面语言为中文时生效。
+- 提示词注入只受自身开关控制，与界面语言无关，默认关闭。
+
+## 设置与默认值
+
+| 设置 | 默认值 | 存储 | 生效范围 |
+| --- | --- | --- | --- |
+| `zhComplete` 中文补全 | 开 | localStorage | 中文界面 |
+| `statsFull` 统计全显示 | 开 | localStorage | 中文界面 |
+| `thinkingAuto` 自动展开最新思考 | 开 | localStorage | 中文界面 |
+| `chatWidthEnabled` 对话宽度 | 开 | localStorage | 中文界面且视口 ≥1200px |
+| `chatWidth` 宽度比例 | 90，范围 50–100 | localStorage | 对话宽度开启时 |
+| `zhPrompt` 提示词注入 | 关 | `settings.yaml` | 后续模型请求 |
+| `zhPromptText` 注入文本 | `思考过程和回复始终使用中文输出` | `settings.yaml` | 提示词注入开启时 |
+| `zhPromptTarget` 注入目标 | `system` | `settings.yaml` | `system` 或 `user` |
+
+localStorage 键为 `deepseek-harness-zh_pro:enhancements`；主机 settings 命名空间为
+`dsh-zh`。`settingsScope` 不可用时提示词开关显示为禁用，其余增强仍可使用。
+
+## 中文补全
+
+中文补全不会做任意页面翻译，只处理已知词典键和经过确认的硬编码文本：
+
+1. `ZH`：必须整句重写的少量模板。
+2. `ZH_PARTIAL` + `TERMS`：只替换上游原句中的目标术语，句子其余部分继续跟随上游。
+3. 参数格式化：把时长、吞吐量和词元数量转换成中文格式。
+4. DOM 文本层：只对已知整段文本或已知动态格式做精确/正则匹配，不改正文片段。
+
+界面采用以下已确认术语；其中部分由插件改写，部分直接沿用上游中文：
+
+| 原文 | 中文 |
+| --- | --- |
+| token / tok | 词元 |
+| tok/s | 词元/秒 |
+| LLM | 大模型 |
+| TTFT | 首词元时间 |
+| API Key / API key | 接口密钥 |
+| Model ID | 模型标识 |
+| Full access | 完全访问 |
+| agent / subagent | 代理 / 子代理 |
+| plan mode | 计划模式 |
+| Workspace Write / Read Only / Custom | 工作区写入 / 只读 / 自定义 |
+
+`subagent → 子代理` 直接沿用上游中文；权限预设名称由受限 DOM 精确映射处理，其余术语主要由
+locale 补丁处理。保留 Cordis、DeepSeek、TypeScript、命令名、文件名、快捷键和示例标识符。数量格式使用万和亿：
+`12.2K → 1.22万`、`46.7M → 4670万`、`123.4M → 1.234亿`。时长示例：
+`48m48s → 48分48秒`、`2.4s → 2.4秒`。
+
+刻意保留的上游行为：
+
+- `hint.goal.active` 中的 goal action 提示保持上游文本。
+- Models 中 K/M 输入提示保持上游单位。
+- `presetCodeName` 使用“程序模式”，说明保留“代码模式开发套件”。
+- plan 提示保留 `(/plan off)` 命令信息。
+
+## DOM 增强边界
+
+仅中文界面处理以下已知区域：
+
+- 权限预设标签和说明；
+- `/compact`、`/goal`、`/feedback`、`/plan`、`/permission`、`/export` 的菜单说明；
+- 聊天区状态、工具行标题和轨迹视图标签；
+- Models 设置页由提示词 settings 暴露产生的内部提供方目录行；
+- 聊天统计行和流式思考 DisclosureRow。
+
+普通 DOM 变化只扫描新增或变化子树；设置或语言变化时全量重放。切换英文、关闭对应开关或
+卸载插件时，插件会恢复文本、样式、隐藏状态、对话宽度和自动展开状态。
+
+## 统计全显示
+
+匹配 StatsLine 的 `N 轮 · N 步` 计数组后：
+
+- 保持单行，不使用省略号；
+- 从 12px 开始自动缩小，最低 9px；
+- 仍超长时启用横向滚动；
+- 关闭开关、切换英文或卸载插件时恢复上游样式。
+
+## 自动展开最新思考
+
+- 流式思考出现时展开最新一条。
+- 新思考出现时，只收起上一条由插件自动展开的内容。
+- 流式结束后保留最后一条展开，历史会话不自动展开。
+- 关闭开关、切换英文或卸载插件时恢复手动状态。
+
+## 对话宽度
+
+仅在中文界面、开关开启且视口宽度至少 1200px 时覆盖
+`--dsh-chat-content-width`。比例范围为 50%–100%，两侧留白均分；其它场景清除覆盖。
+
+## 提示词注入
+
+提示词从设置变更后的后续模型请求开始生效，目标二选一：
+
+- `system`：在 `systemPrompt.assemble` 返回后，把文本作为 `dsh-zh:language` section
+  写入最终 system prompt，不产生可见上下文消息。
+- `user`：不修改 system sections，在 `agent/pre-step` 插入一条来源为
+  `deepseek-harness-zh_pro`、form 为 `notice` 的 `user/message`；聊天记录可展开查看全文。
+
+旧值 `context` 读取时归一化为 `user`。文本框本地即时回显，静默 600ms 后写入 settings，
+失焦时立即写入。开关关闭或文本为空时两条通道都不注入。
+
+## 数据与信任边界
+
+- 不注册模型工具，不上传数据。
+- 除显式开启的提示词注入外，不修改模型请求。
+- 本地界面设置只写浏览器 localStorage。
+- 提示词设置只经 DSH 官方 settings 服务写入 `settings.yaml`。
+- 默认关闭提示词注入，关闭时没有额外 token 消耗。
+
+## 已知限制
+
+硬编码英文只覆盖内置清单。未收录文本和第三方插件内容保持原样，以避免误改用户正文。
+后续方向是补充确认过的硬编码文本，并允许用户配置部分术语叫法。

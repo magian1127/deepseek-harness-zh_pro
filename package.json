@@ -11,10 +11,11 @@
     "lib",
     "bin",
     "verify-pairs.cjs",
+    "verify-cli.mjs",
     "cordis.patch.yml"
   ],
   "scripts": {
-    "test": "node verify-pairs.cjs"
+    "test": "node verify-pairs.cjs && node verify-cli.mjs"
   },
   "keywords": [
     "deepseek-harness",
