@@ -117,6 +117,10 @@ const UPSTREAM = {
   'settings.pluginInventory': {
     cordis: 'Cordis 状态',
   },
+  cordis: {
+    'panel.trigger': 'Cordis Plugin',
+    'panel.runningCount': '{count} running',
+  },
   'session-log-download': {
     'dialog.preparingTitle': '正在导出 Session',
     'dialog.preparingDescription': '正在准备包含当前 Session、子 Session 和附件的 ZIP 文件。',
@@ -246,6 +250,10 @@ const EXPECT = {
   },
   'settings.pluginInventory': {
     cordis: '框架状态',
+  },
+  cordis: {
+    'panel.trigger': 'Cordis 插件',
+    'panel.runningCount': '{count} 个运行中',
   },
   'session-log-download': {
     'dialog.preparingTitle': '正在导出会话',

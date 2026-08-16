@@ -4,8 +4,9 @@
 > 供后续会话直接参考。当前插件：中文增强（仅中文界面生效，不强制中文；
 > 用户确认的 DOM 例外 = 文本层改写 + 统计行单行完整显示；另有「增强设置」分区；
 > 独立开关「提示词注入」默认关闭，开启后经官方 settings 持久化；主机半边
-> 包装 `systemPrompt.assemble` 写入最终 system prompt（首次对话即生效），并
-> 插入可见上下文消息，注入文本可在设置页编辑）。
+> 按注入目标二选一（设置页下拉框：`system` 初始系统提示 / `user` 首用户
+> 提示词）：`system` 包装 `systemPrompt.assemble` 写入最终 system prompt
+> （首次对话即生效），`user` 插入可见上下文消息，注入文本可在设置页编辑）。
 
 ---
 
@@ -95,11 +96,14 @@ npx -y deepseek-harness-zh_pro remove --profile web
 - `bin/dsh-zh.mjs` 是热装卸 CLI（install/remove/status）；`lib/index.js` 主机
   半边是热装卸监督器 + 「提示词注入」注册器（`export const inject =
   ['loader', 'settings', 'systemPrompt']`）：注册 settings 命名空间 `dsh-zh`
-  （`zhPrompt` 开关默认 false、`zhPromptText` 文本默认为 `ZH_PROMPT_TEXT`），
-  包装 `systemPrompt.assemble` 把该文本写进最终 system prompt（首次对话
-  即生效），同时作为 `user/message` 上下文插入（source=
-  `deepseek-harness-zh_pro`，form=`notice`；开关关闭或文本为空时
-  两处都不写，聊天记录显示「上下文注入 deepseek-harness-zh_pro」行）。
+  （`zhPrompt` 开关默认 false、`zhPromptText` 文本默认为 `ZH_PROMPT_TEXT`、
+  `zhPromptTarget` 注入目标默认 `system`），按目标二选一注入：
+  `system`（初始系统提示）包装 `systemPrompt.assemble` 把文本作为
+  `dsh-zh:language` section 写进最终 system prompt（首次对话即生效）；
+  `user`（首用户提示词）作为 `user/message` 上下文插入（source=
+  `deepseek-harness-zh_pro`，form=`notice`）；两目标互斥，开关关闭或
+  文本为空时两处都不写，聊天记录显示「上下文注入
+  deepseek-harness-zh_pro」行）。旧值 `context` 归一化为 `user`。
   临时热行（id `dsh-zh-hot`）不注册这两项，避免自迁移窗口重复注册。
 - `dsh.client` 声明是「浏览器花名册」标记；`inject` 里写**依赖的包名**（图的边），服务注入写在模块 exports 的 `inject` 里。
 - **`"./package.json"` 导出绝不能省**：client-modules 节点半边用
@@ -201,7 +205,8 @@ Get-ChildItem "$root\dsh-client-ui-conversation\lib" -Recurse -Filter *.js |
 `settings.agentPreset` · `settings.permission` · `permission.access`（动态访问模式）·
 `model` · `skill` · `subagent` · `goal` · `plan` · `question` · `job` · `feedback` ·
 `deliverables` · `workflowRun` · `command`（ui-commands）· `slash.menu`（ui-input-trigger）·
-`directory-browser`（ui-directory-picker-browse）。
+`directory-browser`（ui-directory-picker-browse）· `cordis`（dsh-client-ui-cordis，
+面板按钮 `panel.trigger`→Cordis 插件、`panel.runningCount`→{count} 个运行中）。
 
 ### 术语约定（本项目已与用户确认）
 
@@ -318,7 +323,11 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
     `decision.assembly` 也会被 agent-loop 用原始 assembly 覆盖。因此本功能
     包装 `systemPrompt.assemble`：在它返回完整 persona 之后、agent-loop
     使用之前，把提示 section 插入返回的 assembly（卸载时还原原方法），
-    首次模型调用即可生效；同时插入 user/message notice 上下文行用于展示。
+    首次模型调用即可生效。**注入目标二选一（设置页下拉框，字段
+     `zhPromptTarget`）**：`system`（默认，初始系统提示）只写 sections、
+     不插消息；`user`（首用户提示词）不写 sections、只在 `agent/pre-step`
+     插入 user/message notice 上下文行用于展示（旧值 `context` 归一化为
+     `user`）。两目标互斥，切换目标时从另一通道清理同名条目。
 21. **API 网关的 settings 面有显式 allowlist（关键坑）**：客户端
     `settingsScope` 走 `dsh-host-apiproxy` 的 `settings.describe/mutate`，
     它只暴露「可配置提供方目录」（`ctx.llm.listConfigurableProviders()` 的
@@ -355,6 +364,28 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
     `npm view deepseek-harness-zh_pro version --registry=https://registry.npmjs.org`
     确认（重复发布会报 `You cannot publish over the previously published
     versions`，这个报错反过来就是「已发布成功」的佐证）。
+24. **改名常量必须全局搜引用（2026-08-16 实测，本插件损坏事故）**：上个会话
+    把 `ZH_PROMPT_SECTION_NAME` 改名为 `ZH_PROMPT_ENTRY_NAME`，但
+    `syncAssemblySection` 里两处引用没同步改 → 常量未定义。**`node --check`
+    只查语法、查不出未定义标识符**（运行时求值才抛 `ReferenceError`），
+    `verify-pairs.cjs` 也只覆盖客户端词典/文本层、覆盖不到主机半边 → 三项
+    校验全绿但插件实际是坏的：开启提示词注入后 `systemPrompt.assemble`
+    每次调用必崩，会话无法开始。教训：a) 改任何标识符后用 grep 全局搜
+    旧名与引用（本次用 `grep ZH_PROMPT_SECTION_NAME|ZH_PROMPT_ENTRY_NAME`
+    一次定位）；b) 主机的运行时回归要靠真实会话验证，校验脚本覆盖不到的
+    代码改动必须人工过一遍引用。另注：上个会话的 `context` 目标（写
+    assembly.contexts）只存在于注释、代码从未实现——**注释里未实现的方案
+    不要写成行为契约**，本次落地为 `system`/`user` 二选一并将旧值
+    `context` 归一化为 `user`。
+25. **profile 依赖/挂载行被清空但 node_modules link 还在（2026-08-16 实测）**：
+    `status` 显示「依赖: 未安装 / 运行中: 未挂载 / bundle 通道: 未就绪」，
+    但 `node_modules\deepseek-harness-zh_pro` 符号链接仍存在、服务也在跑——
+    说明上个会话清掉了 profile `package.json` 的依赖声明与 `cordis.patch.yml`
+    挂载行（只剩 hmr 行），留下「半安装」现场。恢复方式：重跑
+    `node bin\dsh-zh.mjs install --profile web --link <本仓库>`，依赖+临时
+    热行一次落位、自迁移收敛单实例，无需重启（见第 1、2 节）。排查顺序：
+    `status` → 看 `package.json` dependencies → 看 `cordis.patch.yml` →
+    看 `node_modules` link 是否还在。
 
 ---
 
@@ -389,29 +420,37 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
      「自动展开最新思考」开启时生效，关闭或切英文界面时缩回插件自动展开的块。
 - **增强设置页（用户确认）**：`settings.section` 分区「增强设置」；四项本地开关
   （中文补全 / 统计全显示 / 自动展开最新思考 / 对话宽度总开关+比例）走 localStorage，一项
-  「提示词注入」（默认关闭）走官方 settingsScope 服务 → 主机 settings
-  命名空间 `dsh-zh` 的 `zhPrompt`（开关）与 `zhPromptText`（注入文本）字段
-  （settings.yaml 持久化），详见第 1 节与 AGENTS。
-- **提示词注入（用户确认，默认关闭，文本可编辑）**：开启后主机半边包装
-  `systemPrompt.assemble`：在官方组装返回后（含 complete persona 场景）把
-  注入文本作为 `dsh-zh:language` section 插入返回的 assembly，首次对话即
-  写入 system prompt；同时在 `agent/pre-step` 阶段把注入文本作为一条
-  `user/message` 上下文消息插入（source.kind=`plugin`、
-  source.plugin=`deepseek-harness-zh_pro`、source.form=`notice`、
-  summary=`提示词注入：<文本>`）；注入文本取自 settings 的 `zhPromptText`
-  （默认值为主机 `ZH_PROMPT_TEXT`：「思考过程和回复始终使用中文输出」）。
-  聊天记录因此显示「上下文注入 deepseek-harness-zh_pro」行，展开可见完整
-  注入文本。设置页文本框可编辑该文本：编辑期间本地草稿即时回显，600ms
-  防抖写主机 settings，失焦立即写入；主机侧经 `scope.watch` 热生效。
-  开关关闭或文本为空时两处都不注入，对请求零影响。
-  该开关与界面语言解耦：只受用户显式开关控制；只允许持久行 `dsh-zh` 与运行时
-  条目 `dsh-zh-live` 注册，临时热行 `dsh-zh-hot` 跳过（防重复）。
+  「提示词注入」（默认关闭，含「注入到」下拉框）走官方 settingsScope 服务 → 主机 settings
+  命名空间 `dsh-zh` 的 `zhPrompt`（开关）、`zhPromptText`（注入文本）与
+  `zhPromptTarget`（注入目标）字段（settings.yaml 持久化），详见第 1 节与 AGENTS。
+- **提示词注入（用户确认，默认关闭，文本可编辑）**：开启后主机半边按
+  **注入目标二选一**（设置页下拉框「注入到」，字段 `zhPromptTarget`，
+  默认 `system`）：
+  - `system`（初始系统提示，默认）：包装 `systemPrompt.assemble`，在官方
+    组装返回后（含 complete persona 场景）把注入文本作为 `dsh-zh:language`
+    section 插入返回的 assembly，首次对话即写入 system prompt；此目标下
+    不插入可见上下文消息。
+  - `user`（首用户提示词）：不写 sections，在 `agent/pre-step` 阶段把注入
+    文本作为一条 `user/message` 上下文消息插入（source.kind=`plugin`、
+    source.plugin=`deepseek-harness-zh_pro`、source.form=`notice`、
+    summary=`提示词注入：<文本>`），聊天记录显示「上下文注入
+    deepseek-harness-zh_pro」行，展开可见完整注入文本。
+  - 旧值 `context`（早期未实现的「初始上下文」设计）读取时归一化为 `user`。
+  - 注入文本取自 settings 的 `zhPromptText`（默认值为主机 `ZH_PROMPT_TEXT`：
+    「思考过程和回复始终使用中文输出」）。设置页文本框可编辑该文本：编辑期间
+    本地草稿即时回显，600ms 防抖写主机 settings，失焦立即写入；主机侧经
+    `scope.watch` 热生效。
+  - 开关关闭或文本为空时两处都不注入，对请求零影响。
+  - 该开关与界面语言解耦：只受用户显式开关控制；只允许持久行 `dsh-zh` 与运行时
+    条目 `dsh-zh-live` 注册，临时热行 `dsh-zh-hot` 跳过（防重复）。
+  - 信任边界（对外承诺）：本功能不注册任何模型工具、不上传任何数据；注入
+    文本仅经官方 settings 服务写入 settings.yaml（命名空间 `dsh-zh`）。
 - **信任与数据边界（对外承诺）**：不注册任何模型工具、不上传任何数据。
   提示词注入仅限上述「提示词注入」一项（用户显式开启才注入，默认关闭，
   关闭时零 token 消耗；注入文本由用户编辑，编辑本身即显式同意）；其余情况
   不注入提示词。不写任何存储文件，例外为：增强设置在浏览器 localStorage、
-  `zhPrompt` 开关与 `zhPromptText` 文本经官方 settings 服务写入
-  settings.yaml（命名空间 `dsh-zh`）。
+  `zhPrompt` 开关、`zhPromptText` 文本与 `zhPromptTarget` 目标经官方
+  settings 服务写入 settings.yaml（命名空间 `dsh-zh`）。
 - **已知限制（对外承诺）**：词典管不到的硬编码英文只覆盖内置清单；未列入清单的
   文本保持英文，用户反馈后补充（这是旧 README FAQ 的开发者版）。
 - **兼容性要求**：DeepSeek Harness Web GUI（`web` profile）；Node.js
@@ -446,8 +485,9 @@ host 动态包 `inject: ['loader']` + `harness.registerTool(ctx, harness.defineT
 - 修改流程：编辑 `lib/client.js` → `node --check` 校验 → `node verify-pairs.cjs` 回归 →
   刷新网页 → 观察统计行/重试文案；编辑 `lib/index.js` / `bin/dsh-zh.mjs` → 同样校验后
   **保存即热重载**（第 5 节第 18 条，日志出现「主机半边热重载已启用」）→
-  刷新网页检查设置页「提示词注入」行可用（含注入文本框）、开启后聊天记录
-  出现「上下文注入 deepseek-harness-zh_pro」行（展开可见完整注入文本）。
+  刷新网页检查设置页「提示词注入」行可用（含「注入到」下拉框与注入文本框）、
+  开启后按所选目标生效（`system` 首条回复即带提示；`user` 聊天记录出现
+  「上下文注入 deepseek-harness-zh_pro」行，展开可见完整注入文本）。
 - 上游更新检查流程：把**部署版**（profile node_modules，不是 checkout）的新 zh 值同步进
   `verify-pairs.cjs` 的 `UPSTREAM`，跑回归看哪些键不再命中（会显示英文），再调整 `TERMS` 片段。
 - 统计行「输入」含缓存重读（每步重读整个上下文计费），与 100万 窗口、37% 占用不冲突 —— 属正常现象，用户已了解。

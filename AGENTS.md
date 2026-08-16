@@ -42,12 +42,16 @@
   `chatWidthEnabled`（对话宽度总开关，默认开）、`chatWidth`（50–100%，默认 90，
   仅中文界面且视口 ≥1200px 时覆盖 `--dsh-chat-content-width`）
 - `zhPrompt`（提示词注入，**默认关**）与 `zhPromptText`（注入文本，默认为主机
-  `ZH_PROMPT_TEXT`「思考过程和回复始终使用中文输出」）不走 localStorage：客户端经官方 `settingsScope`
-  服务读写主机 settings 命名空间 `dsh-zh`（写入 settings.yaml），主机半边包装
+  `ZH_PROMPT_TEXT`「思考过程和回复始终使用中文输出」）、`zhPromptTarget`
+  （注入目标，默认 `system`）不走 localStorage：客户端经官方 `settingsScope`
+  服务读写主机 settings 命名空间 `dsh-zh`（写入 settings.yaml）。注入目标
+  二选一（设置页下拉框「注入到」）：`system` 初始系统提示——主机半边包装
   `systemPrompt.assemble` 把该文本写进最终 system prompt（首次对话即生效），
-  并插入一条 `user/message` 上下文消息（source=`deepseek-harness-zh_pro`，
+  不插可见消息；`user` 首用户提示词——不写 system prompt，在 `agent/pre-step`
+  插入一条 `user/message` 上下文消息（source=`deepseek-harness-zh_pro`，
   form=`notice`），聊天记录显示「上下文注入 deepseek-harness-zh_pro」行；
-  关闭或文本为空时两处都不注入，对模型请求零影响
+  两目标互斥，旧值 `context` 归一化为 `user`；关闭或文本为空时两处都不注入，
+  对模型请求零影响
 
 ## 四、改插件必须遵守（红线）
 
@@ -80,7 +84,8 @@
 7. **信任边界**：不注册工具、不上传数据。提示词注入仅限「提示词注入」一项
    （用户显式开启才注入，默认关闭，关闭时零 token 消耗；注入文本由用户在
    设置页编辑，编辑本身即显式同意）；其余情况不注入提示词。
-   不写存储，例外为：增强设置的 localStorage，以及「提示词注入」开关与文本经官方
+   不写存储，例外为：增强设置的 localStorage，以及「提示词注入」开关、文本与
+   注入目标（`zhPrompt` / `zhPromptText` / `zhPromptTarget`）经官方
    settings 服务写入 settings.yaml（命名空间 `dsh-zh`）。
 8. **已知限制与 Roadmap**：硬编码英文只覆盖内置清单，未收录的保持原样（用户反馈后
    补充）；Roadmap = 覆盖更多硬编码英文、术语叫法可配置。
