@@ -419,6 +419,62 @@ commandText.nextSibling = thinkText
 thinkText.nextSibling = toolText
 toolText.nextSibling = deepThinkText
 deepThinkText.nextSibling = statsRow
+// 思考块 DOM 夹具：最小化的元素对象，支撑「默认展开行数」折叠逻辑的查询/读写。
+let injectedThinkRoots = []
+function makeFakeEl(attrs) {
+  const state = {}
+  const el = {
+    nodeType: 1,
+    tagName: 'DIV',
+    textContent: '',
+    parentElement: null,
+    parentNode: null,
+    childNodes: [],
+    firstChild: null,
+    firstElementChild: null,
+    nextSibling: null,
+    style: {},
+    getAttribute: function (name) { return Object.prototype.hasOwnProperty.call(state, name) ? state[name] : null },
+    setAttribute: function (name, value) { state[name] = String(value) },
+    removeAttribute: function (name) { delete state[name] },
+    hasAttribute: function (name) { return Object.prototype.hasOwnProperty.call(state, name) },
+    appendChild: function (node) {
+      node.parentNode = node.parentElement = el
+      this.childNodes.push(node)
+      if (this.firstChild === null) this.firstChild = node
+      if (this.firstElementChild === null && node.nodeType === 1) this.firstElementChild = node
+      if (node.onPush) node.onPush()
+      return node
+    },
+    insertBefore: function (node, refNode) {
+      node.parentNode = node.parentElement = el
+      if (refNode === null || refNode === undefined) return this.appendChild(node)
+      const i = this.childNodes.indexOf(refNode)
+      if (i === -1) this.childNodes.push(node)
+      else this.childNodes.splice(i, 0, node)
+      if (this.firstChild === refNode) this.firstChild = node
+      if (this.firstElementChild === refNode && node.nodeType === 1) this.firstElementChild = node
+      if (node.onPush) node.onPush()
+      return node
+    },
+    removeChild: function (node) {
+      const i = this.childNodes.indexOf(node)
+      if (i !== -1) this.childNodes.splice(i, 1)
+      node.parentNode = node.parentElement = null
+      return node
+    },
+    querySelector: function () { return null },
+    querySelectorAll: function () { return [] },
+    addEventListener: function (type, fn) { el._handlers[type] = fn },
+    removeEventListener: function (type) { delete el._handlers[type] },
+    _handlers: {},
+  }
+  el.click = function (type) {
+    const fn = el._handlers[type]
+    if (typeof fn === 'function') fn()
+  }
+  return el
+}
 const fakeBody = {
   nodeType: 1,
   tagName: 'BODY',
@@ -429,7 +485,7 @@ const fakeBody = {
   nextSibling: null,
   querySelector: function () { return null },
   querySelectorAll: function (selector) {
-    if (selector === '[data-variant="think"]') return []
+    if (selector === '[data-variant="think"]') return injectedThinkRoots
     if (selector === '[data-dsh-zh-stats-full]') return statsRow.getAttribute('data-dsh-zh-stats-full') === null ? [] : [statsRow]
     if (selector === '[data-dsh-zh-hide-prompt-provider]') return []
     return []
@@ -446,6 +502,7 @@ globalThis.document = {
   documentElement: {},
   body: fakeBody,
   contains: function () { return false },
+  createElement: function () { return makeFakeEl() },
   addEventListener: function () {},
   removeEventListener: function () {},
 }
@@ -522,6 +579,93 @@ statsToggle = findElement(settingsTree, function (node) {
 })
 statsToggle.props.onClick()
 check(statsRow.getAttribute('data-dsh-zh-stats-full') !== null, true, '统计全显示 重新开启')
+
+// 默认展开行数（thinkMaxLines）：设置行渲染 + 思考正文折叠/展开/收起
+const maxLinesInput = findElement(settingsRender(), function (node) {
+  return node.type === 'input' && node.props && node.props['aria-label'] === '默认展开行数'
+})
+check(maxLinesInput !== null, true, '默认展开行数 设置输入框存在')
+check(maxLinesInput === null || maxLinesInput.props.value === 20, true, '默认展开行数 默认值 20')
+check(locale.lookup('dsh-zh-settings', 'thinkMaxLines'), '默认展开行数', '默认展开行数 中文文案')
+
+// 构造一个超过行数上限的思考块假 DOM（data-state=ok 避免触发自动展开）。
+const thinkBody = makeFakeEl()
+const headerEl = makeFakeEl()
+headerEl.setAttribute('data-disclosure-row', '')
+const openEl = makeFakeEl()
+openEl.setAttribute('data-open', '')
+openEl.firstElementChild = headerEl
+headerEl.nextElementSibling = thinkBody
+thinkBody.parentElement = openEl
+const thinkRoot = makeFakeEl()
+thinkRoot.setAttribute('data-variant', 'think')
+thinkRoot.setAttribute('data-state', 'ok')
+thinkRoot.querySelector = function (selector) {
+  return selector === '[data-variant="think"] [data-open]' ? openEl : null
+}
+injectedThinkRoots = [thinkRoot]
+const longThink = Array.from({ length: 25 }, function (_, i) { return 'line ' + (i + 1) }).join('\n')
+thinkBody.textContent = longThink
+// 触发一次全量 pass（无 records → mutationRoots 返回 undefined → 全量重放）。
+fakeObserverCbs[0].cb(undefined)
+check(thinkBody.textContent.split('\n').length, 20, '默认展开行数 超限正文折叠为 20 行')
+check(thinkBody.textContent.split('\n')[0], 'line 6', '默认展开行数 折叠保留末尾行（首行）')
+check(thinkBody.textContent.split('\n')[19], 'line 25', '默认展开行数 折叠保留末尾行（末行）')
+check(thinkBody.getAttribute('data-dsh-zh-think'), 'clamped', '默认展开行数 标记折叠态')
+let ctrl = thinkBody.__dshZhControl
+check(ctrl !== undefined && ctrl.textContent.indexOf('展开全部（还有') !== -1, true, '默认展开行数 展示「展开全部（还有 N 行）」控件')
+check(ctrl !== undefined && String(ctrl.style.cssText).indexOf('display:block') !== -1, true, '默认展开行数 「展开全部」按钮独占一行')
+check(thinkBody.firstChild === ctrl, true, '默认展开行数 「展开全部」控件置于折叠正文最上方')
+// 展开全部：一次性动作，移除插件控件（收起交给思考块原版按钮）。
+ctrl.click('click')
+check(thinkBody.getAttribute('data-dsh-zh-think'), 'expanded', '默认展开行数 点击后标记展开态')
+check(thinkBody.textContent.split('\n').length, 25, '默认展开行数 展开后可见全部行')
+check(thinkBody.__dshZhControl === undefined, true, '默认展开行数 展开后不再显示插件「收起」控件')
+// 展开态在下次 pass 被消费清除；再下一次外部更新重新折叠为 20 行。
+fakeObserverCbs[0].cb(undefined)
+check(thinkBody.getAttribute('data-dsh-zh-think'), null, '默认展开行数 展开态消费后清除标记')
+fakeObserverCbs[0].cb(undefined)
+check(thinkBody.textContent.split('\n').length, 20, '默认展开行数 后续更新重新折叠为 20 行')
+check(thinkBody.textContent.split('\n')[0], 'line 6', '默认展开行数 重新折叠后仍保留末尾行')
+check(thinkBody.getAttribute('data-dsh-zh-think'), 'clamped', '默认展开行数 重新折叠标记恢复')
+check(thinkBody.__dshZhControl !== undefined, true, '默认展开行数 重新折叠后「展开全部」控件恢复')
+// 流式 + 自动展开场景：正文持续增长，多次 pass 后仍保持折叠为上限行数。
+const streamBody = makeFakeEl()
+const streamHeader = makeFakeEl()
+streamHeader.setAttribute('data-disclosure-row', '')
+const streamOpen = makeFakeEl()
+streamOpen.setAttribute('data-open', '')
+streamOpen.firstElementChild = streamHeader
+streamHeader.nextElementSibling = streamBody
+const streamRoot = makeFakeEl()
+streamRoot.setAttribute('data-variant', 'think')
+streamRoot.setAttribute('data-state', 'running')
+streamRoot.querySelector = function (selector) {
+  return selector === '[data-variant="think"] [data-open]' ? streamOpen : null
+}
+injectedThinkRoots = [streamRoot]
+streamBody.textContent = Array.from({ length: 30 }, function (_, i) { return 't ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(streamBody.textContent.split('\n').length, 20, '默认展开行数 流式增长时仍折叠为 20 行（第一帧）')
+streamBody.textContent = Array.from({ length: 80 }, function (_, i) { return 'tok ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(streamBody.textContent.split('\n').length, 20, '默认展开行数 流式增长后仍折叠为 20 行（第二帧）')
+check(streamBody.textContent.split('\n')[0], 'tok 61', '默认展开行数 流式增长后保留末尾行')
+check(streamBody.firstChild === streamBody.__dshZhControl, true, '默认展开行数 流式折叠后控件仍置于最上方')
+check(streamBody.getAttribute('data-dsh-zh-think'), 'clamped', '默认展开行数 流式增长后保持折叠标记')
+streamBody.__dshZhControl.click('click')
+check(streamBody.textContent.split('\n').length, 80, '默认展开行数 流式增长后展开可见全部')
+check(streamBody.textContent.split('\n')[0], 'tok 1', '默认展开行数 展开后从头显示')
+check(streamBody.__dshZhControl === undefined, true, '默认展开行数 展开后无插件「收起」控件')
+fakeObserverCbs[0].cb(undefined)
+check(streamBody.getAttribute('data-dsh-zh-think'), null, '默认展开行数 展开态消费后清除标记')
+fakeObserverCbs[0].cb(undefined)
+check(streamBody.textContent.split('\n').length, 20, '默认展开行数 后续更新重新折叠为 20 行')
+check(streamBody.textContent.split('\n')[0], 'tok 61', '默认展开行数 重新折叠后保留末尾行')
+injectedThinkRoots = []
+
+// 结束思考块夹具：后续 pass（英文还原/卸载）不应再扫描该夹具。
+injectedThinkRoots = []
 
 for (const ns of Object.keys(EXPECT)) {
   for (const key of Object.keys(EXPECT[ns])) {
