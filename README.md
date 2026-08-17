@@ -3,7 +3,7 @@
 **DeepSeek Harness 中文增强插件**
 
 <p align="center">
-  <img alt="版本 0.6.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.6.0-5965d8">
+  <img alt="版本 0.6.1" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.6.1-5965d8">
   <img alt="界面 中文" src="https://img.shields.io/badge/%E7%95%8C%E9%9D%A2-%E4%B8%AD%E6%96%87-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
