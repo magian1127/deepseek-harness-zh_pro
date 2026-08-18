@@ -351,6 +351,8 @@ const ctx = {
   },
   _effects: [],
   get: function (name) { return name === 'locale' ? locale : undefined },
+  on: function () { return function () {} },
+  off: function () {},
   effect: function (fn) {
     const dispose = fn()
     if (typeof dispose === 'function') this._effects.push(dispose)

@@ -113,6 +113,29 @@ API 网关只允许网页访问硬编码命名空间和 configurable provider �
 `settingsNs: 'dsh-zh'`。热重载后先查重再注册，避免 `DUPLICATE_DIRECTORY`。该注册会在
 Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏，但目录本身必须保留。
 
+## 客户端服务接入（自动归档等跨服务功能）
+
+浏览器端读取 `sessions` / `workspaces` 等服务时，注意以下实测结论：
+
+- **`ctx.inject` 的嵌套 fiber 在浏览器 cordis 中可能不激活**：即使服务已通过
+  `ctx.provide` 注册、`ctx.get(name)` 能拿到实例，`ctx.inject([...], callback)` 的
+  回调也可能永远不执行（无报错、无日志）。优先用**同步 `ctx.get()` 获取服务**并
+  直接注册订阅；服务未就绪时监听 `internal/service` 事件，出现时重试初始化。
+- 服务名以官方插件（如 `ui-conversation`）的 `inject` 声明为准：`sessions`、
+  `workspaces`、`settingsScope`、`locale`、`slots`。
+- 订阅快照 store（`sessions.list.subscribe` / `workspaces.list.subscribe`）后
+  **立即主动执行一次检查**：若插件加载时目标界面已就绪，快照不变化则回调永不触发。
+- 客户端代码不能引用主机端常量。`ZH_AUTO_ARCHIVE_DAYS_DEFAULT` 这类默认值
+  必须在 `lib/client.js` 内各自定义；引用未定义标识符会让整个插件 apply 抛
+  `ReferenceError`，导致插件完全无法加载（中文补全、设置页一起失效，控制台只
+  能看到 loader 的 `failed to apply` 错误）。
+- 编辑大段代码时留意编辑残留：多余的 `return`/`}` 会让 apply 提前闭合，语法检查
+  报 `Unexpected identifier 'exports'` 这类「错误位置在文件末尾」的假象。用
+  acorn 解析定位真正的失衡行：`new (require('acorn').Parser)({ ecmaVersion: 2022 })`
+  或 `node --check` 报错行之前逐块核对。
+- 跨服务功能的生命周期：所有订阅、定时器、DOM 元素和 style 标签都挂在
+  `ctx.effect` 的 disposer 上，插件卸载时一并清理。
+
 ## 主机提示词
 
 `lib/index.js` 注册 settings schema 并用 `scope.watch` 更新内存状态：

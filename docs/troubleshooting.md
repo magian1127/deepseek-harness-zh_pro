@@ -22,6 +22,41 @@ npm test
 | profile 未安装或 bundles 未就绪 | 运行 `status`，检查 profile `package.json` 的 dependency 与 bundles |
 | 浏览器仍使用旧 bundle | 强制刷新页面，再检查 `/plugins/.../client.js` 的返回内容 |
 
+## 插件加载失败但页面无报错（CDP 调试）
+
+用户浏览器看不到控制台时，可用独立 headless 浏览器通过 CDP 验证，**不要动用户的
+浏览器**：
+
+```powershell
+# 独立用户数据目录 + 独立调试端口，避免与用户浏览器冲突
+& 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' `
+  --headless=new --remote-debugging-port=9333 `
+  --user-data-dir="$env:TEMP\dsh-cdp-test" http://127.0.0.1:3080/
+```
+
+然后连接 `http://127.0.0.1:9333/json` 的 page target，用原生 WebSocket 调 CDP：
+
+1. `Runtime.enable` 后收集 `Runtime.consoleAPICalled` 与 `Runtime.exceptionThrown`，
+   插件 apply 的异常（如 `ReferenceError`）会出现在这里；
+2. 检查模块加载状态：`window.__DSH_MODULES__.loadCache` / `factories` 是否有
+   `deepseek-harness-zh_pro`（页面完全加载后才有，需等待足够久）；
+3. 检查 bundle 内容：`fetch('/plugins/deepseek-harness-zh_pro/client.js')` 后
+   用 `new Function(text)` 或 acorn 验证语法、搜索关键标识符确认版本；
+4. 找不到「新会话」按钮等 UI 元素时，headless 页面可能未连上 websocket，先检查
+   `document.body.innerText` 是否只渲染了骨架（几十字符）而非完整界面。
+
+典型错误与结论：
+
+| 症状 | 结论 |
+| --- | --- |
+| `failed to apply loader entry ...: XXX is not defined` | 客户端引用了未定义标识符（常为误引用主机端常量），整个插件无法加载 |
+| `SyntaxError: Unexpected identifier 'exports'` 且报错在文件末尾 | apply 函数被多余 `return`/`}` 提前闭合，用 acorn 定位真实失衡行 |
+| 模块表有插件但无任何插件日志 | 插件 apply 未执行或 `ctx.inject` 回调未激活，改用同步 `ctx.get()`（见 development.md） |
+| bundle 返回 200 且语法正确但页面行为不变 | 浏览器缓存了旧 bundle，强制刷新；或页面 websocket 未连接（headless 骨架态） |
+
+清理时只结束自己启动的 headless 进程（按 `--user-data-dir` 或调试端口区分），不要
+`Stop-Process` 所有同名浏览器进程，避免误杀用户正在使用的浏览器。
+
 ## DSH 启动时报重复 id
 
 `dsh-zh`、`dsh-zh-hot`、`dsh-zh-live` 被重复或错误复用时，Loader 会报
@@ -111,6 +146,11 @@ DSH profile 自己安装的 `dshmarket` 与本项目依赖属于不同范围，�
 
 `node --check` 只验证语法，不执行标识符求值。常量改名后必须全局搜索旧名和新名；主机路径还要
 运行 `verify-cli.mjs` 并人工检查实际服务调用。不要把注释中的未实现方案写成行为契约。
+
+本次自动归档功能踩过的具体案例：`lib/client.js` 引用了只在 `lib/index.js` 定义的
+`ZH_AUTO_ARCHIVE_DAYS_DEFAULT`，语法检查通过但插件 apply 抛 `ReferenceError`，整个插件
+（含中文补全、设置页）一起无法加载。**客户端与主机端各自定义自己的默认值常量**，
+并做一次全仓库 grep 确认没有跨端引用。
 
 ## npm publish 卡在 EOTP
 

@@ -177,7 +177,7 @@ try {
   writeFileSync(join(schemaDir, 'index.cjs'), [
     "'use strict'",
     'function schema() { return { default: function () { return this } } }',
-    'module.exports = { object: schema, boolean: schema, string: schema }',
+    'module.exports = { object: schema, boolean: schema, string: schema, number: schema }',
   ].join('\n'))
   let settingsValue = { zhPrompt: true, zhPromptText: '始终使用中文', zhPromptTarget: 'system' }
   let settingsWatcher = null

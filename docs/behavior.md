@@ -24,6 +24,7 @@
 | `zhPrompt` 提示词注入 | 关 | `settings.yaml` | 后续模型请求 |
 | `zhPromptText` 注入文本 | `思考过程和回复始终使用中文输出` | `settings.yaml` | 提示词注入开启时 |
 | `zhPromptTarget` 注入目标 | `system` | `settings.yaml` | `system` 或 `user` |
+| `zhAutoArchiveDays` 自动归档天数 | 7，范围 0–365 | `settings.yaml` | 新建会话界面打开时 |
 
 localStorage 键为 `deepseek-harness-zh_pro:enhancements`；主机 settings 命名空间为
 `dsh-zh`。`settingsScope` 不可用时提示词开关显示为禁用，其余增强仍可使用。
@@ -120,6 +121,21 @@ locale 补丁处理。保留 Cordis、DeepSeek、TypeScript、命令名、文件
 
 旧值 `context` 读取时归一化为 `user`。文本框本地即时回显，静默 600ms 后写入 settings，
 失焦时立即写入。开关关闭或文本为空时两条通道都不注入。
+
+## 自动归档旧会话
+
+点击左侧「新会话」并进入新会话界面（已选择工作区，此时 current 指向该工作区的
+空白会话）后，自动把该工作区内超过 `zhAutoArchiveDays`（默认 7，范围 0–365）天
+未活动的会话加入官方归档集合：会话从列表隐藏，日志与工作区归属原地保留。判定
+依据是 `session.list` 的 `updatedAt`（创建时间与最近人工消息的较晚者）。运行中
+（running）与空白（blank，官方列表已隐藏且会被新会话重用）的会话不参与。`0`
+表示关闭自动归档。
+
+自动归档使用官方 `workspace.archiveSession` 通道，与手动「归档会话」共用同一个
+归档集合，不区分来源。每次打开新建会话界面都会重新评估，幂等，不重复归档。
+
+归档发生时，页面顶部会短暂显示「有 N 个会话已归档」的提示条（与官方 Toast 同风格，
+约 4 秒后自动消失）；本次没有会话满足条件时不显示。
 
 ## 数据与信任边界
 
