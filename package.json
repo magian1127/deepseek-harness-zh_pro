@@ -4,18 +4,30 @@
   "type": "module",
   "description": "综合性增强插件：界面优化、布局调整与提示词注入等更多功能。A comprehensive enhancement plugin with UI polish, layout tweaks, prompt injection, and more.",
   "main": "lib/index.js",
+  "types": "lib/index.d.ts",
   "bin": {
     "dsh-zh": "bin/dsh-zh.mjs"
   },
   "files": [
     "lib",
     "bin",
+    "scripts",
+    "src",
+    "tsconfig.json",
+    "tsconfig.client.json",
+    "tsconfig.tests.json",
     "verify-pairs.cjs",
     "verify-cli.mjs",
     "cordis.patch.yml"
   ],
   "scripts": {
-    "test": "node verify-pairs.cjs && node verify-cli.mjs"
+    "build:runtime": "node -e \"require('node:fs').rmSync('.tsbuild', { recursive: true, force: true })\" && tsc -p tsconfig.json && tsc -p tsconfig.tests.json && node .tsbuild/scripts/publish-build.mjs",
+    "build:client": "tsc -p tsconfig.client.json && node scripts/build-client.mjs",
+    "build": "npm run build:runtime && npm run build:client",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json",
+    "test": "npm run build && node verify-pairs.cjs && node verify-cli.mjs",
+    "prepare": "npm run build",
+    "prepack": "npm run build"
   },
   "keywords": [
     "deepseek-harness",
@@ -57,5 +69,9 @@
         "@deepseek-ai/dsh-client-locale"
       ]
     }
+  },
+  "devDependencies": {
+    "@types/node": "22.15.0",
+    "typescript": "5.8.3"
   }
 }

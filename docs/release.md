@@ -7,14 +7,14 @@
 ```powershell
 git status --short
 git diff --check
-git check-ignore bin/dsh-zh.mjs
+git check-ignore bin/dsh-zh.mjs lib/index.js scripts/build-client.mjs
 ```
 
 要求：
 
 - 没有意外生成物或无关改动；
-- `git check-ignore` 对 CLI 无输出；
-- `bin/dsh-zh.mjs` 已被跟踪，或作为预期的新文件明确出现在 `git status`；
+- 根目录 `bin/`、`lib/`、`scripts/` 和生成验证脚本均被忽略；
+- `src/bin/`、`src/lib/`、`src/scripts/` 和配置文件可见；
 - 用户已有改动没有被覆盖。
 
 ## 2. 版本与文档
@@ -28,6 +28,8 @@ git check-ignore bin/dsh-zh.mjs
 ## 3. 自动化验证
 
 ```powershell
+npm run typecheck
+npm run build
 node --check lib/client.js
 node --check lib/index.js
 node --check bin/dsh-zh.mjs
@@ -44,9 +46,12 @@ npm pack --dry-run --json
 - `cordis.patch.yml`
 - `verify-pairs.cjs`
 - `verify-cli.mjs`
+- `src/`、`tsconfig.json`、`tsconfig.client.json`、`tsconfig.tests.json`
+- `lib/*.d.ts` 与 `lib/*.js`
 - `README.md`、`LICENSE`、`package.json`
 
-不得包含 `node_modules`、临时报告、日志或本地 profile 文件。
+不得包含 `node_modules`、`.tsbuild`、临时报告、日志或本地 profile 文件；发布包中的
+`src/` 用于源码审查和 Git 直接安装，运行时仍使用已经生成的 `lib/` 与 `bin/`。
 
 ## 4. 运行时冒烟
 
@@ -68,8 +73,8 @@ node bin/dsh-zh.mjs status --profile web
 
 得到用户批准后才能执行：
 
-1. 提交全部预期文件，包括新增加的 `bin/dsh-zh.mjs` 和验证脚本。
-2. 用 `git ls-files bin/dsh-zh.mjs` 确认运行时 CLI 已进入提交。
+1. 提交 `src/`、配置、锁文件和必要的项目元数据，不提交根目录 `bin/`、`lib/`、`scripts/` 或生成验证脚本。
+2. 用 `git check-ignore bin/dsh-zh.mjs lib/index.js scripts/build-client.mjs` 确认构建产物仍被忽略。
 3. commit message 必须全中文且以中文开头；英文术语只放在中文后的括号内。
 4. 创建与 `package.json` 一致的版本标签。
 5. 推送分支和标签。
@@ -96,7 +101,25 @@ npm view deepseek-harness-zh_pro dist-tags --registry=https://registry.npmjs.org
 
 确认新版本是预期的 `latest`。同一版本重复发布会被 npm 拒绝；应提升版本号，不能覆盖已发布版本。
 
-## 7. 发布后安装检查
+## 7. 源码与发布包安装检查
+
+在隔离目录分别验证以下两种输入，确保不依赖未发布的 TypeScript 开发依赖：
+
+```powershell
+# 仓库源码：安装时 prepare 自动构建，也可显式构建
+pnpm install
+npm run build
+node bin/dsh-zh.mjs status --profile web
+
+# 打包产物：确认 npm 包导出和 CLI 都可用
+npm pack
+npm install --prefix .tmp-install .\\deepseek-harness-zh_pro-0.6.2.tgz
+node .tmp-install/node_modules/deepseek-harness-zh_pro/bin/dsh-zh.mjs status --profile web
+```
+
+完成后删除临时安装目录和 tarball，再进入下一节的 web profile 双通道检查。
+
+## 8. 发布后安装检查
 
 在隔离且可重置的 web 测试环境中分两轮验证，每轮结束后 remove 并恢复空状态：
 

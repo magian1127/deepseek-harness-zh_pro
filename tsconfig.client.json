@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "None",
+    "strict": false,
+    "noImplicitAny": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowUnreachableCode": true
+  },
+  "include": [
+    "src/lib/client/globals.d.ts",
+    "src/lib/client/data/**/*.ts",
+    "src/lib/client/logic/**/*.ts"
+  ]
+}

@@ -48,11 +48,25 @@ dsh plugin --profile web add deepseek-harness-zh_pro
 npx -y deepseek-harness-zh_pro install --profile web
 ```
 
-Local source debugging:
+Local source debugging (run dependency installation first; `prepare` generates runtime artifacts):
 
 ```powershell
+pnpm install
 node bin/dsh-zh.mjs install --profile web --link $PWD
 ```
+
+TypeScript source build and checks:
+
+```powershell
+pnpm install
+npm run typecheck
+npm test
+npm pack --dry-run --json
+```
+
+`src/` contains the only hand-written source; `lib/`, `bin/`, `scripts/`, and the root
+verification scripts are Git-ignored build artifacts. `prepare`, `npm run build`, or `prepack`
+generates them as needed, including the classic client script before publishing.
 
 Check the status after installing:
 

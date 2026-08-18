@@ -1,0 +1,11 @@
+/**
+ * deepseek-harness-zh_pro 浏览器半边源码说明。
+ *
+ * 客户端业务片段均为 TypeScript 脚本，按 scripts/build-client.mjs 中的固定顺序
+ * 合并到一个经典脚本工厂。这里保留插件行为、语言边界与构建约束的总说明；
+ * __ModuleLoader__ 包壳由构建器生成，避免单个片段依赖不完整的语法上下文。
+ *
+ * 中文补全只在中文界面和 zhComplete 开启时改写 locale 与有限 DOM 清单；统计全显示、
+ * 思考展开、默认展开行数、对话宽度和自动归档按各自设置独立生效。提示词注入由主机
+ * settingsScope 控制，默认关闭。所有副作用都必须随当前插件 Fiber 清理。
+ */

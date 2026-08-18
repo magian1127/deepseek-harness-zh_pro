@@ -1,7 +1,7 @@
 # 运行架构
 
 本文档解释插件在哪里运行、如何挂载以及各文件之间的职责。用户安装命令见
-[`README.md`](../README.md)，实现细节见 [`development.md`](development.md)。
+[`README.md`](../README.md)，TypeScript 源码与构建细节见 [`development.md`](development.md)。
 
 ## 运行目录
 
@@ -24,9 +24,10 @@ Windows 默认位置为 `%USERPROFILE%\.dsh`。
 
 | 组件 | 运行位置 | 职责 |
 | --- | --- | --- |
-| `lib/client.js` | 浏览器 | 中文补全、DOM 增强、设置分区和本地设置 |
-| `lib/index.js` | DSH Node.js 进程 | settings 注册、提示词注入、热装卸监督和主机热重载 |
-| `bin/dsh-zh.mjs` | 命令行进程 | 安装、卸载、状态检查和 Windows 命令转发 |
+| `src/lib/client/`（TypeScript 源片段） | 浏览器 | 中文补全、DOM 增强、设置分区和本地设置；`data/` 为语言数据，`logic/` 为逻辑 |
+| `lib/client.js` | 浏览器 | 由 `scripts/build-client.mjs` 转译并拼接 `src/lib/client/` 生成的经典脚本 bundle |
+| `src/lib/*.ts` → `lib/*.js` | DSH Node.js 进程 | settings 注册、提示词注入、热装卸监督和主机热重载 |
+| `src/bin/*.mts` → `bin/*.mjs` | 命令行进程 | 安装、卸载、状态检查和 Windows 命令转发 |
 | `cordis.patch.yml` | bundle 配置层 | 声明持久挂载行 `dsh-zh` |
 | `package.json` | npm/DSH 元数据 | 导出、客户端依赖图、bundle patch 和发布文件 |
 
@@ -85,8 +86,8 @@ CLI 和官方 remove 都会删除依赖声明。主机监督器发现本包被�
 
 ## 更新与热重载
 
-- `lib/client.js`：服务端点会读取新 bundle；已打开页面需要刷新后加载新代码。
-- `lib/index.js`、`bin/dsh-zh.mjs`：插件优先复用 DSH 官方 HMR 服务，监视两个主机文件并
+- `src/lib/client/**/*.ts`：运行 `npm run build` 后，服务端点会读取新的 `lib/client.js`；已打开页面需要刷新后加载新代码。
+- `lib/index.js`、`bin/dsh-zh.mjs`（由 `src/lib`、`src/bin` 编译生成）：插件优先复用 DSH 官方 HMR 服务，监视两个主机文件并
   以 150ms 防抖驱动 `partialReload`。
 - 若官方 watcher 已覆盖插件目录，插件不会重复注册监视。
 - 若 HMR 服务或必要方法不可用，日志会明确提示需要重启。

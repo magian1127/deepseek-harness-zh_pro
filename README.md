@@ -45,11 +45,24 @@ dsh plugin --profile web add deepseek-harness-zh_pro
 npx -y deepseek-harness-zh_pro install --profile web
 ```
 
-本地源码联调：
+本地源码联调（首次使用先安装依赖，`prepare` 会生成运行产物）：
 
 ```powershell
+pnpm install
 node bin/dsh-zh.mjs install --profile web --link $PWD
 ```
+
+TypeScript 源码构建与检查：
+
+```powershell
+pnpm install
+npm run typecheck
+npm test
+npm pack --dry-run --json
+```
+
+`src/` 是唯一手写源码；`lib/`、`bin/`、`scripts/` 和根目录验证脚本都是被 Git 忽略的构建产物，
+由 `prepare`、`npm run build` 或 `prepack` 动态生成。发布前会重新编译并生成客户端经典脚本。
 
 安装后可检查状态：
 

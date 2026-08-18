@@ -27,11 +27,7 @@ x86/
 [Aa][Rr][Mm]/
 [Aa][Rr][Mm]64/
 bld/
-[Bb]in/
-# 本项目发布的 CLI 源文件，不是 Visual Studio 构建产物。
-!bin/
-bin/*
-!bin/dsh-zh.mjs
+/[Bb]in/
 [Oo]bj/
 [Oo]ut/
 [Ll]og/
@@ -288,6 +284,17 @@ FakesAssemblies/
 # Node.js Tools for Visual Studio
 .ntvs_analysis.dat
 node_modules/
+# TypeScript 构建、测试和打包产物。
+.tsbuild/
+*.tsbuildinfo
+/lib/
+/scripts/
+/verify-cli.mjs
+/verify-pairs.cjs
+*.map
+coverage/
+.nyc_output/
+*.tgz
 
 # Visual Studio 6 build log
 *.plg
