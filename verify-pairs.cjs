@@ -694,6 +694,41 @@ check(fakeBody.firstChild.nextSibling.nextSibling.data, 'Think', 'DOM 文本层 
 check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.data, 'Tool call', 'DOM 文本层 Tool call 还原')
 check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.nextSibling.data, 'Deep diving...', 'DOM 文本层 Deep diving 还原')
 
+// ---- 新行为：除「中文补全」外的功能在英文界面下同样生效 ----
+active = 'en'
+// 1) 统计全显示：英文计数格式（N turns · N steps）同样触发样式。
+statsText.data = '9 turns · 203 steps'
+statsRow.removeAttribute('data-dsh-zh-stats-full')
+fakeObserverCbs[0].cb(undefined)
+check(statsRow.getAttribute('data-dsh-zh-stats-full') !== null, true, '英文界面 统计全显示 识别英文计数')
+check(statsRow.style.getPropertyValue('white-space'), 'nowrap', '英文界面 统计全显示 样式应用')
+// 2) 默认展开行数：英文界面下思考正文仍按上限折叠。
+const enThinkBody = makeFakeEl()
+const enHeader = makeFakeEl()
+enHeader.setAttribute('data-disclosure-row', '')
+const enOpen = makeFakeEl()
+enOpen.setAttribute('data-open', '')
+enOpen.firstElementChild = enHeader
+enHeader.nextElementSibling = enThinkBody
+const enThinkRoot = makeFakeEl()
+enThinkRoot.setAttribute('data-variant', 'think')
+enThinkRoot.setAttribute('data-state', 'ok')
+enThinkRoot.querySelector = function (selector) {
+  return selector === '[data-variant="think"] [data-open]' ? enOpen : null
+}
+injectedThinkRoots = [enThinkRoot]
+enThinkBody.textContent = Array.from({ length: 25 }, function (_, i) { return 'en line ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(enThinkBody.textContent.split('\n').length, 20, '英文界面 默认展开行数 折叠为 20 行')
+check(enThinkBody.getAttribute('data-dsh-zh-think'), 'clamped', '英文界面 默认展开行数 折叠标记')
+injectedThinkRoots = []
+// 3) 中文补全：英文界面仍 passthrough（词典与标签改写都不生效）。
+check(locale.lookup('conversation', 'stats.llm'), 'LLM {duration}', '英文界面 中文补全 passthrough')
+check(fakeBody.firstChild.data, 'Workspace Write', '英文界面 中文补全 标签不改写')
+// 复位统计夹具，供后续卸载清理校验使用。
+statsText.data = '9 轮 · 203 步'
+statsRow.removeAttribute('data-dsh-zh-stats-full')
+
 // 上游改词后：部分翻译只动列出的片段，其余跟随上游
 active = 'zh'
 check(locale.lookup('settings.models', 'deleteDescriptionWithCredential'),

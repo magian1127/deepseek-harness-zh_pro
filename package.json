@@ -1,8 +1,8 @@
 {
   "name": "deepseek-harness-zh_pro",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "type": "module",
-  "description": "DSH 中文增强插件：中文界面修正残留英文、统一术语与格式，统计行完整显示，并可注入「中文优先提示」让大模型优先用中文回复与思考（默认关闭）",
+  "description": "综合性增强插件：界面优化、布局调整与提示词注入等更多功能。A comprehensive enhancement plugin with UI polish, layout tweaks, prompt injection, and more.",
   "main": "lib/index.js",
   "bin": {
     "dsh-zh": "bin/dsh-zh.mjs"
