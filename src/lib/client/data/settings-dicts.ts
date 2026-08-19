@@ -26,6 +26,9 @@ const SETTINGS_ZH = {
   autoArchiveDesc: '新建会话界面打开时，自动把超过指定天数未活动的会话归档（仅从列表隐藏，日志保留）；设为 0 可关闭此功能',
   autoArchiveUnit: '天',
   autoArchiveNotified: '有 {n} 个会话已归档',
+  otherFeatures: '其他功能',
+  deleteSession: '会话删除按钮',
+  deleteSessionDesc: '会话列表三点菜单显示「删除会话」项（日志移入系统回收站，不保留恢复位）',
 }
 const SETTINGS_EN = {
   nav: 'Enhancements',
@@ -53,4 +56,7 @@ const SETTINGS_EN = {
   autoArchiveDesc: 'When the New Session view opens, archive sessions inactive for more than the set days (hide from lists only; logs stay). Set 0 to disable this feature',
   autoArchiveUnit: 'days',
   autoArchiveNotified: '{n} session(s) archived',
+  otherFeatures: 'Other features',
+  deleteSession: 'Session delete button',
+  deleteSessionDesc: 'Show "Delete session" in the session row menu (log moves to system recycle bin; no restore position)',
 }

@@ -208,5 +208,34 @@ const ZhSettingsSection = function (props) {
           }
           setPromptDraft(null)
         },
-      })))
+      })),
+    // ---- 「其他功能」卡片：最下方，一行多个开关（名字 + 开关紧凑排列） ----
+    React.createElement('div', {
+      key: 'otherFeatures',
+      style: { display: 'flex', flexDirection: 'column', gap: '10px' },
+    },
+      React.createElement('div', {
+        style: { fontSize: 14, lineHeight: '20px', fontWeight: 600, color: 'var(--dsw-alias-label-primary, inherit)' },
+      }, t('otherFeatures')),
+      React.createElement('div', {
+        style: {
+          display: 'flex', flexWrap: 'wrap', gap: '10px',
+        },
+      },
+        // 会话删除按钮开关：小卡片（名字 + 开关）
+        React.createElement('div', {
+          key: 'deleteSession',
+          style: {
+            display: 'flex', alignItems: 'center', gap: '10px',
+            padding: '8px 12px', borderRadius: '10px',
+            border: '1px solid rgba(127, 127, 127, 0.28)',
+            background: 'rgba(127, 127, 127, 0.06)',
+          },
+        },
+          React.createElement('div', { style: { minWidth: 0 } },
+            React.createElement('div', { style: titleStyle }, t('deleteSession'))),
+          control(toggle(snapshot.deleteSessionEnabled, function () {
+            settingsStore.set('deleteSessionEnabled', !snapshot.deleteSessionEnabled)
+          }, false, t('deleteSession'))))),
+    ))
 }

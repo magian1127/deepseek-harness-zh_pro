@@ -14,6 +14,8 @@ import type { HostContext } from './types.js'
 
 const HOST_FILES = [
   new URL('./index.js', import.meta.url),
+  new URL('./session-delete.js', import.meta.url),
+  new URL('./trash.js', import.meta.url),
   new URL('../bin/dsh-zh.mjs', import.meta.url),
 ]
 

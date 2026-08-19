@@ -1,6 +1,6 @@
 // 增强设置状态（localStorage 持久化，键名稳定）。
 const SETTINGS_KEY = 'deepseek-harness-zh_pro:enhancements'
-const SETTINGS_DEFAULTS = { zhComplete: true, statsFull: true, chatWidthEnabled: true, chatWidth: 90, thinkingAuto: true, thinkMaxLines: 20 }
+const SETTINGS_DEFAULTS = { zhComplete: true, statsFull: true, chatWidthEnabled: true, chatWidth: 90, thinkingAuto: true, thinkMaxLines: 20, deleteSessionEnabled: true }
 const SETTINGS_NS = 'dsh-zh-settings'
 let settingsSnapshot = (function () {
   try {
@@ -14,6 +14,7 @@ let settingsSnapshot = (function () {
         chatWidth: typeof parsed.chatWidth === 'number' ? Math.max(50, Math.min(100, Math.round(parsed.chatWidth))) : SETTINGS_DEFAULTS.chatWidth,
         thinkingAuto: parsed.thinkingAuto !== false,
         thinkMaxLines: typeof parsed.thinkMaxLines === 'number' ? Math.max(0, Math.min(200, Math.round(parsed.thinkMaxLines))) : SETTINGS_DEFAULTS.thinkMaxLines,
+        deleteSessionEnabled: parsed.deleteSessionEnabled !== false,
       }
     }
   } catch { /* 解析失败时使用默认值 */ }

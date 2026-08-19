@@ -45,6 +45,7 @@ import {
   readSnapshot, snapshotNames,
 } from './hot-mount.js'
 import { installSelfHotReload } from './hot-reload.js'
+import { installSessionDeleteRoute } from './session-delete.js'
 import { argvProfile, localProfileDir, log, manifestPath, warn } from './util.js'
 import type { HostContext, PackageSnapshot } from './types.js'
 
@@ -187,6 +188,9 @@ export function apply(ctx: HostContext): void {
   void migrateFromHotRow(ctx)
   if (ownsPromptRegistration(ctx)) installChinesePrompt(ctx)
   installSelfHotReload(ctx)
+  // 「删除会话（回收站）」：与 settings 注册同门槛，避免热迁移窗口双实例
+  // 重复注册路由；服务未就绪时由内部重试等待（见 session-delete.js）。
+  if (ownsPromptRegistration(ctx)) installSessionDeleteRoute(ctx, () => resolveSessionDeleteDeps(ctx))
   ctx.effect(() => {
     const profileDir = localProfileDir()
     cleanHotDir(profileDir)
@@ -219,4 +223,21 @@ export function apply(ctx: HostContext): void {
       }
     }
   }, 'dsh-zh hot supervisor')
+}
+
+// 「删除会话」服务面解析：惰性读取，支持 HMR 后重新解析（服务可能晚于本
+// 插件出现，delete 路由本身在 webServer 可用时注册，实际调用时再取其余服务）。
+function resolveSessionDeleteDeps(ctx: HostContext) {
+  const sessions = ctx.get('sessions')
+  const agents = ctx.get('agents')
+  const persistence = ctx.get('sessionPersistence')
+  const registry = ctx.get('workspaceRegistry')
+  const storage = ctx.get('storageDomain')
+  return {
+    sessions: sessions === undefined || sessions === null ? undefined : sessions,
+    agents: agents === undefined || agents === null ? undefined : agents,
+    sessionPersistence: persistence === undefined || persistence === null ? undefined : persistence,
+    workspaceRegistry: registry === undefined || registry === null ? undefined : registry,
+    storageDomain: storage === undefined || storage === null ? undefined : storage,
+  }
 }

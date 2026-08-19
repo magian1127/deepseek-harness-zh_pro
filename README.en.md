@@ -26,6 +26,7 @@ off by default.
 | Default expanded lines | 20 lines | Shows only the last N lines (latest content) of an expanded thinking block; the rest collapses into an "expand all" control to avoid lag on very long thinking; 0 disables the limit |
 | Chat width | On, 90% | Adjusts the chat column width by 50%–100% on large screens, splitting the side margins evenly |
 | Prompt injection | Off | Injects an editable prompt into subsequent model requests, targeting either the initial system prompt or the first user prompt |
+| Delete session (recycle bin) | On | Chinese UI only: adds a "Delete session" item to a session row's overflow menu; moves the session log directory into the OS recycle bin (Windows Recycle Bin / macOS Trash / XDG Trash) and removes its workspace slot (no restore position) |
 
 Chinese completion only applies to the Chinese interface; the other interface enhancements
 work in both Chinese and English. All features are configured under **DSH Settings →
@@ -109,13 +110,6 @@ interface. Prompt injection is still controlled solely by its own toggle.
 
 **Does the prompt turn on automatically?** No, it is off by default. Editing the prompt
 text does not mean injection is enabled.
-
-**Why is there still some English?** The hardcoded DOM texts only cover the confirmed
-built-in list; unlisted texts are left as-is to avoid corrupting message content or
-third-party plugin content.
-
-**Can it be installed via dshmarket?** Yes. The plugin declares a persistent bundle, so
-market installation and restart mounting do not load it twice.
 
 ## Development documentation
 

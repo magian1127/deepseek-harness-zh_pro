@@ -28,6 +28,7 @@ const BODY_ORDER = [
   'logic/format-utils.ts',
   'logic/settings-section.ts',
   'logic/auto-archive.ts',
+  'logic/session-menu.ts',
   'logic/register.ts',
   'logic/dom-enhance.ts',
   'logic/apply.ts',
@@ -65,6 +66,7 @@ const wrapperStart = `window.__ModuleLoader__.load({
     var React = require('react');`
 const wrapperEnd = `    exports.inject = ['locale', 'slots'];
     exports.apply = apply;
+    exports.settingsStore = settingsStore;
     return module.exports;
   },
 });`
