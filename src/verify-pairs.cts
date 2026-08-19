@@ -731,6 +731,16 @@ check(fakeBody.firstChild.data, 'Workspace Write', '英文界面 中文补全 �
 statsText.data = '9 轮 · 203 步'
 statsRow.removeAttribute('data-dsh-zh-stats-full')
 
+// ---- 会话删除按钮开关（设置 store 默认值与读写） ----
+// settingsStore 在无 localStorage 环境走默认值：deleteSessionEnabled 默认开。
+const settingsStoreUnderTest = pluginExports.settingsStore
+check(settingsStoreUnderTest !== undefined, true, '会话删除按钮 设置 store 已导出')
+check(settingsStoreUnderTest.getSnapshot().deleteSessionEnabled, true, '会话删除按钮 默认开启')
+settingsStoreUnderTest.set('deleteSessionEnabled', false)
+check(settingsStoreUnderTest.getSnapshot().deleteSessionEnabled, false, '会话删除按钮 可关闭')
+settingsStoreUnderTest.set('deleteSessionEnabled', true)
+check(settingsStoreUnderTest.getSnapshot().deleteSessionEnabled, true, '会话删除按钮 可重新开启')
+
 // 上游改词后：部分翻译只动列出的片段，其余跟随上游
 active = 'zh'
 check(locale.lookup('settings.models', 'deleteDescriptionWithCredential'),

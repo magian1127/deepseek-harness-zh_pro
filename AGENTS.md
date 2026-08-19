@@ -38,26 +38,39 @@
 
 ## 不可破坏的约束
 
+以下约束是 DSH 平台或发布机制的硬性依赖，破坏会导致加载失败、挂载失败或数据越界：
+
 1. `lib/client.js` 必须保持经典脚本格式：
    `window.__ModuleLoader__.load({ id, factory })`。禁止改成 ESM `export` 或 `import`。
-   它是构建产物：改语言词典/文案改 `src/lib/client/data/*.ts`、改逻辑改
-   `src/lib/client/logic/*.ts`，然后运行 `npm run build` 或 `node scripts/build-client.mjs`
-   重新生成（`npm test` 会自动先构建）。
+   它是构建产物：语言词典/文案优先放 `src/lib/client/data/*.ts`，组件内联文案在
+   `src/lib/client/logic/*.ts` 对应文件，改逻辑改 `logic/`，然后运行 `npm run build`
+   或 `node scripts/build-client.mjs` 重新生成（`npm test` 会自动先构建）。
 2. `package.json` 必须保留 `./package.json`、`./client` 和 `./cordis.patch.yml` 导出，
    同时保留 `dsh.bundle.patch` 与 `dsh.client` 声明。
-3. `src/bin/dsh-zh.mts` 是 CLI 唯一手写源码；`bin/dsh-zh.mjs` 与 `bin/cli/*.mjs` 由 `prepare`/`prepack`
-   动态生成，根目录 `bin/` 必须保持在 Git 忽略范围内。
+3. `src/bin/` 是 CLI 唯一手写源码目录（`src/bin/dsh-zh.mts` 入口 + `src/bin/cli/*.mts`
+   子模块）；`bin/dsh-zh.mjs` 与 `bin/cli/*.mjs` 由 `prepare`/`prepack`
+   动态生成，根目录 `bin/` 必须保持在 Git 忽略范围内。profile 配置（含
+   `cordis.patch.yml`）只能通过项目 CLI 读写，不直接编辑。
 4. 三个挂载 id 不得复用：持久行 `dsh-zh`、临时热行 `dsh-zh-hot`、运行时条目
    `dsh-zh-live`。重复 id 会导致 Loader 启动失败。
-5. 界面增强只在中文界面生效；唯一跨语言例外是用户显式开启的提示词注入。
+5. 界面增强分两类：**中文补全**（`zhComplete`）只在中文界面生效；其余功能（统计
+   全显示、自动展开思考、默认展开行数、对话宽度、自动归档、会话删除按钮等）在
+   中文和英文界面都生效，按当前界面语言显示对应文案。
    修改任何用户可见行为时同步更新 `README.md` 和 `docs/behavior.md`。
-6. 所有监听器、定时器、服务包装、Slot、样式和 DOM 副作用必须随当前 Fiber 可逆清理。
-7. 不注册模型工具、不上传数据。允许的持久化仅限行为契约中列出的 localStorage 和
-   settings 命名空间 `dsh-zh`。
-8. 修改术语时以 `TERMS` 为唯一叫法来源；修改标识符后必须全局搜索旧名和新名，
-   不能只依赖 `node --check`。
-9. 不顺手重构无关代码，不覆盖用户已有改动。除用户明确要求安装或卸载外，不直接编辑
-   DSH shipped preset 或 profile 配置；部署操作统一走项目 CLI。
+6. 数据边界：不注册模型工具、不上传数据。允许的持久化仅限行为契约中列出的
+   localStorage 和 settings 命名空间 `dsh-zh`。
+7. 术语修改优先改 `TERMS`（`data/terms.ts`）——它是部分翻译（`ZH_PARTIAL`）的
+   术语唯一来源；整句覆盖（`ZH`）与字面对在各自条目内维护，改动时同样全局搜索
+   旧名和新名，不能只依赖 `node --check`。
+
+## 工程纪律
+
+以下不是平台硬性依赖，但应当遵守：
+
+- 所有监听器、定时器、服务包装、Slot、样式和 DOM 副作用随当前 Fiber 可逆清理
+  （Cordis 平台要求，任何插件都必须如此）。
+- 不顺手重构无关代码，不覆盖用户已有改动。
+
 
 ## 修改与验证
 

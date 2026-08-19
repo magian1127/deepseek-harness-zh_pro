@@ -246,6 +246,86 @@ try {
   check(systemPrompt.assemble, originalAssemble, '卸载后恢复 systemPrompt.assemble')
   check(settingsUnwatched, 1, '卸载后取消 settings watch')
 
+  // ---- 会话删除（回收站）：live 会话归档隐藏 + 回收站登记 ----
+  // 前面的 CLI shim 测试改过 PATH（可能找不到 powershell.exe），
+  // 这里恢复原 PATH 让 trashItem 能调用 PowerShell 回收站。
+  const originalPathForDelete = process.env.PATH
+  process.env.PATH = originalPath === undefined ? undefined : originalPath
+  const sessionDelete = await import(`./lib/session-delete.js?verify=del-${Date.now()}-${Math.random()}`)
+  check(sessionDelete.isValidSessionId('session-abc_123'), true, '会话 id 校验接受合法 id')
+  check(sessionDelete.isValidSessionId('../../etc/passwd'), false, '会话 id 校验拒绝路径注入')
+
+  // 用真实临时目录模拟会话日志，让 trashItem 真正执行。
+  const delRoot = tempRoot('sessiondel')
+  const sessionDir = join(delRoot, 'session-live1')
+  const sessionDirCold = join(delRoot, 'session-cold1')
+  mkdirSync(sessionDir, { recursive: true })
+  mkdirSync(sessionDirCold, { recursive: true })
+  writeFileSync(join(sessionDir, 'session.jsonl.zstd'), '{}')
+  writeFileSync(join(sessionDirCold, 'session.jsonl.zstd'), '{}')
+
+  // 内存 live 会话：删除后应归档隐藏（列表不可见）并登记回收站。
+  const archivedIds = []
+  const delDeps = {
+    sessions: {
+      get: function (id) { return id === 'session-live1' ? { id: 'session-live1' } : undefined },
+    },
+    agents: {
+      get: function () {
+        return {
+          status: 'idle',
+          cancel: function () {},
+          whenIdle: function () { return Promise.resolve() },
+        }
+      },
+    },
+    sessionPersistence: {
+      readRaw: function () { return Promise.resolve({ meta: { id: 'session-live1', cwd: '/tmp/proj' } }) },
+      locate: function () { return { kind: 'jsonl', path: join(sessionDir, 'session.jsonl.zstd') } },
+    },
+    workspaceRegistry: {
+      list: function () { return [{ path: '/tmp/proj', sessionIds: [], detachSession: function () { return Promise.resolve() }, attachSession: function () { return Promise.resolve() } }] },
+      archiveSession: async function (id) { archivedIds.push(id) },
+    },
+  }
+  const liveResult = await sessionDelete.deleteSession(delDeps, 'session-live1', { trash: true, title: 'live1' })
+  check(liveResult.ok, true, 'live 会话删除成功')
+  check(archivedIds.includes('session-live1'), true, 'live 会话删除后归档隐藏')
+  check(existsSync(sessionDir), false, 'live 会话日志目录已移走')
+  const entry = sessionDelete.sessionTrash.list()[0]
+  check(entry !== undefined && entry.sessionId === 'session-live1', true, '回收站登记 live 会话')
+
+  // 非 live（cold）会话：删除后不需要归档（物理目录移走即从列表消失）。
+  const archivedCold = []
+  const coldDeps = {
+    sessions: { get: function () { return undefined } },
+    agents: { get: function () { return undefined } },
+    sessionPersistence: {
+      readRaw: function () { return Promise.resolve({ meta: { id: 'session-cold1', cwd: '/tmp/proj' } }) },
+      locate: function () { return { kind: 'jsonl', path: join(sessionDirCold, 'session.jsonl.zstd') } },
+    },
+    workspaceRegistry: {
+      list: function () { return [{ path: '/tmp/proj', sessionIds: [], detachSession: function () { return Promise.resolve() }, attachSession: function () { return Promise.resolve() } }] },
+      archiveSession: async function (id) { archivedCold.push(id) },
+    },
+  }
+  const coldResult = await sessionDelete.deleteSession(coldDeps, 'session-cold1', { trash: true, title: 'cold1' })
+  check(coldResult.ok, true, 'cold 会话删除成功')
+  check(archivedCold.length, 0, 'cold 会话删除不归档（无残留列表问题）')
+  check(existsSync(sessionDirCold), false, 'cold 会话日志目录已移走')
+
+  // 运行中的会话拒绝删除。
+  const runningDeps = {
+    sessions: { get: function () { return undefined } },
+    agents: {
+      get: function () { return { status: 'running', cancel: function () {}, whenIdle: function () { return Promise.resolve() } } },
+    },
+  }
+  const runningResult = await sessionDelete.deleteSession(runningDeps, 'session-run1', { trash: true })
+  check(runningResult.ok, false, '运行中的会话拒绝删除')
+  check(runningResult.code, 'session-busy', '运行中拒绝码为 session-busy')
+  process.env.PATH = originalPathForDelete
+
   console.log(`OK: CLI/主机全部 ${checks} 项校验通过`)
 } finally {
   if (originalHome === undefined) delete process.env.DSH_HOME
