@@ -741,6 +741,13 @@ check(settingsStoreUnderTest.getSnapshot().deleteSessionEnabled, false, '会话�
 settingsStoreUnderTest.set('deleteSessionEnabled', true)
 check(settingsStoreUnderTest.getSnapshot().deleteSessionEnabled, true, '会话删除按钮 可重新开启')
 
+// ---- 查看已归档开关（设置 store 默认值与读写） ----
+check(settingsStoreUnderTest.getSnapshot().archiveViewEnabled, true, '查看已归档 默认开启')
+settingsStoreUnderTest.set('archiveViewEnabled', false)
+check(settingsStoreUnderTest.getSnapshot().archiveViewEnabled, false, '查看已归档 可关闭')
+settingsStoreUnderTest.set('archiveViewEnabled', true)
+check(settingsStoreUnderTest.getSnapshot().archiveViewEnabled, true, '查看已归档 可重新开启')
+
 // 上游改词后：部分翻译只动列出的片段，其余跟随上游
 active = 'zh'
 check(locale.lookup('settings.models', 'deleteDescriptionWithCredential'),
@@ -751,8 +758,11 @@ check(locale.lookup('settings.models', 'deleteDescriptionWithCredential'),
   '删除 {provider} 将移除其配置与保存的接口密钥，此操作不可恢复。', 'zh partial follows upstream')
 UPSTREAM['settings.models'].deleteDescriptionWithCredential = ORIGINAL_UPSTREAM
 
+// 卸载前：archiveViewEnabled 开关在上面的测试里关闭→开启过一次（归档词典
+// 注册→注销→重新注册），因此卸载时归档词典 disposer 累计调用 2 次，
+// 加上设置词典 1 次，共 3 次。
 for (let i = ctx._effects.length - 1; i >= 0; i -= 1) ctx._effects[i]()
-check(localeRegisterDisposed, 2, '设置词典与归档词典 随生命周期卸载')
+check(localeRegisterDisposed, 3, '设置词典与归档词典 随生命周期卸载（含开关翻转）')
 check(localeListeners.length, 0, '插件卸载 取消语言监听')
 check(statsRow.getAttribute('data-dsh-zh-stats-full'), null, '插件卸载 清理统计样式')
 check(settingsRender, null, '插件卸载 清理设置分区')

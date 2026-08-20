@@ -25,6 +25,7 @@
 | `zhPromptText` 注入文本 | `思考过程和回复始终使用中文输出` | `settings.yaml` | 提示词注入开启时 |
 | `zhPromptTarget` 注入目标 | `system` | `settings.yaml` | `system` 或 `user` |
 | `zhAutoArchiveDays` 自动归档天数 | 7，范围 0–365 | `settings.yaml` | 新建会话界面打开时 |
+| `archiveViewEnabled` 查看已归档 | 开 | localStorage | 中文/英文界面（与「自动归档旧会话」同组） |
 | `deleteSessionEnabled` 会话删除按钮 | 开 | localStorage | 中文/英文界面（「其他功能」分区在设置页最下方，分区标题 + 扁平行） |
 
 localStorage 键为 `deepseek-harness-zh_pro:enhancements`；主机 settings 命名空间为
@@ -138,9 +139,16 @@ locale 补丁处理。保留 Cordis、DeepSeek、TypeScript、命令名、文件
 归档发生时，页面顶部会短暂显示「有 N 个会话已归档」的提示条（与官方 Toast 同风格，
 约 4 秒后自动消失）；本次没有会话满足条件时不显示。
 
-## 归档会话视图
+## 查看已归档
 
-每个工作区行（显示工作区实际名字的行）的行尾操作区（与官方「三点」和「新建会话」
+由「查看已归档」开关（`archiveViewEnabled`，localStorage，默认开）控制，与「自动归档
+旧会话」归入设置页同一功能组（自动归档在上、查看已归档在下）。**关闭时该功能完全不注册**：
+不注入样式、不挂 MutationObserver、
+不监听文档事件、不注册词典、不注入归档按钮，也不保留任何 DOM 副作用——不是简单隐藏
+DOM。运行时翻转开关立即生效：关闭即卸载全部副作用（已注入的按钮、样式、归档行容器、
+监听器全部移除），开启即重新注册。
+
+开启时，每个工作区行（显示工作区实际名字的行）的行尾操作区（与官方「三点」和「新建会话」
 按钮并列）新增「归档」图标按钮（中英文界面都显示，文案随界面语言切换）：
 
 - 点击进入该工作区的归档视图 = **切换视图**：该工作区分组下的正常会话行被隐藏，

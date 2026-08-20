@@ -163,24 +163,32 @@ const ZhSettingsSection = function (props) {
             },
           }) : null,
           snapshot.chatWidthEnabled ? React.createElement('span', { style: zhDescStyle }, '%') : null)),
-      row('autoArchive', t('autoArchive'), t('autoArchiveDesc'),
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-          React.createElement('input', {
-            type: 'number', min: 0, max: 365, step: 1,
-            value: (promptReady && typeof promptSnapshot.value.zhAutoArchiveDays === 'number')
-              ? promptSnapshot.value.zhAutoArchiveDays
-              : 7,
-            style: inputStyle,
-            'aria-label': t('autoArchive'),
-            disabled: promptReady === false,
-            onChange: function (event) {
-              const n = parseInt(event.target.value, 10)
-              if (boundPromptScope !== null && promptReady === true && !isNaN(n)) {
-                void boundPromptScope.set('zhAutoArchiveDays', Math.max(0, Math.min(365, Math.round(n))))
-              }
-            },
-          }),
-          React.createElement('span', { style: zhDescStyle }, t('autoArchiveUnit')))),
+      // 归档分组：自动归档旧会话 + 查看已归档同属归档相关设置，共用一个容器
+      // （组内行不画分隔线，组与组之间仍由各自行的 border-bottom 分隔）。
+      group('archiveGroup',
+        row('autoArchive', t('autoArchive'), t('autoArchiveDesc'),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+            React.createElement('input', {
+              type: 'number', min: 0, max: 365, step: 1,
+              value: (promptReady && typeof promptSnapshot.value.zhAutoArchiveDays === 'number')
+                ? promptSnapshot.value.zhAutoArchiveDays
+                : 7,
+              style: inputStyle,
+              'aria-label': t('autoArchive'),
+              disabled: promptReady === false,
+              onChange: function (event) {
+                const n = parseInt(event.target.value, 10)
+                if (boundPromptScope !== null && promptReady === true && !isNaN(n)) {
+                  void boundPromptScope.set('zhAutoArchiveDays', Math.max(0, Math.min(365, Math.round(n))))
+                }
+              },
+            }),
+            React.createElement('span', { style: zhDescStyle }, t('autoArchiveUnit'))),
+          true),
+        row('archiveView', t('archiveView'), t('archiveViewDesc'),
+          toggle(snapshot.archiveViewEnabled, function () {
+            settingsStore.set('archiveViewEnabled', !snapshot.archiveViewEnabled)
+          }, false, t('archiveView')))),
       // ---- 提示词注入：列布局复杂行，hairline 分隔 ----
       React.createElement('div', {
         key: 'zhPrompt',

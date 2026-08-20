@@ -27,7 +27,7 @@ off by default.
 | Chat width | On, 90% | Adjusts the chat column width by 50%–100% on large screens, splitting the side margins evenly |
 | Prompt injection | Off | Injects an editable prompt into subsequent model requests, targeting either the initial system prompt or the first user prompt |
 | Auto-archive old sessions | 7 days | When the New Session screen opens, auto-archives sessions inactive beyond the configured days (hidden from the list only, log kept; 0 disables it) |
-| Archived sessions view | — | Adds an "Archive" button to every workspace row: clicking it hides that group's normal sessions and shows archived sessions directly in the official list flow (sorted by most recent activity, 5 by default, +5 per expand); the row overflow menu has rename / fork / unarchive / delete; clicking a row restores and opens the session |
+| Archived sessions view | On | Adds an "Archive" button to every workspace row: clicking it hides that group's normal sessions and shows archived sessions directly in the official list flow (sorted by most recent activity, 5 by default, +5 per expand); the row overflow menu has rename / fork / unarchive / delete; clicking a row restores and opens the session |
 | Delete session (recycle bin) | On | Chinese UI only: adds a "Delete session" item to a session row's overflow menu; moves the session log directory into the OS recycle bin (Windows Recycle Bin / macOS Trash / XDG Trash) and removes its workspace slot (no restore position) |
 
 Chinese completion only applies to the Chinese interface; the other interface enhancements
@@ -100,7 +100,7 @@ after reinstalling.
 
 | Data | Storage |
 | --- | --- |
-| Chinese completion, stats, thinking expansion, default expanded lines, chat width | Browser localStorage: `deepseek-harness-zh_pro:enhancements` |
+| Chinese completion, stats, thinking expansion, default expanded lines, chat width, archived sessions view | Browser localStorage: `deepseek-harness-zh_pro:enhancements` |
 | Prompt toggle, text, injection target | DSH `settings.yaml`, namespace `dsh-zh` |
 
 The plugin registers no model tools and uploads no data. Except for explicitly enabled

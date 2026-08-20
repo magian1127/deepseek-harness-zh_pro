@@ -223,9 +223,9 @@ const pluginExports = captured.factory(function (name) {
 // updatedAt 是稳定快照数据）。
 const MOCK_NOW = Date.now()
 globalThis.MutationObserver = class {
-  constructor(cb) { this.cb = cb; fakeObs.push(this) }
+  constructor(cb) { this.cb = cb; this.disconnected = false; fakeObs.push(this) }
   observe() {}
-  disconnect() {}
+  disconnect() { this.disconnected = true }
 }
 const fakeDoc = {
   readyState: 'complete',
@@ -776,7 +776,39 @@ if (fakeDoc._handlers.pointerdown) {
   check(panelOf(), null, '点击新建会话按钮退出归档视图')
 }
 
-// 11) 卸载清理
+// 11) 查看已归档开关：关闭 = 完全不注册（不注入按钮/样式/词典/observer
+// 副作用），开启 = 重新注册；运行时翻转立即生效。
+const settingsStoreUnderTest = pluginExports.settingsStore
+check(settingsStoreUnderTest.getSnapshot().archiveViewEnabled, true, '查看已归档 默认开启')
+// 11a) 关闭开关：已注入的按钮、样式、词典、监听器全部卸载。
+settingsStoreUnderTest.set('archiveViewEnabled', false)
+check(wsActions.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !== null), undefined, '关闭开关 工作区行归档按钮移除')
+check(ungroupedRow.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !== null), undefined, '关闭开关 未分组行归档按钮移除')
+check(ungroupedRow.getAttribute('data-dsh-zh-ws-row-standalone'), null, '关闭开关 standalone 标记清除')
+check(registeredDicts['dsh-zh-archive'], undefined, '关闭开关 归档词典注销')
+check(panelOf(), null, '关闭开关 无归档行容器')
+const stylesAfterOff = fakeDoc.head.children.filter(c => c.tagName === 'STYLE')
+check(stylesAfterOff.length, 0, '关闭开关 归档样式移除')
+// 11b) 关闭状态下点击归档按钮不生效（按钮已不存在，直接验证无残留副作用）：
+// 归档视图自己的 observer 已全部 disconnect（真实环境不再注入按钮），
+// 且 ARCHIVE_ROW_MARK 标记已清除。
+check(ungroupedRow.getAttribute('data-dsh-zh-ws-archive-row'), null, '关闭开关 ARCHIVE_ROW_MARK 标记清除')
+// 关闭状态下即便手动触发（模拟残留回调），也不应注入新的归档按钮。
+lastObs.cb(undefined)
+check(wsActions.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !== null), undefined, '关闭状态 observer 不再注入归档按钮')
+// 11c) 重新开启：按钮、词典、样式恢复，功能可用。
+settingsStoreUnderTest.set('archiveViewEnabled', true)
+lastObs.cb(undefined)
+const archiveBtnRe = wsActions.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !== null)
+check(archiveBtnRe !== undefined, true, '重新开启 工作区行归档按钮恢复')
+check(registeredDicts['dsh-zh-archive'] !== undefined, true, '重新开启 归档词典恢复')
+check(fakeDoc.head.children.filter(c => c.tagName === 'STYLE').length, 2, '重新开启 归档样式恢复（2 个）')
+archiveBtnRe.click('click')
+check(panelOf() !== null, true, '重新开启 归档视图可用')
+archiveBtnRe.click('click')
+check(panelOf(), null, '重新开启 归档视图可退出')
+
+// 12) 卸载清理
 for (const d of disposers) d()
 check(registeredDicts['dsh-zh-archive'], undefined, '卸载后词典注销')
 check(panelOf(), null, '卸载后归档行容器移除')

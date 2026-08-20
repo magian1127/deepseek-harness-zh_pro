@@ -195,9 +195,49 @@ const UNGROUPED_KEY = '__dsh-zh-ungrouped__'
 const HIDDEN_ROW_MARK = 'data-dsh-zh-archive-hides-row'
 
 function installArchiveView(ctx) {
+  // 「查看已归档」功能受同名开关（archiveViewEnabled，localStorage）控制：
+  // 关闭时**完全不注册**——不注入样式、不挂 observer、不监听文档
+  // 事件、不注册词典、不注入归档按钮，也不保留任何 DOM 副作用；开启时
+  // 才完整注册。运行时翻转开关立即生效：关闭即卸载全部副作用，开启即
+  // 重新注册。
+  let activeDispose = null
+  const startArchiveView = function () {
+    if (activeDispose !== null) return
+    try {
+      activeDispose = runArchiveView(ctx)
+    } catch { /* 注册失败时保持未激活，下次开关变化再试 */ }
+  }
+  const stopArchiveView = function () {
+    if (activeDispose === null) return
+    const dispose = activeDispose
+    activeDispose = null
+    try { dispose() } catch { /* 清理失败不阻断 */ }
+  }
+  const syncEnabled = function () {
+    const on = typeof settingsStore !== 'undefined' && settingsStore !== null
+      && settingsStore.getSnapshot().archiveViewEnabled === true
+    if (on) startArchiveView()
+    else stopArchiveView()
+  }
   ctx.effect(function () {
-    if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return
-    if (document.body === null || document.body === undefined) return
+    syncEnabled()
+    const unsub = typeof settingsStore !== 'undefined' && settingsStore !== null
+      && typeof settingsStore.subscribe === 'function'
+      ? settingsStore.subscribe(syncEnabled)
+      : null
+    return function () {
+      if (unsub !== null && typeof unsub === 'function') unsub()
+      stopArchiveView()
+    }
+  }, 'dsh-zh: 查看已归档开关')
+}
+
+// 查看已归档完整注册（仅在 archiveViewEnabled 开启时被调用）。
+// 直接返回清理函数（不注册 effect）：由 installArchiveView 外层 effect 统一
+// 收集，开关关闭或插件卸载时只调用一次，避免重复清理。
+function runArchiveView(ctx) {
+  if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return function () {}
+  if (document.body === null || document.body === undefined) return function () {}
 
     const localeService = ctx.locale
 
@@ -1340,6 +1380,9 @@ function installArchiveView(ctx) {
     }
     let buttonObserver = null
     buttonObserver = new MutationObserver(function (records) {
+      // 关闭开关/卸载后 observer 不再有效：即使残留回调被（测试）手动触发
+      // 也不注入按钮或归档行。
+      if (buttonObserver === null) return
       if (!Array.isArray(records)) { runButtonPass(); return }
       let external = false
       for (const record of records) {
@@ -1472,6 +1515,12 @@ function installArchiveView(ctx) {
           if (button.parentNode !== null) button.parentNode.removeChild(button)
         }
       } catch { /* 忽略 */ }
+      // 清除工作区行的注入标记（含 standalone 与 ARCHIVE_ROW_MARK），
+      // 使重新开启开关时按钮能再次注入。
+      try {
+        const wsRows = findWorkspaceRows(document.body)
+        for (let i = 0; i < wsRows.length; i += 1) removeInjectedButtons(wsRows[i])
+      } catch { /* 忽略 */ }
       try {
         const standaloneRows = document.body.querySelectorAll('[data-dsh-zh-ws-row-standalone]')
         for (let i = 0; i < standaloneRows.length; i += 1) {
@@ -1491,5 +1540,4 @@ function installArchiveView(ctx) {
         }
       } catch { /* 忽略 */ }
     }
-  }, 'dsh-zh: 归档会话视图')
-}
+  }
