@@ -291,6 +291,7 @@ node_modules/
 /scripts/
 /verify-cli.mjs
 /verify-pairs.cjs
+/verify-archive.cjs
 *.map
 coverage/
 .nyc_output/

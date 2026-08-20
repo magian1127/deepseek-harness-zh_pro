@@ -18,6 +18,12 @@ function installChineseEnhance(ctx) {
     locale.lookup = function (ns, key) {
       // 只在中文界面 + 「中文补全」开启时生效：其余情况保持原样。
       if (!zhEnhanceOn()) return originalLookup.call(this, ns, key)
+      // 本插件自带词典的命名空间跳过通用词兜底：它们按界面语言自备
+      // 完整译文（含 {n} 参数模板），不能被 ZH['*'] 的通用词（如「展开」）
+      // 吞掉归档视图的「再展开 N 个归档」等参数文案。
+      if (ns === 'dsh-zh-settings' || ns === 'dsh-zh-archive') {
+        return originalLookup.call(this, ns, key)
+      }
       const table = ZH[ns]
       if (table !== undefined && table[key] !== undefined) return table[key]
       // 部分翻译：先取上游原值，只替换引用的术语，其余随上游更新。

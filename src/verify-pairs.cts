@@ -752,7 +752,7 @@ check(locale.lookup('settings.models', 'deleteDescriptionWithCredential'),
 UPSTREAM['settings.models'].deleteDescriptionWithCredential = ORIGINAL_UPSTREAM
 
 for (let i = ctx._effects.length - 1; i >= 0; i -= 1) ctx._effects[i]()
-check(localeRegisterDisposed, 1, '设置词典 随生命周期卸载')
+check(localeRegisterDisposed, 2, '设置词典与归档词典 随生命周期卸载')
 check(localeListeners.length, 0, '插件卸载 取消语言监听')
 check(statsRow.getAttribute('data-dsh-zh-stats-full'), null, '插件卸载 清理统计样式')
 check(settingsRender, null, '插件卸载 清理设置分区')

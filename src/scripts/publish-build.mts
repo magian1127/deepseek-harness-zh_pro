@@ -18,6 +18,7 @@ copyDirectory(join(buildRoot, 'lib'), join(root, 'lib'))
 copyDirectory(join(buildRoot, 'bin'), join(root, 'bin'))
 copyDirectory(join(buildRoot, 'scripts'), join(root, 'scripts'))
 copyFileSync(join(buildRoot, 'verify-pairs.cjs'), join(root, 'verify-pairs.cjs'))
+copyFileSync(join(buildRoot, 'verify-archive.cjs'), join(root, 'verify-archive.cjs'))
 copyFileSync(join(buildRoot, 'verify-cli.mjs'), join(root, 'verify-cli.mjs'))
 
 try {

@@ -154,21 +154,28 @@ const IDLE_CONVERGE_TIMEOUT_MS = 3000
 /**
  * 把会话从工作区归档集合移除（取消归档）。官方只有 archiveSession 单向
  * API，这里通过 storageDomain 直接改写 workspace domain 的 global state
- * （archivedSessionIds）实现 unarchive——用于恢复已删除会话后重新可见。
+ * （archivedSessionIds）实现 unarchive——用于恢复已删除会话后重新可见，
+ * 以及归档会话视图里的「取消归档」操作。
  * 同时同步 workspaceRegistry 实例的内存 state 缓存（registry 的
  * requireState() 读缓存、不监听 domain/changed；不同步的话 UI 仍按旧
  * 归档集合过滤，恢复的会话依旧不可见）。
+ * @returns { ok: 是否成功完成（storage/domain 缺失时为 false）；
+ *   changed: 是否真正改写了归档集合（会话本就不在集合中时为 false，
+ *   幂等调用不产生变化） }。
  */
-async function unarchiveSession(deps: DeleteDeps, sessionId: string): Promise<void> {
+export async function unarchiveSession(
+  deps: DeleteDeps,
+  sessionId: string,
+): Promise<{ ok: boolean; changed: boolean }> {
   const storage = deps.storageDomain
-  if (storage === undefined || typeof storage.get !== 'function') return
+  if (storage === undefined || typeof storage.get !== 'function') return { ok: false, changed: false }
   let domain: { global?: unknown } | undefined
   try {
     domain = storage.get('workspace') as { global?: unknown } | undefined
   } catch {
-    return
+    return { ok: false, changed: false }
   }
-  if (domain === undefined || domain.global === undefined) return
+  if (domain === undefined || domain.global === undefined) return { ok: false, changed: false }
   const global = domain.global as {
     get(): { archivedSessionIds?: readonly string[] } | undefined
     set(value: { archivedSessionIds: readonly string[] }): Promise<void>
@@ -177,22 +184,23 @@ async function unarchiveSession(deps: DeleteDeps, sessionId: string): Promise<vo
   try {
     state = typeof global.get === 'function' ? global.get() : undefined
   } catch {
-    return
+    return { ok: false, changed: false }
   }
-  if (state === undefined || state === null) return
+  if (state === undefined || state === null) return { ok: false, changed: false }
   const archived = state.archivedSessionIds ?? []
   const next = archived.filter(id => String(id) !== sessionId)
+  const changed = next.length !== archived.length
   // 无论持久化里有没有该会话，都按过滤后的集合写回并同步缓存——
   // registry 的内存缓存（requireState()）不监听 domain/changed，删除时
   // archiveSession 只更新缓存、旧代码曾只更新持久化，两者可能不一致；
   // 这里以持久化为准把两边对齐，保证恢复的会话重新可见。
   const nextState = { ...state, archivedSessionIds: next }
-  if (next.length !== archived.length) {
+  if (changed) {
     try {
       await global.set(nextState as { archivedSessionIds: readonly string[] })
     } catch (error) {
       warn(`取消归档会话 ${sessionId} 失败: ${error instanceof Error ? error.message : String(error)}`)
-      return
+      return { ok: false, changed: false }
     }
   }
   // 同步 registry 的内存缓存（TS private 字段编译后为普通属性）。
@@ -204,6 +212,7 @@ async function unarchiveSession(deps: DeleteDeps, sessionId: string): Promise<vo
   } catch {
     // 缓存同步失败时，恢复的会话在重启前仍归档隐藏；持久化已更新。
   }
+  return { ok: true, changed }
 }
 
 /**
@@ -489,6 +498,20 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
       const url = new URL(req.url ?? '/', 'http://dsh.internal')
       const pathname = url.pathname
       try {
+        if (pathname === '/dsh-zh/api/session.unarchive') {
+          const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
+          if (!isValidSessionId(sessionId)) {
+            writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'invalid sessionId' } })
+            return
+          }
+          const result = await unarchiveSession(deps(), sessionId)
+          if (!result.ok) {
+            writeJson(res, 400, { ok: false, error: { code: 'unarchive-failed', message: 'unarchive failed' } })
+            return
+          }
+          writeJson(res, 200, { ok: true, value: { unarchived: true, changed: result.changed } })
+          return
+        }
         if (pathname === '/dsh-zh/api/session.delete') {
           const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
           if (!isValidSessionId(sessionId)) {

@@ -326,6 +326,33 @@ try {
   check(runningResult.code, 'session-busy', '运行中拒绝码为 session-busy')
   process.env.PATH = originalPathForDelete
 
+  // ---- 取消归档（归档会话视图）：把会话移出官方归档集合 ----
+  // storageDomain 模拟 workspace domain 的 global state 读写；registry
+  // 缓存同步后 requireState() 应反映移除后的集合。
+  let unarchiveState = { archivedSessionIds: ['session-arch1', 'session-arch2'] as readonly string[] }
+  const unarchiveRegistryCache: { state: unknown } = { state: unarchiveState }
+  const unarchiveDeps = {
+    storageDomain: {
+      get: function (name) {
+        if (name !== 'workspace') return undefined
+        return {
+          global: {
+            get: function () { return unarchiveState },
+            set: async function (value) { unarchiveState = value as typeof unarchiveState },
+          },
+        }
+      },
+    },
+    workspaceRegistry: unarchiveRegistryCache,
+  }
+  const unarchivedOk = await sessionDelete.unarchiveSession(unarchiveDeps, 'session-arch1')
+  check(unarchivedOk, { ok: true, changed: true }, '取消归档成功返回 { ok: true, changed: true }')
+  check(unarchiveState.archivedSessionIds, ['session-arch2'], '取消归档后持久化集合移除该会话')
+  check((unarchiveRegistryCache.state as typeof unarchiveState).archivedSessionIds, ['session-arch2'], '取消归档同步 registry 内存缓存')
+  // 幂等：会话本就不在归档集合时不再写回，changed=false。
+  const unarchiveIdempotent = await sessionDelete.unarchiveSession(unarchiveDeps, 'session-arch-gone')
+  check(unarchiveIdempotent, { ok: true, changed: false }, '会话不在归档集合时 changed=false')
+
   console.log(`OK: CLI/主机全部 ${checks} 项校验通过`)
 } finally {
   if (originalHome === undefined) delete process.env.DSH_HOME

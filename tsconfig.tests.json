@@ -8,6 +8,7 @@
   },
   "include": [
     "src/verify-pairs.cts",
+    "src/verify-archive.cts",
     "src/verify-cli.mts"
   ]
 }
