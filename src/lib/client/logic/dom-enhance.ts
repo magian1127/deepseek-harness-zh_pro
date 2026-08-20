@@ -272,9 +272,13 @@ function installChineseEnhance(ctx) {
           return
         }
         if (root.nodeType !== 1) return
-        // 思考折叠正文（默认展开行数）：完整原文保存在插件态（body.__dshZhThink），
-        // 折叠后的截断文本不应再被通用改写，避免破坏展开/收起基线。
-        if (typeof root.getAttribute === 'function' && root.getAttribute(THINK_LINES_ATTR) !== null) return
+        // 思考折叠正文（默认展开行数）：折叠仅用 CSS 裁剪可见行数，正文全文仍在
+        // DOM 中。它不应被通用改写（折叠正文是模型输出，术语替换会误伤），实时行与
+        // 「展开」按钮同理跳过。
+        if (typeof root.getAttribute === 'function'
+          && (root.getAttribute(THINK_LINES_ATTR) !== null
+            || root.getAttribute(THINK_CTRL_ATTR) !== null
+            || root.getAttribute(THINK_LIVE_ATTR) !== null)) return
         if (typeof root.getAttribute === 'function') {
           for (const attr of ['title', 'aria-label']) {
             const value = root.getAttribute(attr)
@@ -350,31 +354,109 @@ function installChineseEnhance(ctx) {
       }
       // 思考展开行数上限（用户需求，默认 20 行）：思考块展开后正文若行数
       // 过多，pre-wrap 长文本会给渲染/滚动带来明显卡顿。因此按「默认展开
-      // 行数」把正文折叠为最后 N 行（最新内容），并提供「展开全部」行内控件；
-      // thinkMaxLines>0 生效（与界面语言无关），0 表示不限制。完整原文保存在
-      // 插件态（body.__dshZhThink），不依赖 React 内部文本，折叠正文被
-      // 通用改写跳过以避免破坏基线。收起不再由插件处理：展开全部后控件
-      // 移除，用户用思考块原版的收起按钮收起，思考块再次展开时恢复折叠。
+      // 行数」用 CSS 折叠正文（max-height + overflow + scrollTop 底/顶对齐
+      // 显示最后/前 N 行），并提供「展开全部」行内控件；thinkMaxLines>0 生效
+      // （与界面语言无关），0 表示不限制。折叠不改写 React 管理的正文文本——
+      // 直接改 textContent 会让 React 后续流式更新写到已脱离 DOM 的旧文本
+      // 节点，页面冻结。折叠正文带标记（data-dsh-zh-think）跳过通用改写。
+      // 「展开全部」点过后在思考块根节点打持久标记，保持全文展开；收起交给
+      // 原版按钮。
       const THINK_LINES_ATTR = 'data-dsh-zh-think'
+      const THINK_CTRL_ATTR = 'data-dsh-zh-think-control'
+      const THINK_OPEN_ATTR = 'data-dsh-zh-think-open'
+      const THINK_SHOWN_ATTR = 'data-dsh-zh-think-shown'
+      const THINK_LIVE_ATTR = 'data-dsh-zh-think-live'
       const countThinkLines = function (text) {
         return String(text).split('\n').length
+      }
+      const clearInjected = function (root, body) {
+        // 清理残留的实时行与孤儿按钮。与当前正文相邻的按钮保留（元素复用）：
+        // 流式期间每帧 pass 若重建按钮，mousedown 与 mouseup 之间的元素替换会
+        // 让浏览器不派发 click（按下/抬起目标不一致），表现为「点击无反应」。
+        if (root === null || typeof root.querySelectorAll !== 'function') return
+        const nodes = root.querySelectorAll('[data-dsh-zh-think-control], [data-dsh-zh-think-live]')
+        for (let i = 0; i < nodes.length; i += 1) {
+          const node = nodes[i]
+          const isCtrl = typeof node.hasAttribute === 'function' && node.hasAttribute(THINK_CTRL_ATTR)
+          const keep = isCtrl && body !== null && body.parentNode === node.parentNode
+            && (node.nextSibling === body || node.previousSibling === body)
+          if (keep) continue
+          if (node.parentNode !== null && node.parentNode !== undefined
+            && typeof node.parentNode.removeChild === 'function') {
+            try { node.parentNode.removeChild(node) } catch { /* 可能已被 React 移除 */ }
+          }
+        }
       }
       const removeThinkControl = function (body) {
         if (body === null) return
         const ctrl = body.__dshZhControl
         if (ctrl !== undefined) {
-          if (ctrl.parentNode === body && typeof body.removeChild === 'function') {
-            try { body.removeChild(ctrl) } catch { /* 控件可能已被 React 接管 */ }
+          if (ctrl.parentNode !== null && ctrl.parentNode !== undefined
+            && typeof ctrl.parentNode.removeChild === 'function') {
+            try { ctrl.parentNode.removeChild(ctrl) } catch { /* 控件可能已被 React 接管 */ }
           }
           if (body.__dshZhControl === ctrl) body.__dshZhControl = undefined
         }
       }
-      const ensureThinkControl = function (body, state, tLabel) {
+      const removeThinkLive = function (body) {
         if (body === null) return
+        const live = body.__dshZhLive
+        if (live !== undefined) {
+          if (live.parentNode !== null && live.parentNode !== undefined
+            && typeof live.parentNode.removeChild === 'function') {
+            try { live.parentNode.removeChild(live) } catch { /* 可能已被 React 移除 */ }
+          }
+          if (body.__dshZhLive === live) body.__dshZhLive = undefined
+        }
+      }
+      const liveLineText = function (full) {
+        const visible = String(full).trimEnd()
+        const newline = visible.lastIndexOf('\n')
+        return newline === -1 ? visible : visible.slice(newline + 1)
+      }
+      const ensureThinkFooter = function (root, body, shown, running, tLabel) {
+        if (body === null || body.parentNode === null) return
+        const full = shown.full
+        const total = shown.total
+        const visibleCount = shown.shown
+        const hidden = total - visibleCount
+        if (hidden <= 0) {
+          removeThinkLive(body)
+          removeThinkControl(body)
+          return
+        }
+        const container = body.parentNode
+        const step = thinkMaxNow()
+        const from = thinkMaxFromNow()
+        // 实时行：仅「最早 N 行」方向需要——正文固定在开头、看不到最新输出，
+        // 用实时行展示最新一行；「最新 N 行」方向正文已滚动跟随最新内容，实时行
+        // 冗余，不显示。每帧重建（无交互，元素替换无碍）。
+        removeThinkLive(body)
+        if (running && from !== 'latest') {
+          const live = document.createElement('div')
+          live.setAttribute(THINK_LIVE_ATTR, '')
+          live.style.cssText = [
+            'display:block', 'margin:6px 0 0', 'padding:0',
+            'font:inherit', 'font-size:12px', 'line-height:20px',
+            'color:var(--dsw-alias-label-tertiary,#666)', 'opacity:0.85',
+            'white-space:pre-wrap', 'word-break:break-word',
+          ].join(';')
+          live.textContent = liveLineText(full)
+          body.__dshZhLive = live
+          // earliest：按钮在正文之后，实时行在按钮之后。
+          const ctrl = body.__dshZhControl
+          const ref = ctrl !== undefined && ctrl.parentNode === container ? ctrl.nextSibling : body.nextSibling
+          container.insertBefore(live, ref)
+        }
+        // 按钮：已在原位（与正文相邻）则复用元素、仅更新文案——元素替换会让
+        // 流式期间的点击无法派发（见 clearInjected 注释）。
         let ctrl = body.__dshZhControl
-        if (ctrl === undefined || ctrl.parentNode !== body) {
+        const ctrlInPlace = ctrl !== undefined && ctrl.parentNode === container
+          && (from === 'latest' ? ctrl.nextSibling === body : ctrl.previousSibling === body)
+        if (!ctrlInPlace) {
           ctrl = document.createElement('button')
           ctrl.type = 'button'
+          ctrl.setAttribute(THINK_CTRL_ATTR, '')
           ctrl.style.cssText = [
             'display:block', 'margin:8px 0 0', 'padding:2px 10px',
             'border:1px solid rgba(127,127,127,0.35)', 'border-radius:8px',
@@ -382,25 +464,128 @@ function installChineseEnhance(ctx) {
             'color:var(--dsw-alias-label-tertiary,#666)',
             'font:inherit', 'font-size:12px', 'line-height:20px', 'cursor:pointer',
           ].join(';')
-          ctrl.addEventListener('click', function () { thinkExpandBody(body) }, false)
+          ctrl.addEventListener('click', function () { thinkExpandMore(root, body) }, false)
           body.__dshZhControl = ctrl
-          // 控件置于折叠正文最上方（紧跟思考头），便于一眼看到「展开全部」。
-          body.insertBefore(ctrl, body.firstChild)
+          // 按钮位置随折叠方向：latest 显示结尾 N 行、被折叠的更早内容在正文上方，
+          // 因此按钮放在正文之前（向上追溯更早行）；earliest 显示开头 N 行、被折叠的
+          // 后续内容在正文下方，按钮放在正文之后（向下展开后续行）。
+          if (from === 'latest') {
+            container.insertBefore(ctrl, body)
+          } else {
+            container.insertBefore(ctrl, body.nextSibling)
+          }
         }
-        ctrl.textContent = tLabel('thinkExpandAll', { n: state.tail })
+        const stepCount = step > 0 ? Math.min(step, hidden) : hidden
+        const label = hidden <= stepCount ? 'thinkExpandRest' : 'thinkExpandMore'
+        const text = tLabel(label, { n: stepCount, m: hidden })
+        if (ctrl.textContent !== text) ctrl.textContent = text
       }
-      const thinkExpandBody = function (body) {
+      const thinkExpandMore = function (root, body) {
         if (body === null) return
+        const max = thinkMaxNow()
+        if (max <= 0) return
+        if (thinkModeNow() === 'scroll') return
+        const current = typeof body.textContent === 'string' ? body.textContent : ''
+        if (current === '') return
+        // 当前可见行数：正文状态优先，其次根节点进度标记，最后回退默认上限。
+        let cur = max
         const state = body.__dshZhThink
-        if (state === undefined || typeof state.full !== 'string') return
-        if (body.textContent !== state.full) body.textContent = state.full
-        body.__dshZhThink = { full: state.full, clamped: state.clamped }
-        if (typeof body.setAttribute === 'function') body.setAttribute(THINK_LINES_ATTR, 'expanded')
-        // 展开全部为一次性动作：移除插件控件，收起交给思考块原版按钮。
-        removeThinkControl(body)
+        if (state !== undefined && typeof state.shown === 'number' && state.shown > 0) {
+          cur = state.shown
+        } else if (root !== null && typeof root.getAttribute === 'function') {
+          const v = root.getAttribute(THINK_SHOWN_ATTR)
+          if (v !== null && /^[0-9]+$/.test(v)) cur = Number(v)
+        }
+        // 全文实时读取：CSS 折叠不改写 React 文本，流式期间 current 永远最新。
+        const total = countThinkLines(current)
+        const next = cur + max
+        if (next >= total) {
+          // 展开全部：清折叠样式与控件，根节点打持久标记（跨原版折叠/展开保留）。
+          thinkClearClamp(root, body)
+          if (root !== null && typeof root.setAttribute === 'function') {
+            root.setAttribute(THINK_OPEN_ATTR, '')
+            if (typeof root.removeAttribute === 'function') root.removeAttribute(THINK_SHOWN_ATTR)
+          }
+          return
+        }
+        // 渐进展开：把用户展开进度持久化到根节点。正文元素可能被 React 卸载
+        // 重挂（原版收起），挂在正文上的 __dshZhThink 会丢；根节点标记跨重挂
+        // 保留，后续 pass 以此为底线不再缩回初始行数。
+        if (root !== null && typeof root.setAttribute === 'function') {
+          root.setAttribute(THINK_SHOWN_ATTR, String(next))
+        }
+        // 清旧 footer，再按新可见行数重渲染（不重置展开进度）。
+        if (typeof root === 'object' && root !== null && typeof root.hasAttribute === 'function') {
+          clearInjected(root, body)
+        }
+        renderThinkClamp(root, body, current, next, isThinkRunning(root))
       }
       const thinkMaxNow = function () {
         return settingsStore.getSnapshot().thinkMaxLines
+      }
+      const thinkMaxFromNow = function () {
+        const v = settingsStore.getSnapshot().thinkMaxLinesFrom
+        return v === 'earliest' ? 'earliest' : 'latest'
+      }
+      const thinkModeNow = function () {
+        const v = settingsStore.getSnapshot().thinkMode
+        return v === 'scroll' ? 'scroll' : 'button'
+      }
+      // 滚动模式：正文自带滚动条，流式期间默认跟随底部；用户向上滚后暂停跟随，
+      // 滚回底部（差 4px 内视为底部）恢复。监听挂一次、幂等绑定，卸载时移除。
+      const ensureThinkScrollFollow = function (body) {
+        if (body === null || body.__dshZhScrollBound === true) return
+        body.__dshZhScrollBound = true
+        body.__dshZhFollow = true
+        const handler = function () {
+          body.__dshZhFollow = body.scrollTop + body.clientHeight >= body.scrollHeight - 4
+        }
+        body.__dshZhScrollHandler = handler
+        if (typeof body.addEventListener === 'function') body.addEventListener('scroll', handler, { passive: true })
+      }
+      const removeThinkScrollFollow = function (body) {
+        if (body === null) return
+        if (body.__dshZhScrollBound === true && typeof body.removeEventListener === 'function') {
+          body.removeEventListener('scroll', body.__dshZhScrollHandler)
+        }
+        body.__dshZhScrollBound = false
+        body.__dshZhScrollHandler = undefined
+        body.__dshZhFollow = undefined
+      }
+      const thinkLineHeight = function (body) {
+        // 正文 line-height 用于 max-height 折叠；每帧探测，主题/字号变化自然生效。
+        let lh = 24
+        try {
+          if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
+            const cs = window.getComputedStyle(body)
+            if (cs !== null && typeof cs === 'object') {
+              const n = typeof cs.lineHeight === 'string' ? parseFloat(cs.lineHeight) : NaN
+              if (Number.isFinite(n) && n > 0) {
+                lh = n
+              } else {
+                const fs = typeof cs.fontSize === 'string' ? parseFloat(cs.fontSize) : NaN
+                if (Number.isFinite(fs) && fs > 0) lh = fs * 1.2
+              }
+            }
+          }
+        } catch { lh = 24 }
+        return lh
+      }
+      const thinkClearClamp = function (root, body) {
+        // 清除 CSS 折叠（样式 + 状态 + 控件）。正文文本始终未动过，无需还原。
+        if (body !== null) {
+          removeThinkScrollFollow(body)
+          if (typeof body.style === 'object' && body.style !== null) {
+            body.style.maxHeight = ''
+            body.style.overflow = ''
+            body.style.overflowY = ''
+            body.scrollTop = 0
+          }
+          body.__dshZhThink = undefined
+          if (typeof body.removeAttribute === 'function') body.removeAttribute(THINK_LINES_ATTR)
+          removeThinkLive(body)
+          removeThinkControl(body)
+        }
       }
       const thinkLabel = function (key, params) {
         const dict = activeIsZh() ? SETTINGS_ZH : SETTINGS_EN
@@ -418,76 +603,139 @@ function installChineseEnhance(ctx) {
         if (open === null || typeof open.firstElementChild === 'undefined') return null
         let child = open.firstElementChild
         while (child !== null) {
-          if (typeof child.hasAttribute === 'function' && !child.hasAttribute('data-disclosure-row')) return child
+          if (typeof child.hasAttribute === 'function'
+            && !child.hasAttribute('data-disclosure-row')
+            && !child.hasAttribute(THINK_CTRL_ATTR)
+            && !child.hasAttribute(THINK_LIVE_ATTR)) return child
           child = child.nextElementSibling
         }
         return null
       }
-      const applyThinkLinesToBody = function (body, max) {
+      const isThinkRunning = function (root) {
+        if (root === null || typeof root.getAttribute !== 'function') return false
+        return root.getAttribute('data-state') === 'running'
+      }
+      const renderThinkClamp = function (root, body, full, shown, running) {
+        // CSS 折叠：不动 React 管理的正文文本（改写 textContent 会让 React
+        // 后续流式更新写到已脱离 DOM 的旧文本节点，页面冻结）。
+        const from = thinkMaxFromNow()
+        const total = countThinkLines(full)
+        const visibleCount = Math.min(shown, total)
+        const lh = thinkLineHeight(body)
+        if (thinkModeNow() === 'scroll') {
+          // 滚动模式：正文限定高度（= 设置行数）并自带滚动条，用户滚轮查看；
+          // 无「再展开」按钮与实时行。方向决定初始位置：latest 初始在底部并
+          // 流式跟随（用户上滚后暂停）；earliest 初始在顶部、位置完全交给用户。
+          const prev = body.__dshZhThink
+          if (typeof body.style === 'object' && body.style !== null) {
+            body.style.maxHeight = String(Math.round(lh * visibleCount)) + 'px'
+            body.style.overflow = 'hidden'
+            body.style.overflowY = 'auto'
+            if (from === 'latest') {
+              if (running && body.__dshZhFollow !== false) {
+                body.scrollTop = Math.max(0, body.scrollHeight - body.clientHeight)
+              }
+            } else if (prev === undefined || prev.from !== 'earliest') {
+              // 首次折叠/方向切换时定位到顶部，之后不干涉用户滚动。
+              body.scrollTop = 0
+              body.__dshZhFollow = false
+            }
+          }
+          body.__dshZhThink = { shown: visibleCount, from: from }
+          if (typeof body.setAttribute === 'function') body.setAttribute(THINK_LINES_ATTR, 'clamped')
+          ensureThinkScrollFollow(body)
+          return
+        }
+        // 按钮模式：overflow + scrollTop 底/顶对齐显示最后/前 N 行 + 展开按钮。
+        if (typeof body.style === 'object' && body.style !== null) {
+          body.style.maxHeight = String(Math.round(lh * visibleCount)) + 'px'
+          body.style.overflow = 'hidden'
+          body.style.overflowY = ''
+          body.scrollTop = from === 'latest'
+            ? Math.max(0, body.scrollHeight - body.clientHeight)
+            : 0
+        }
+        body.__dshZhThink = { shown: visibleCount, from: from }
+        if (typeof body.setAttribute === 'function') body.setAttribute(THINK_LINES_ATTR, 'clamped')
+        ensureThinkFooter(root, body, { full: full, total: total, shown: visibleCount }, running, thinkLabel)
+      }
+      const applyThinkLinesToBody = function (root, body, max) {
+        // 先清掉同一思考块下残留的旧控件/实时行：原版「收起」只卸载正文元素、
+        // 按钮/实时行作为正文的相邻兄弟不会被 React 移除，会残留堆叠；正文重挂后
+        // 旧引用也可能丢失。无论正文是否存在（收起时 body 为 null）都要清理。
+        if (typeof root === 'object' && root !== null && typeof root.hasAttribute === 'function') {
+          clearInjected(root, body)
+        }
         if (body === null) return
-        const state = body.__dshZhThink
-        const mode = (typeof body.getAttribute === 'function') ? body.getAttribute(THINK_LINES_ATTR) : null
+        const from = thinkMaxFromNow()
+        const running = isThinkRunning(root)
         const current = typeof body.textContent === 'string' ? body.textContent : ''
         if (max <= 0 || current === '') {
-          // 关闭/行数 0/空正文：还原完整文本，移除控件与标记。
-          if (state !== undefined && typeof state.full === 'string' && current !== state.full) {
-            body.textContent = state.full
+          // 关闭/行数 0/空正文：清折叠样式、控件与标记（正文文本未动过）。
+          thinkClearClamp(root, body)
+          if (max <= 0 && root !== null && typeof root.removeAttribute === 'function') {
+            root.removeAttribute(THINK_OPEN_ATTR)
+            root.removeAttribute(THINK_SHOWN_ATTR)
           }
-          body.__dshZhThink = undefined
-          if (typeof body.removeAttribute === 'function') body.removeAttribute(THINK_LINES_ATTR)
-          removeThinkControl(body)
           return
         }
-        if (mode === 'expanded' && state !== undefined) {
-          // 用户已展开：跟随最新完整文本（本次消费后即清除，见下）。
-          if (state.clamped !== current) state.full = current
-          // 展开为一次性动作：本次消费后清除折叠状态，不显示「收起」控件
-          // （收起交给思考块原版按钮）；下一次 DOM 更新按未折叠态重新判定，
-          // 超限则重新折叠，形成「展开全部 → 原版收起/再展开 → 折叠」闭环。
-          body.__dshZhThink = undefined
-          if (typeof body.removeAttribute === 'function') body.removeAttribute(THINK_LINES_ATTR)
-          removeThinkControl(body)
-          return
-        }
-        if (mode === 'clamped' && state !== undefined) {
-          // 保持折叠态：检测流式刷新（正文被 React 重写为新完整文本）。
-          if (typeof state.clamped === 'string' && current !== state.clamped) {
-            state.full = current
-            state.clamped = undefined
-          }
-          // 用户把行数调大到 >= 全文行数：解除折叠。
-          if (countThinkLines(state.full) <= max) {
-            if (body.textContent !== state.full) body.textContent = state.full
-            body.__dshZhThink = undefined
-            if (typeof body.removeAttribute === 'function') body.removeAttribute(THINK_LINES_ATTR)
-            removeThinkControl(body)
+        // 滚动模式：固定高度滚动区，始终折叠为 max 行，忽略按钮模式的
+        // 「展开全部」/进度标记（滚轮取代按钮，方向设置不生效）。
+        if (thinkModeNow() === 'scroll') {
+          const total = countThinkLines(current)
+          if (total <= max) {
+            thinkClearClamp(root, body)
             return
           }
-          const lfull = String(state.full).split('\n')
-          const shown = lfull.slice(-max).join('\n')
-          const tail = lfull.length - max
-          if (body.textContent !== shown) body.textContent = shown
-          state.clamped = shown
-          body.__dshZhThink = state
-          if (typeof body.setAttribute === 'function') body.setAttribute(THINK_LINES_ATTR, 'clamped')
-          ensureThinkControl(body, { full: state.full, tail: tail }, thinkLabel)
+          renderThinkClamp(root, body, current, max, running)
           return
         }
-        // 未折叠态：未超限则保持不变。
-        if (countThinkLines(current) <= max) return
-        // 超限折叠。
-        const lines = String(current).split('\n')
-        const shown2 = lines.slice(-max).join('\n')
-        const tail2 = lines.length - max
-        if (body.textContent !== shown2) body.textContent = shown2
-        body.__dshZhThink = { full: current, clamped: shown2 }
-        if (typeof body.setAttribute === 'function') body.setAttribute(THINK_LINES_ATTR, 'clamped')
-        ensureThinkControl(body, { full: current, tail: tail2 }, thinkLabel)
+        // 「展开全部」的持久标记在思考块根节点上（而非正文元素）：原版收起
+        // 只卸载正文、根节点仍在，标记得以跨折叠/展开保留。已展开全文后
+        // 不再折叠；收起交给原版按钮，展开时读到该标记直接保持全文。
+        if (root !== null && typeof root.getAttribute === 'function' && root.getAttribute(THINK_OPEN_ATTR) !== null) {
+          thinkClearClamp(root, body)
+          return
+        }
+        // 用户点过「再展开」的进度底线：正文重挂后 state 丢失，根节点上的
+        // 进度标记（data-dsh-zh-think-shown）跨重挂保留，折叠时以此为准，
+        // 不再缩回初始 max 行数。
+        let shownFloor = max
+        if (root !== null && typeof root.getAttribute === 'function') {
+          const v = root.getAttribute(THINK_SHOWN_ATTR)
+          if (v !== null && /^[0-9]+$/.test(v)) {
+            const n = Number(v)
+            if (n > shownFloor) shownFloor = n
+          }
+        }
+        // 可见行数推导：
+        // - 正文上有状态（上次折叠）→ 沿用其进度（不缩回）。
+        // - 方向变了 → 进度作废，按新方向重置为 max。
+        // - 无状态（正文重挂/首次）→ 用进度底线 shownFloor。
+        // 全文永远实时读 current（CSS 方案不改写 React 文本，无过期问题）。
+        let shown = shownFloor
+        const state = body.__dshZhThink
+        if (state !== undefined && typeof state.shown === 'number') {
+          if (state.from !== from) {
+            shown = max
+            if (root !== null && typeof root.removeAttribute === 'function') root.removeAttribute(THINK_SHOWN_ATTR)
+          } else {
+            shown = Math.max(state.shown, shownFloor)
+          }
+        }
+        const total = countThinkLines(current)
+        if (total <= max) {
+          // 全文不超过上限：无需折叠。
+          thinkClearClamp(root, body)
+          if (root !== null && typeof root.removeAttribute === 'function') root.removeAttribute(THINK_SHOWN_ATTR)
+          return
+        }
+        renderThinkClamp(root, body, current, shown, running)
       }
       const restoreAllThinkLines = function () {
         if (typeof document === 'undefined' || document.body === null || typeof document.body.querySelectorAll !== 'function') return
         const roots = document.body.querySelectorAll('[data-variant="think"]')
-        for (let i = 0; i < roots.length; i += 1) applyThinkLinesToBody(thinkBodyDiv(roots[i]), 0)
+        for (let i = 0; i < roots.length; i += 1) applyThinkLinesToBody(roots[i], thinkBodyDiv(roots[i]), 0)
       }
       const applyThinkMaxLines = function () {
         if (typeof document === 'undefined' || document.body === null) return
@@ -498,7 +746,7 @@ function installChineseEnhance(ctx) {
         }
         if (typeof document.body.querySelectorAll !== 'function') return
         const roots = document.body.querySelectorAll('[data-variant="think"]')
-        for (let i = 0; i < roots.length; i += 1) applyThinkLinesToBody(thinkBodyDiv(roots[i]), max)
+        for (let i = 0; i < roots.length; i += 1) applyThinkLinesToBody(roots[i], thinkBodyDiv(roots[i]), max)
       }
       const observerOptions = { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['title', 'aria-label'] }
       let domStarted = false

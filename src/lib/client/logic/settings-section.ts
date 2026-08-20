@@ -148,7 +148,41 @@ const ZhSettingsSection = function (props) {
                 if (!isNaN(n)) settingsStore.set('thinkMaxLines', Math.max(0, Math.min(200, Math.round(n))))
               },
             }),
-            React.createElement('span', { style: zhDescStyle }, t('thinkMaxLinesUnit'))))),
+            React.createElement('span', { style: zhDescStyle }, t('thinkMaxLinesUnit')),
+            React.createElement('select', {
+              value: snapshot.thinkMaxLinesFrom === 'earliest' ? 'earliest' : 'latest',
+              'aria-label': t('thinkMaxLinesFrom'),
+              style: {
+                flex: 'none', padding: '4px 8px', borderRadius: 8,
+                border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
+                background: 'var(--dsw-specific-input-minor, transparent)',
+                color: 'var(--dsw-alias-label-primary, inherit)',
+                fontSize: 13, lineHeight: '20px',
+              },
+              onChange: function (event) {
+                settingsStore.set('thinkMaxLinesFrom', event.target.value === 'earliest' ? 'earliest' : 'latest')
+              },
+            },
+              React.createElement('option', { value: 'latest' }, t('thinkMaxLinesFromLatest')),
+              React.createElement('option', { value: 'earliest' }, t('thinkMaxLinesFromEarliest')))),
+          true),
+        row('thinkMode', t('thinkMode'), t('thinkModeDesc'),
+          React.createElement('select', {
+            value: snapshot.thinkMode === 'scroll' ? 'scroll' : 'button',
+            'aria-label': t('thinkMode'),
+            style: {
+              flex: 'none', padding: '4px 8px', borderRadius: 8,
+              border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
+              background: 'var(--dsw-specific-input-minor, transparent)',
+              color: 'var(--dsw-alias-label-primary, inherit)',
+              fontSize: 13, lineHeight: '20px',
+            },
+            onChange: function (event) {
+              settingsStore.set('thinkMode', event.target.value === 'scroll' ? 'scroll' : 'button')
+            },
+          },
+            React.createElement('option', { value: 'button' }, t('thinkModeButton')),
+            React.createElement('option', { value: 'scroll' }, t('thinkModeScroll'))))),
       row('chatWidth', t('chatWidth'), t('chatWidthDesc'),
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
           toggle(snapshot.chatWidthEnabled, function () {

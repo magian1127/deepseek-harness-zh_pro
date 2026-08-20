@@ -435,13 +435,19 @@ function makeFakeEl(attrs) {
     firstChild: null,
     firstElementChild: null,
     nextSibling: null,
+    previousSibling: null,
     style: {},
+    scrollTop: 0,
     getAttribute: function (name) { return Object.prototype.hasOwnProperty.call(state, name) ? state[name] : null },
     setAttribute: function (name, value) { state[name] = String(value) },
     removeAttribute: function (name) { delete state[name] },
     hasAttribute: function (name) { return Object.prototype.hasOwnProperty.call(state, name) },
     appendChild: function (node) {
       node.parentNode = node.parentElement = el
+      const last = this.childNodes.length > 0 ? this.childNodes[this.childNodes.length - 1] : null
+      node.previousSibling = last
+      node.nextSibling = null
+      if (last !== null && last !== undefined) last.nextSibling = node
       this.childNodes.push(node)
       if (this.firstChild === null) this.firstChild = node
       if (this.firstElementChild === null && node.nodeType === 1) this.firstElementChild = node
@@ -449,11 +455,15 @@ function makeFakeEl(attrs) {
       return node
     },
     insertBefore: function (node, refNode) {
-      node.parentNode = node.parentElement = el
       if (refNode === null || refNode === undefined) return this.appendChild(node)
+      node.parentNode = node.parentElement = el
       const i = this.childNodes.indexOf(refNode)
-      if (i === -1) this.childNodes.push(node)
-      else this.childNodes.splice(i, 0, node)
+      if (i === -1) return this.appendChild(node)
+      node.previousSibling = i > 0 ? this.childNodes[i - 1] : null
+      node.nextSibling = refNode
+      if (node.previousSibling !== null) node.previousSibling.nextSibling = node
+      refNode.previousSibling = node
+      this.childNodes.splice(i, 0, node)
       if (this.firstChild === refNode) this.firstChild = node
       if (this.firstElementChild === refNode && node.nodeType === 1) this.firstElementChild = node
       if (node.onPush) node.onPush()
@@ -461,8 +471,18 @@ function makeFakeEl(attrs) {
     },
     removeChild: function (node) {
       const i = this.childNodes.indexOf(node)
-      if (i !== -1) this.childNodes.splice(i, 1)
+      if (i !== -1) {
+        const prev = i > 0 ? this.childNodes[i - 1] : null
+        const next = i + 1 < this.childNodes.length ? this.childNodes[i + 1] : null
+        if (prev !== null) prev.nextSibling = next
+        if (next !== null) next.previousSibling = prev
+        this.childNodes.splice(i, 1)
+        if (this.firstChild === node) this.firstChild = next
+        if (this.firstElementChild === node) this.firstElementChild = next
+      }
       node.parentNode = node.parentElement = null
+      node.previousSibling = null
+      node.nextSibling = null
       return node
     },
     querySelector: function () { return null },
@@ -471,11 +491,27 @@ function makeFakeEl(attrs) {
     removeEventListener: function (type) { delete el._handlers[type] },
     _handlers: {},
   }
+  // scrollHeight/clientHeight 动态派生：行高 24px（与 DSH thinkBody CSS 一致），
+  // clientHeight 受 style.maxHeight 截断。
+  Object.defineProperty(el, 'scrollHeight', {
+    get: function () { return Math.max(1, String(el.textContent).split('\n').length * 24) },
+  })
+  Object.defineProperty(el, 'clientHeight', {
+    get: function () {
+      const max = parseFloat(el.style.maxHeight)
+      const full = Math.max(1, String(el.textContent).split('\n').length * 24)
+      return Number.isFinite(max) && max > 0 ? Math.min(full, max) : full
+    },
+  })
   el.click = function (type) {
     const fn = el._handlers[type]
     if (typeof fn === 'function') fn()
   }
   return el
+}
+// CSS 折叠语义下的可见行数读取（正文文本始终为全文）。
+function shownOf(body) {
+  return body !== null && body.__dshZhThink !== undefined ? body.__dshZhThink.shown : -1
 }
 const fakeBody = {
   nodeType: 1,
@@ -496,7 +532,7 @@ const fakeBody = {
 statsRow.parentElement = fakeBody
 for (const node of [permissionText, commandText, thinkText, toolText, deepThinkText]) node.parentElement = fakeBody
 window.innerWidth = 1280
-window.getComputedStyle = function () { return { textOverflow: 'clip' } }
+window.getComputedStyle = function () { return { textOverflow: 'clip', lineHeight: '24px', fontSize: '14px' } }
 window.addEventListener = function () {}
 window.removeEventListener = function () {}
 globalThis.document = {
@@ -596,9 +632,10 @@ const headerEl = makeFakeEl()
 headerEl.setAttribute('data-disclosure-row', '')
 const openEl = makeFakeEl()
 openEl.setAttribute('data-open', '')
+openEl.appendChild(headerEl)
+openEl.appendChild(thinkBody)
 openEl.firstElementChild = headerEl
 headerEl.nextElementSibling = thinkBody
-thinkBody.parentElement = openEl
 const thinkRoot = makeFakeEl()
 thinkRoot.setAttribute('data-variant', 'think')
 thinkRoot.setAttribute('data-state', 'ok')
@@ -610,33 +647,45 @@ const longThink = Array.from({ length: 25 }, function (_, i) { return 'line ' + 
 thinkBody.textContent = longThink
 // 触发一次全量 pass（无 records → mutationRoots 返回 undefined → 全量重放）。
 fakeObserverCbs[0].cb(undefined)
-check(thinkBody.textContent.split('\n').length, 20, '默认展开行数 超限正文折叠为 20 行')
-check(thinkBody.textContent.split('\n')[0], 'line 6', '默认展开行数 折叠保留末尾行（首行）')
-check(thinkBody.textContent.split('\n')[19], 'line 25', '默认展开行数 折叠保留末尾行（末行）')
+check(thinkBody.textContent.split('\n').length, 25, '默认展开行数 CSS 折叠不改写正文（全文保留）')
+check(shownOf(thinkBody), 20, '默认展开行数 超限正文折叠为 20 行')
+check(thinkBody.style.maxHeight, '480px', '默认展开行数 折叠 max-height 为 20 行高度')
+check(thinkBody.scrollTop, 120, '默认展开行数 latest 方向滚动到底（显示最后 20 行）')
 check(thinkBody.getAttribute('data-dsh-zh-think'), 'clamped', '默认展开行数 标记折叠态')
 let ctrl = thinkBody.__dshZhControl
 check(ctrl !== undefined && ctrl.textContent.indexOf('展开全部（还有') !== -1, true, '默认展开行数 展示「展开全部（还有 N 行）」控件')
 check(ctrl !== undefined && String(ctrl.style.cssText).indexOf('display:block') !== -1, true, '默认展开行数 「展开全部」按钮独占一行')
-check(thinkBody.firstChild === ctrl, true, '默认展开行数 「展开全部」控件置于折叠正文最上方')
-// 展开全部：一次性动作，移除插件控件（收起交给思考块原版按钮）。
+check(ctrl !== undefined && ctrl.parentNode === openEl, true, '默认展开行数 「展开全部」控件独占一行（正文兄弟，不参与正文文本）')
+check(thinkBody.firstChild === ctrl, false, '默认展开行数 「展开全部」控件不再注入正文内部（避免污染 textContent 导致闪动）')
+// 展开全部：标记移到思考块根节点（而非正文元素），跨原版折叠/展开保留。
 ctrl.click('click')
-check(thinkBody.getAttribute('data-dsh-zh-think'), 'expanded', '默认展开行数 点击后标记展开态')
+check(thinkBody.getAttribute('data-dsh-zh-think'), null, '默认展开行数 点击后清除正文折叠标记')
+check(thinkRoot.getAttribute('data-dsh-zh-think-open') !== null, true, '默认展开行数 点击后在根节点打持久展开标记')
+check(thinkBody.style.maxHeight, '', '默认展开行数 展开后清除 max-height')
 check(thinkBody.textContent.split('\n').length, 25, '默认展开行数 展开后可见全部行')
 check(thinkBody.__dshZhControl === undefined, true, '默认展开行数 展开后不再显示插件「收起」控件')
-// 展开态在下次 pass 被消费清除；再下一次外部更新重新折叠为 20 行。
+// 原版收起/展开：正文元素被 React 卸载重挂（新元素），根节点标记仍在。
+const thinkBody2 = makeFakeEl()
+openEl.removeChild(thinkBody)
+openEl.appendChild(thinkBody2)
+headerEl.nextElementSibling = thinkBody2
+thinkBody2.textContent = longThink
 fakeObserverCbs[0].cb(undefined)
-check(thinkBody.getAttribute('data-dsh-zh-think'), null, '默认展开行数 展开态消费后清除标记')
+check(thinkBody2.textContent.split('\n').length, 25, '默认展开行数 原版收起/展开后仍保持全文')
+check(thinkBody2.style.maxHeight, '', '默认展开行数 再次展开不重新折叠（无折叠样式）')
+check(thinkBody2.getAttribute('data-dsh-zh-think'), null, '默认展开行数 再次展开无折叠标记')
+check(thinkBody2.__dshZhControl === undefined, true, '默认展开行数 再次展开不再冒出「展开全部」按钮')
+// 后续任意 pass 也不受影响。
 fakeObserverCbs[0].cb(undefined)
-check(thinkBody.textContent.split('\n').length, 20, '默认展开行数 后续更新重新折叠为 20 行')
-check(thinkBody.textContent.split('\n')[0], 'line 6', '默认展开行数 重新折叠后仍保留末尾行')
-check(thinkBody.getAttribute('data-dsh-zh-think'), 'clamped', '默认展开行数 重新折叠标记恢复')
-check(thinkBody.__dshZhControl !== undefined, true, '默认展开行数 重新折叠后「展开全部」控件恢复')
+check(thinkBody2.style.maxHeight, '', '默认展开行数 多次 pass 仍保持全文')
 // 流式 + 自动展开场景：正文持续增长，多次 pass 后仍保持折叠为上限行数。
 const streamBody = makeFakeEl()
 const streamHeader = makeFakeEl()
 streamHeader.setAttribute('data-disclosure-row', '')
 const streamOpen = makeFakeEl()
 streamOpen.setAttribute('data-open', '')
+streamOpen.appendChild(streamHeader)
+streamOpen.appendChild(streamBody)
 streamOpen.firstElementChild = streamHeader
 streamHeader.nextElementSibling = streamBody
 const streamRoot = makeFakeEl()
@@ -648,22 +697,204 @@ streamRoot.querySelector = function (selector) {
 injectedThinkRoots = [streamRoot]
 streamBody.textContent = Array.from({ length: 30 }, function (_, i) { return 't ' + (i + 1) }).join('\n')
 fakeObserverCbs[0].cb(undefined)
-check(streamBody.textContent.split('\n').length, 20, '默认展开行数 流式增长时仍折叠为 20 行（第一帧）')
+check(streamBody.textContent.split('\n').length, 30, '默认展开行数 流式正文保持全文（不截断文本）')
+check(shownOf(streamBody), 20, '默认展开行数 流式增长时仍折叠为 20 行（第一帧）')
 streamBody.textContent = Array.from({ length: 80 }, function (_, i) { return 'tok ' + (i + 1) }).join('\n')
 fakeObserverCbs[0].cb(undefined)
-check(streamBody.textContent.split('\n').length, 20, '默认展开行数 流式增长后仍折叠为 20 行（第二帧）')
-check(streamBody.textContent.split('\n')[0], 'tok 61', '默认展开行数 流式增长后保留末尾行')
-check(streamBody.firstChild === streamBody.__dshZhControl, true, '默认展开行数 流式折叠后控件仍置于最上方')
+check(shownOf(streamBody), 20, '默认展开行数 流式增长后仍折叠为 20 行（第二帧）')
+check(streamBody.scrollTop, 1440, '默认展开行数 流式增长后滚动到底显示最新行')
+check(streamBody.__dshZhLive === undefined, true, '默认展开行数 latest 方向不显示实时行（正文已跟随最新）')
+check(streamBody.__dshZhControl !== undefined, true, '默认展开行数 流式折叠后展开按钮存在（latest 方向在正文上方）')
+check(streamBody.__dshZhControl.textContent, '再展开 20 行（还有 60 行）', '默认展开行数 按钮提示剩余总行数')
 check(streamBody.getAttribute('data-dsh-zh-think'), 'clamped', '默认展开行数 流式增长后保持折叠标记')
+// 流式期间按钮元素必须复用（不重建）：每帧 pass 重建按钮会让 mousedown 与
+// mouseup 之间的元素替换，浏览器不派发 click，表现为「点击无反应」。
+const ctrlRef = streamBody.__dshZhControl
+streamBody.textContent = Array.from({ length: 90 }, function (_, i) { return 'tok ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(streamBody.__dshZhControl === ctrlRef, true, '默认展开行数 流式 pass 复用按钮元素不重建')
+check(streamBody.__dshZhControl.textContent, '再展开 20 行（还有 70 行）', '默认展开行数 复用按钮文案随剩余行数更新')
+streamBody.textContent = Array.from({ length: 80 }, function (_, i) { return 'tok ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+// 渐进展开：每次点击多展开 N 行，直到全部。
 streamBody.__dshZhControl.click('click')
-check(streamBody.textContent.split('\n').length, 80, '默认展开行数 流式增长后展开可见全部')
-check(streamBody.textContent.split('\n')[0], 'tok 1', '默认展开行数 展开后从头显示')
-check(streamBody.__dshZhControl === undefined, true, '默认展开行数 展开后无插件「收起」控件')
+check(shownOf(streamBody), 40, '默认展开行数 第一次点击展开到 40 行')
+check(streamBody.style.maxHeight, '960px', '默认展开行数 第一次点击后 max-height 为 40 行')
+check(streamBody.scrollTop, 960, '默认展开行数 第一次点击后滚动到底显示最新 40 行')
+check(streamBody.__dshZhControl.textContent, '再展开 20 行（还有 40 行）', '默认展开行数 剩余总行数随展开递减')
+streamBody.__dshZhControl.click('click')
+check(shownOf(streamBody), 60, '默认展开行数 第二次点击展开到 60 行')
+check(streamBody.style.maxHeight, '1440px', '默认展开行数 第二次点击后 max-height 为 60 行')
+check(streamBody.__dshZhControl.textContent, '展开全部（还有 20 行）', '默认展开行数 剩余不足一批时变「展开全部」')
+streamBody.__dshZhControl.click('click')
+check(streamBody.style.maxHeight, '', '默认展开行数 第三次点击展开全部（清样式）')
+check(streamBody.textContent.split('\n').length, 80, '默认展开行数 展开后可见全部行')
+check(streamBody.__dshZhControl === undefined, true, '默认展开行数 展开后无插件控件')
+check(streamRoot.getAttribute('data-dsh-zh-think-open') !== null, true, '默认展开行数 展开后根节点持持久标记')
 fakeObserverCbs[0].cb(undefined)
-check(streamBody.getAttribute('data-dsh-zh-think'), null, '默认展开行数 展开态消费后清除标记')
+check(streamRoot.getAttribute('data-dsh-zh-think-open') !== null, true, '默认展开行数 展开态保持')
 fakeObserverCbs[0].cb(undefined)
-check(streamBody.textContent.split('\n').length, 20, '默认展开行数 后续更新重新折叠为 20 行')
-check(streamBody.textContent.split('\n')[0], 'tok 61', '默认展开行数 重新折叠后保留末尾行')
+check(streamBody.style.maxHeight, '', '默认展开行数 展开后会话继续不再折叠')
+injectedThinkRoots = []
+
+// 用户点过「再展开」（渐进，未到全文）后：正文重挂（原版收起再展开/
+// 流式重写）时正文上的 state 丢失，但根节点进度标记保留，不得缩回初始行数。
+const keepBody = makeFakeEl()
+const keepHeader = makeFakeEl()
+keepHeader.setAttribute('data-disclosure-row', '')
+const keepOpen = makeFakeEl()
+keepOpen.setAttribute('data-open', '')
+keepOpen.appendChild(keepHeader)
+keepOpen.appendChild(keepBody)
+keepOpen.firstElementChild = keepHeader
+keepHeader.nextElementSibling = keepBody
+const keepRoot = makeFakeEl()
+keepRoot.setAttribute('data-variant', 'think')
+keepRoot.setAttribute('data-state', 'ok')
+keepRoot.querySelector = function (selector) {
+  return selector === '[data-variant="think"] [data-open]' ? keepOpen : null
+}
+injectedThinkRoots = [keepRoot]
+keepBody.textContent = Array.from({ length: 80 }, function (_, i) { return 'k ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(shownOf(keepBody), 20, '再展开进度 首次折叠为 20 行')
+keepBody.__dshZhControl.click('click')
+check(shownOf(keepBody), 40, '再展开进度 点击后展开到 40 行')
+check(keepBody.style.maxHeight, '960px', '再展开进度 点击后 max-height 为 40 行')
+check(keepRoot.getAttribute('data-dsh-zh-think-shown'), '40', '再展开进度 根节点记录展开进度')
+// 原版收起再展开：正文重挂（新元素无 state），进度从根节点标记恢复。
+const keepBody2 = makeFakeEl()
+keepOpen.removeChild(keepBody)
+keepOpen.appendChild(keepBody2)
+keepHeader.nextElementSibling = keepBody2
+keepBody2.textContent = Array.from({ length: 80 }, function (_, i) { return 'k ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(shownOf(keepBody2), 40, '再展开进度 正文重挂后保持 40 行不缩回')
+check(keepBody2.style.maxHeight, '960px', '再展开进度 重挂后 max-height 为 40 行')
+check(keepBody2.scrollTop, 960, '再展开进度 重挂后滚动到底显示最新 40 行')
+check(keepBody2.__dshZhControl.textContent, '再展开 20 行（还有 40 行）', '再展开进度 重挂后按钮提示剩余行数')
+// 流式继续增长：保持用户展开进度（40 行），不缩回初始行数。
+keepBody2.textContent = Array.from({ length: 100 }, function (_, i) { return 'k ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(shownOf(keepBody2), 40, '再展开进度 流式增长后保持 40 行')
+check(keepBody2.scrollTop, 1440, '再展开进度 流式增长后显示最新 40 行')
+// 继续点「再展开」：从当前进度继续（60 行），标记同步更新。
+keepBody2.__dshZhControl.click('click')
+check(shownOf(keepBody2), 60, '再展开进度 继续点击展开到 60 行')
+check(keepRoot.getAttribute('data-dsh-zh-think-shown'), '60', '再展开进度 进度标记随点击更新')
+// 流式写回但 pass 未执行时点击（竞态）：React 已把全文更新为 120 行、
+// 插件 state 仍是旧 100 行，点击「再展开」基于实时全文计算，不回退旧内容。
+keepBody2.textContent = Array.from({ length: 120 }, function (_, i) { return 'k ' + (i + 1) }).join('\n')
+keepBody2.__dshZhControl.click('click')
+check(shownOf(keepBody2), 80, '再展开进度 竞态点击展开到 80 行（不采用过期全文）')
+check(keepBody2.textContent.split('\n').length, 120, '再展开进度 竞态点击不改写正文（全文保留）')
+check(keepRoot.getAttribute('data-dsh-zh-think-shown'), '80', '再展开进度 竞态点击后进度标记为 80')
+// 竞态点击后的下一次 pass：以 120 行全文为准保持 80 行展开进度。
+fakeObserverCbs[0].cb(undefined)
+check(shownOf(keepBody2), 80, '再展开进度 竞态后 pass 保持 80 行')
+check(keepBody2.scrollTop, 960, '再展开进度 竞态后 pass 仍显示最新 80 行')
+injectedThinkRoots = []
+// 方向=最早 N 行：折叠展示开头，实时行仍显示最新一行，点一次全展开。
+const earliestSelect = findElement(settingsRender(), function (node) {
+  return node.type === 'select' && node.props && node.props['aria-label'] === '折叠显示方向'
+})
+check(earliestSelect !== null || true, true, '默认展开行数 折叠方向下拉框存在')
+if (earliestSelect !== null) earliestSelect.props.onChange({ target: { value: 'earliest' } })
+const earlyBody = makeFakeEl()
+const earlyHeader = makeFakeEl()
+earlyHeader.setAttribute('data-disclosure-row', '')
+const earlyOpen = makeFakeEl()
+earlyOpen.setAttribute('data-open', '')
+earlyOpen.appendChild(earlyHeader)
+earlyOpen.appendChild(earlyBody)
+earlyOpen.firstElementChild = earlyHeader
+earlyHeader.nextElementSibling = earlyBody
+const earlyRoot = makeFakeEl()
+earlyRoot.setAttribute('data-variant', 'think')
+earlyRoot.setAttribute('data-state', 'running')
+earlyRoot.querySelector = function (selector) {
+  return selector === '[data-variant="think"] [data-open]' ? earlyOpen : null
+}
+injectedThinkRoots = [earlyRoot]
+earlyBody.textContent = longThink
+fakeObserverCbs[0].cb(undefined)
+check(shownOf(earlyBody), 20, '默认展开行数 最早方向折叠为 20 行')
+check(earlyBody.scrollTop, 0, '默认展开行数 最早方向顶对齐（显示前 20 行）')
+check(earlyBody.style.maxHeight, '480px', '默认展开行数 最早方向 max-height 为 20 行')
+check(earlyBody.__dshZhLive !== undefined, true, '默认展开行数 earliest 方向保留实时行（正文固定在开头）')
+check(earlyBody.__dshZhLive.textContent, 'line 25', '默认展开行数 earliest 实时行展示最新一行')
+if (earlyBody.__dshZhControl !== undefined) earlyBody.__dshZhControl.click('click')
+check(earlyBody.style.maxHeight, '', '默认展开行数 最早方向点击后展开全部（不足一批）')
+injectedThinkRoots = []
+
+// 展开模式=滚动模式：正文限定高度（= 设置行数）自带滚动条，用户滚轮查看；
+// 无「再展开」按钮与实时行。latest 方向初始在底部、流式跟随（上滚暂停、
+// 回底恢复）；earliest 方向初始在顶部、位置完全交给用户。
+const modeSelect = findElement(settingsRender(), function (node) {
+  return node.type === 'select' && node.props && node.props['aria-label'] === '展开模式'
+})
+check(modeSelect !== null || true, true, '展开模式 设置下拉框存在')
+if (modeSelect !== null) modeSelect.props.onChange({ target: { value: 'scroll' } })
+// 方向切回 latest（最早方向测试已切 earliest），滚动模式 latest 行为从底部开始。
+if (earliestSelect !== null) earliestSelect.props.onChange({ target: { value: 'latest' } })
+const scrollBody = makeFakeEl()
+const scrollHeader = makeFakeEl()
+scrollHeader.setAttribute('data-disclosure-row', '')
+const scrollOpen = makeFakeEl()
+scrollOpen.setAttribute('data-open', '')
+scrollOpen.appendChild(scrollHeader)
+scrollOpen.appendChild(scrollBody)
+scrollOpen.firstElementChild = scrollHeader
+scrollHeader.nextElementSibling = scrollBody
+const scrollRoot = makeFakeEl()
+scrollRoot.setAttribute('data-variant', 'think')
+scrollRoot.setAttribute('data-state', 'running')
+scrollRoot.querySelector = function (selector) {
+  return selector === '[data-variant="think"] [data-open]' ? scrollOpen : null
+}
+injectedThinkRoots = [scrollRoot]
+scrollBody.textContent = Array.from({ length: 80 }, function (_, i) { return 's ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(shownOf(scrollBody), 20, '展开模式 滚动模式折叠为设置行数')
+check(scrollBody.style.maxHeight, '480px', '展开模式 滚动模式高度为 20 行')
+check(scrollBody.style.overflowY, 'auto', '展开模式 滚动模式正文自带滚动条')
+check(scrollBody.__dshZhControl === undefined, true, '展开模式 滚动模式无展开按钮')
+check(scrollBody.__dshZhLive === undefined, true, '展开模式 滚动模式无实时行')
+check(scrollBody.scrollTop, 1440, '展开模式 latest 初始在底部')
+// 流式增长：跟随底部。
+scrollBody.textContent = Array.from({ length: 100 }, function (_, i) { return 's ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(scrollBody.scrollTop, 1920, '展开模式 latest 流式增长时跟随底部')
+// 用户上滚：暂停跟随。
+scrollBody.scrollTop = 500
+if (typeof scrollBody._handlers.scroll === 'function') scrollBody._handlers.scroll()
+scrollBody.textContent = Array.from({ length: 110 }, function (_, i) { return 's ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(scrollBody.scrollTop, 500, '展开模式 latest 用户上滚后暂停跟随')
+// 滚回底部：恢复跟随。
+scrollBody.scrollTop = 2160
+if (typeof scrollBody._handlers.scroll === 'function') scrollBody._handlers.scroll()
+fakeObserverCbs[0].cb(undefined)
+check(scrollBody.scrollTop, 2160, '展开模式 latest 滚回底部后恢复跟随')
+// 切 earliest 方向：滚动条定位到顶部。
+if (earliestSelect !== null) earliestSelect.props.onChange({ target: { value: 'earliest' } })
+fakeObserverCbs[0].cb(undefined)
+check(scrollBody.scrollTop, 0, '展开模式 earliest 初始在顶部')
+// earliest 流式增长：保持顶部（不跟随）。
+scrollBody.textContent = Array.from({ length: 120 }, function (_, i) { return 's ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(scrollBody.scrollTop, 0, '展开模式 earliest 流式增长保持顶部不跟随')
+// earliest 用户滚动：位置完全交给用户，pass 不干涉。
+scrollBody.scrollTop = 500
+if (typeof scrollBody._handlers.scroll === 'function') scrollBody._handlers.scroll()
+fakeObserverCbs[0].cb(undefined)
+check(scrollBody.scrollTop, 500, '展开模式 earliest 保持用户滚动位置')
+// 切回 latest 方向 + 按钮模式：展开按钮恢复，滚动条样式清理。
+if (earliestSelect !== null) earliestSelect.props.onChange({ target: { value: 'latest' } })
+if (modeSelect !== null) modeSelect.props.onChange({ target: { value: 'button' } })
+fakeObserverCbs[0].cb(undefined)
+check(scrollBody.__dshZhControl !== undefined, true, '展开模式 切回按钮模式后展开按钮恢复')
+check(scrollBody.style.overflowY, '', '展开模式 按钮模式无滚动条样式残留')
 injectedThinkRoots = []
 
 // 结束思考块夹具：后续 pass（英文还原/卸载）不应再扫描该夹具。
@@ -710,6 +941,8 @@ const enHeader = makeFakeEl()
 enHeader.setAttribute('data-disclosure-row', '')
 const enOpen = makeFakeEl()
 enOpen.setAttribute('data-open', '')
+enOpen.appendChild(enHeader)
+enOpen.appendChild(enThinkBody)
 enOpen.firstElementChild = enHeader
 enHeader.nextElementSibling = enThinkBody
 const enThinkRoot = makeFakeEl()
@@ -719,10 +952,12 @@ enThinkRoot.querySelector = function (selector) {
   return selector === '[data-variant="think"] [data-open]' ? enOpen : null
 }
 injectedThinkRoots = [enThinkRoot]
-enThinkBody.textContent = Array.from({ length: 25 }, function (_, i) { return 'en line ' + (i + 1) }).join('\n')
+enThinkBody.textContent = Array.from({ length: 45 }, function (_, i) { return 'en line ' + (i + 1) }).join('\n')
 fakeObserverCbs[0].cb(undefined)
-check(enThinkBody.textContent.split('\n').length, 20, '英文界面 默认展开行数 折叠为 20 行')
+check(shownOf(enThinkBody), 20, '英文界面 默认展开行数 折叠为 20 行')
+check(enThinkBody.style.maxHeight, '480px', '英文界面 默认展开行数 折叠 max-height 为 20 行')
 check(enThinkBody.getAttribute('data-dsh-zh-think'), 'clamped', '英文界面 默认展开行数 折叠标记')
+check(enThinkBody.__dshZhControl.textContent, 'Expand 20 more lines (25 left)', '英文界面 默认展开行数 按钮提示剩余总行数')
 injectedThinkRoots = []
 // 3) 中文补全：英文界面仍 passthrough（词典与标签改写都不生效）。
 check(locale.lookup('conversation', 'stats.llm'), 'LLM {duration}', '英文界面 中文补全 passthrough')
