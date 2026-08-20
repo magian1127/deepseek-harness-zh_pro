@@ -25,7 +25,7 @@
 | `zhPromptText` 注入文本 | `思考过程和回复始终使用中文输出` | `settings.yaml` | 提示词注入开启时 |
 | `zhPromptTarget` 注入目标 | `system` | `settings.yaml` | `system` 或 `user` |
 | `zhAutoArchiveDays` 自动归档天数 | 7，范围 0–365 | `settings.yaml` | 新建会话界面打开时 |
-| `deleteSessionEnabled` 会话删除按钮 | 开 | localStorage | 中文/英文界面（「其他功能」卡片在设置页最下方，一行多个开关的小卡片布局） |
+| `deleteSessionEnabled` 会话删除按钮 | 开 | localStorage | 中文/英文界面（「其他功能」分区在设置页最下方，分区标题 + 扁平行） |
 
 localStorage 键为 `deepseek-harness-zh_pro:enhancements`；主机 settings 命名空间为
 `dsh-zh`。`settingsScope` 不可用时提示词开关显示为禁用，其余增强仍可使用。

@@ -2,6 +2,7 @@
 // 每个键与 src/lib/client/logic/settings-section.ts 里的 ZhSettingsSection 对应。
 const SETTINGS_ZH = {
   nav: '增强设置',
+  sectionIntro: '配置界面增强、布局与提示词注入。',
   zhComplete: '中文补全',
   zhCompleteDesc: '修正中文界面残留的英文，统一术语与数量/时长格式',
   statsFull: '统计全显示',
@@ -32,6 +33,7 @@ const SETTINGS_ZH = {
 }
 const SETTINGS_EN = {
   nav: 'Enhancements',
+  sectionIntro: 'Configure UI enhancements, layout and prompt injection.',
   zhComplete: 'Chinese completion',
   zhCompleteDesc: 'Fix leftover English in the Chinese UI and normalize terms/formats',
   statsFull: 'Full stats line',
