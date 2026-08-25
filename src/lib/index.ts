@@ -40,6 +40,7 @@ import { existsSync, readFileSync, unwatchFile, watchFile } from 'node:fs'
 import { PKG, removeManagedRow } from '../bin/dsh-zh.mjs'
 import { BUNDLE_ROW_ID, HOT_ROW_ID, LIVE_ROW_ID } from './constants.js'
 import { installChinesePrompt } from './chinese-prompt.js'
+import { installModelLocale } from './model-locale.js'
 import {
   cleanHotDir, disposeLiveEntries, hotMount, hotUnmount, liveEntryNames,
   readSnapshot, snapshotNames,
@@ -187,6 +188,7 @@ async function migrateFromHotRow(ctx: HostContext): Promise<void> {
 export function apply(ctx: HostContext): void {
   void migrateFromHotRow(ctx)
   if (ownsPromptRegistration(ctx)) installChinesePrompt(ctx)
+  if (ownsPromptRegistration(ctx)) installModelLocale(ctx)
   installSelfHotReload(ctx)
   // 「删除会话（回收站）」：与 settings 注册同门槛，避免热迁移窗口双实例
   // 重复注册路由；服务未就绪时由内部重试等待（见 session-delete.js）。

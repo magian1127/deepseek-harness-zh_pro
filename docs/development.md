@@ -218,6 +218,35 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
 
 包装逻辑不得让 schema 漂移或 section 异常中断模型请求；失败时保留原 assembly 并输出一次警告。
 
+### 模型请求中文化（model-locale）
+
+`src/lib/model-locale.ts` 维护两个独立开关（`zhAgentPrompt` 代理角色提示中文化、
+`zhToolDesc` 工具说明中文化），与「提示词注入」共用一个 `dsh-zh` settings 命名空间，
+通过 `getModelState()` 读取 `chinese-prompt.ts` 维护的共享状态：
+
+- **共享状态来源唯一**：`modelState` 只由 `chinese-prompt.ts`（`dsh-zh` 命名空间唯一
+  注册者）在 `scope.watch` 回调中更新。任何其它模块不得直接改它。
+- **会话语言锁定（regime）**：`Map<sessionId, 'zh' | 'en'>`。会话首次请求时按当前
+  开关状态判定：会话已产生过 `assistant/message` 视为老会话锁 `'en'`，否则锁
+  `'zh'`；锁定后开关翻转不再影响该会话。regime 表是进程内存，随插件实例生命周期存在。
+- **开关1（zhAgentPrompt）**：`deployment:persona` 精确文本匹配换中文（`PERSONA_ZH`，
+  占位符 `{{model}}`/`{{cwd}}` 保留），加系统级官方段落（`SYSTEM_SECTION_ZH`：
+  `harness:identity` / `harness:source` / `app:web-surface` / `context:file-reference` /
+  `ui:deliverable-file-references`；含动态值的段落用 `keep()` 从原文提取路径/URL 拼入）。
+- **开关2（zhToolDesc）**：工具说明（`TOOL_DESC_ZH`）+ 官方工具指引段落（`SECTION_ZH`，
+  `tool:*` sections）。**只翻译 DSH 官方工具**：`TOOL_MATCH` 表存官方描述特征片段，
+  运行时 `description.includes(特征)` 才替换，被第三方插件（如 hashline 替换的 edit）
+  的实现保持英文。
+- **不越界**：第三方插件的段落（`tool:hashline`、`team:policy` 等）与工具（`vision_*`、
+  `agent_teams_*`、`codex_*`）不在表中，原样保留；工具名与参数名永不翻译。
+- 实现位置：包装 `systemPrompt.assemble`，在官方组装返回后、agent-loop 使用前原地
+  改写 `assembly.sections` 与 `assembly.tools`——complete persona 的 preset 同样生效。
+- 开关全关或 settings 服务不可用时零改动；改写失败只 warn 一次并返回原 assembly。
+
+修改此模块后，`lib/model-locale.js` 与 `lib/chinese-prompt.js` 都要在运行进程里生效：
+HMR 失效时按 [`troubleshooting.md`](troubleshooting.md) 的强制重载通道加载新代码，
+并在会话日志（`request/header`）验证实际效果。
+
 ## CLI 规则
 
 `src/bin/dsh-zh.mts` 编译生成的 `bin/dsh-zh.mjs` 优先直接运行 profile store 内 bundled `dsh`。

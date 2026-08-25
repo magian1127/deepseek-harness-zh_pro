@@ -10,6 +10,8 @@
 - 中文补全只在界面语言为中文时生效。统计样式、思考展开、默认展开行数和对话宽度、
   自动归档、会话删除按钮在中文和英文界面都生效，只受各自开关控制，文案随界面语言切换。
 - 提示词注入只受自身开关控制，与界面语言无关，默认关闭。
+- 代理角色提示中文化与工具说明中文化只受各自开关控制，与界面语言无关，默认关闭，
+  只作用于新会话的模型请求（老会话不重新注入）。
 
 ## 设置与默认值
 
@@ -17,6 +19,8 @@
 | --- | --- | --- | --- |
 | `zhComplete` 中文补全 | 开 | localStorage | 中文界面 |
 | `statsFull` 统计全显示 | 开 | localStorage | 中文/英文界面 |
+| `zhAgentPrompt` 代理角色提示中文化 | 关 | `settings.yaml` | 新会话的模型请求（system prompt） |
+| `zhToolDesc` 工具说明中文化 | 关 | `settings.yaml` | 新会话的模型请求（工具说明） |
 | `thinkingAuto` 自动展开最新思考 | 开 | localStorage | 中文/英文界面 |
 | `thinkMaxLines` 默认展开行数 | 20，范围 0–200 | localStorage | 中文/英文界面 |
 | `chatWidthEnabled` 对话宽度 | 开 | localStorage | 中文/英文界面且视口 ≥1200px |
@@ -140,6 +144,31 @@ locale 补丁处理。保留 Cordis、DeepSeek、TypeScript、命令名、文件
 旧值 `context` 读取时归一化为 `user`。文本框本地即时回显，静默 600ms 后写入 settings，
 失焦时立即写入。开关关闭或文本为空时两条通道都不注入。
 
+
+## 模型请求中文化
+
+两个独立开关（`zhAgentPrompt` 代理角色提示中文化、`zhToolDesc` 工具说明中文化），
+默认关闭，存于 `settings.yaml` 命名空间 `dsh-zh`，与界面语言无关（同「提示词注入」）。
+开启后只改写**发往模型的请求内容**，不写会话历史、不注册模型工具：
+
+- `zhAgentPrompt`：四个默认代理（standard / code / minimal / cordis，即设置页的
+  标准模式 / 编码模式 / 极简模式 / 创作模式）的 `deployment:persona` 系统提示词在
+  组装完成后换成中文版本（精确匹配内置原文，`{{model}}` / `{{cwd}}` 占位符保留，
+  自定义 persona 不匹配、原样保留）。
+- `zhToolDesc`：注入模型请求的工具说明按工具名替换为**DSH 官方工具**的中文版本，同时把
+  system prompt 里的官方工具指引段落（`tool:*` sections，如 `tool:read` / `tool:edit` /
+  `tool:goal` 等）替换为中文。工具名与参数名保持不变。**只覆盖 DSH 系统自己的工具**：
+  第三方插件（如 hashline、vision-router、agent-teams 等）注册的工具与段落不匹配、
+  保持英文原样，避免越界改动其它插件的内容。
+
+**新会话生效、老会话不重新注入**：以会话是否产生过模型输出（`assistant/message`）
+判定新旧。会话首次模型请求时按当前开关状态锁定语言（中文或英文），锁定后开关翻转
+不再影响该会话：老会话永不改为中文，已锁定的新会话翻开关后保持中文。
+
+实现方式：在 `systemPrompt.assemble` 返回后原地改写最终 assembly 的 persona 与工具
+说明（complete persona 的 preset 同样生效）；开关全关或设置服务不可用时零改动。
+任何改写失败只告警一次并返回原内容，不阻断模型请求。
+
 ## 自动归档旧会话
 
 点击左侧「新会话」并进入新会话界面（已选择工作区，此时 current 指向该工作区的
@@ -246,6 +275,8 @@ DOM。运行时翻转开关立即生效：关闭即卸载全部副作用（已�
 
 - 不注册模型工具，不上传数据。
 - 除显式开启的提示词注入外，不修改模型请求。
+- 除显式开启的提示词注入、代理角色提示中文化与工具说明中文化外，不修改模型请求；
+  后两者只改写发往模型的 system prompt 与工具说明，不写会话历史。
 - 本地界面设置只写浏览器 localStorage。
 - 提示词设置只经 DSH 官方 settings 服务写入 `settings.yaml`。
 - 默认关闭提示词注入，关闭时没有额外 token 消耗。

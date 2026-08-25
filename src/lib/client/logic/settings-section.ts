@@ -129,8 +129,27 @@ const ZhSettingsSection = function (props) {
     React.createElement('h3', { style: zhTitleStyle }, t('nav')),
     React.createElement('p', { style: zhIntroStyle }, t('sectionIntro')),
     React.createElement('div', { style: zhRowsStyle },
-      row('zhComplete', t('zhComplete'), t('zhCompleteDesc'),
-        toggle(snapshot.zhComplete, function () { settingsStore.set('zhComplete', !snapshot.zhComplete) }, false, t('zhComplete'))),
+        // 中文补全分组：界面中文补全 + 代理角色提示中文化 + 工具说明中文化
+        // 同属「中文」设置，共用一个容器（组内行不画分隔线）。后两个开关
+        // 与「提示词注入」同走主机 settings（dsh-zh 命名空间，默认关闭），
+        // 只作用于新会话的模型请求；settingsScope 未就绪时显示为禁用。
+        group('zhCompleteGroup',
+          row('zhComplete', t('zhComplete'), t('zhCompleteDesc'),
+            toggle(snapshot.zhComplete, function () { settingsStore.set('zhComplete', !snapshot.zhComplete) }, false, t('zhComplete')),
+            true),
+          row('zhAgentPrompt', t('zhAgentPrompt'), t('zhAgentPromptDesc'),
+            toggle(promptReady && promptSnapshot.value.zhAgentPrompt === true, function () {
+              if (boundPromptScope !== null && promptReady === true) {
+                void boundPromptScope.set('zhAgentPrompt', !(promptReady && promptSnapshot.value.zhAgentPrompt === true))
+              }
+            }, boundPromptScope === null, t('zhAgentPrompt')),
+            true),
+          row('zhToolDesc', t('zhToolDesc'), t('zhToolDescDesc'),
+            toggle(promptReady && promptSnapshot.value.zhToolDesc === true, function () {
+              if (boundPromptScope !== null && promptReady === true) {
+                void boundPromptScope.set('zhToolDesc', !(promptReady && promptSnapshot.value.zhToolDesc === true))
+              }
+            }, boundPromptScope === null, t('zhToolDesc')))),
       row('statsFull', t('statsFull'), t('statsFullDesc'),
         toggle(snapshot.statsFull, function () { settingsStore.set('statsFull', !snapshot.statsFull) }, false, t('statsFull'))),
       // 思考展开分组：自动展开 + 默认展开行数同属思考显示设置，共用一个容器。

@@ -95,6 +95,21 @@ profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢
 
 客户端文件不走主机 HMR；修改 `lib/client.js` 后刷新页面。
 
+### 强制重载通道（HMR / watchUserPatches 失效时）
+
+实测结论：`watchUserPatches`（监视 profile 的 `cordis.patch.yml`）在当前运行版本
+**不生效**（写盘后无任何 compose/update）；HMR 行 disabled 时自监视热重载也不可用。
+需要把 `lib/` 改动加载进运行中进程时，可用动态 Cordis 插件走 include 条目更新：
+
+1. 动态插件对 dsh-zh 的 include 条目执行 `update({ config: { ...patches } })`，
+   先 `{ id: 'dsh-zh', disabled: true }` 卸载（卸载会自动清理该包模块缓存）；
+2. 再清 `loader.internal.loadCache` 中本包路径（`/dsh-zh/lib/`、`/dsh-zh/bin/`）的键；
+3. 最后 `{ id: 'dsh-zh', disabled: false }` 从磁盘重新加载新代码。
+
+注意：对已活动的条目直接 `disabled: false` 是 no-op，**必须先禁用再恢复**。
+插件以 symlink link 到 profile 时，`import.meta.url` 解析为 realpath，清缓存时要
+按 realpath 路径匹配。
+
 ## 中文界面仍出现英文或还原错误
 
 - 先检查 active profile 的部署包原文，不要以 checkout 猜测运行时版本。
@@ -115,6 +130,59 @@ profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢
 | 临时热装时报重复注册 | 确认 `dsh-zh-hot` 没有注册 settings 或 pre-step 监听 |
 
 真实模型请求仍是主机提示词变更的最终验收；语法检查不能覆盖全部运行时服务形状。
+
+## 开关关闭但新会话仍按旧值生效
+
+**症状**：设置页或 `settings.yaml` 已把 `zhToolDesc` / `zhAgentPrompt` 改为关闭
+（`false`），新建会话的模型请求仍被翻译成中文。
+
+**排查顺序**（按此顺序定位，避免重复踩坑）：
+
+1. **先看会话日志而不是设置文件**：会话日志（`~/.dsh/sessions/<workspace>/<session>/session.jsonl.zstd`，
+   用 `zstandard` 的 `stream_reader` 解码）里的 `request/header` 才是模型实际收到的内容。
+   若工具说明仍为中文，说明运行时状态还是旧的，不是磁盘配置问题。
+2. **确认磁盘配置确实已写**：`settings.yaml` 命名空间 `dsh-zh` 的值。GUI 开关写入走
+   settings API 网关，正常情况下会持久化到该文件；若 GUI 显示已关但文件没变，是客户端
+   写入链路问题。
+3. **确认运行时状态与磁盘一致**：主机侧 `scope.watch` 回调负责把磁盘变更同步进
+   `modelState`（`getModelState()` 的共享对象）。若该回调因热重载、插件重挂而丢失，
+   进程内存里的 `modelState` 会停留在旧值，此时**重启 DSH 进程**是最直接的修复——
+   重启后从磁盘全新加载，`modelState` 直接初始化为磁盘值。
+4. **确认加载的是新代码**：`lib/` 产物修改后，HMR / `watchUserPatches` 在当前运行版本
+   可能失效（见下文「主机文件修改后没有热重载」）。用动态 Cordis 插件强制重载
+   （include 条目先 `disabled: true` 卸载、清 `loader.internal.loadCache` 中本包键、
+   再 `disabled: false` 恢复）后，还要注意旧 fiber 的 `scope.watch` 是否随旧实例释放。
+
+**经验结论**：
+
+- `settings.yaml` 是持久真值，但运行中的 `modelState` 是另一份内存副本；两者可能脱节。
+- 开关翻转后应立即在会话日志中验证下一次 `request/header`，不要相信开关 UI 状态。
+- 本插件 `modelState` 由 `chinese-prompt.ts`（`dsh-zh` 命名空间唯一注册者）维护，
+  重载后必须保证旧实例的 watch 随 Fiber 释放、新实例重新注册并同步当前值。
+
+## 工具说明翻译张冠李戴（第三方工具被翻译）
+
+**症状**：`vision_*`、`agent_teams_*`、`codex_*` 等第三方插件的工具说明被翻成中文，
+或 `edit` 的译文与运行时实际行为不符（被 hashline 替换后仍是我们的官方译文）。
+
+**原因**：工具说明翻译只按「工具名」匹配词典，无法区分同名工具由谁注册。DSH 工具注册
+是分层遮蔽的：agent 层遮蔽全局层，同层同名注册报错。第三方插件（hashline 等）通过监听
+agent 创建在 agent 层替换官方工具（如 `edit`），此时注入模型请求的 description 来自
+第三方，不再是官方原文。
+
+**处理**：`model-locale.ts` 的 `TOOL_MATCH` 表为每个工具记录**官方描述的特征片段**
+（取自 DSH 官方源码的静态描述部分）。`localizeTools` 只翻译
+`description.includes(TOOL_MATCH[name])` 为真的工具——运行时描述不匹配官方特征的
+保持英文原样，杜绝张冠李戴。新加工具翻译时**必须同时**：
+
+1. 在 `TOOL_DESC_ZH` 加中文描述；
+2. 在 `TOOL_MATCH` 加官方描述特征片段（从 DSH 官方源码提取，不要凭印象写）；
+3. 确认该工具确实是 DSH 官方工具而不是第三方插件的（`vision_*`、`agent_teams_*`、
+   `codex_*` 等来自其它插件，不应收录）。
+
+第三方插件注册的 system prompt 段落（如 hashline 的 `tool:hashline`、agent-teams 的
+`team:policy`）按 section name 匹配，不在 `SYSTEM_SECTION_ZH` / `SECTION_ZH` 表中
+就保持原样，天然不越界。
 
 ## Windows CLI 参数被拆分
 

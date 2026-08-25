@@ -605,6 +605,16 @@ const promptToggle = findElement(settingsTree, function (node) {
   return node.type === 'button' && node.props && node.props['aria-label'] === '提示词注入'
 })
 check(promptToggle !== null && promptToggle.props.disabled === true, true, '设置服务缺失时禁用提示词开关')
+const agentPromptToggle = findElement(settingsTree, function (node) {
+  return node.type === 'button' && node.props && node.props['aria-label'] === '代理角色提示中文化'
+})
+check(agentPromptToggle !== null && agentPromptToggle.props.disabled === true, true, '设置服务缺失时禁用代理角色提示开关')
+const toolDescToggle = findElement(settingsTree, function (node) {
+  return node.type === 'button' && node.props && node.props['aria-label'] === '工具说明中文化'
+})
+check(toolDescToggle !== null && toolDescToggle.props.disabled === true, true, '设置服务缺失时禁用工具说明开关')
+check(locale.lookup('dsh-zh-settings', 'zhAgentPrompt'), '代理角色提示中文化', '代理角色提示 中文文案')
+check(locale.lookup('dsh-zh-settings', 'zhToolDesc'), '工具说明中文化', '工具说明 中文文案')
 let statsToggle = findElement(settingsTree, function (node) {
   return node.type === 'button' && node.props && node.props['aria-label'] === '统计全显示'
 })

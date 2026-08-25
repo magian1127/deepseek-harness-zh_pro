@@ -26,3 +26,12 @@ export const ZH_PROMPT_TEXT = '思考过程和回复始终使用中文输出'
 export const ZH_PROMPT_TARGET_SYSTEM = 'system'
 export const ZH_PROMPT_TARGET_USER = 'user'
 export const ZH_PROMPT_TARGET_LEGACY = 'context'
+
+// ============ 模型请求中文化（settings 命名空间字段名） ============
+// 两个独立开关，默认关闭，只作用于「新会话」（首次模型请求时锁定语言）。
+// 1) zhAgentPrompt：四个默认代理（standard/code/minimal/cordis）的
+//    deployment:persona 系统提示词换成中文版本（老会话不重新注入）。
+// 2) zhToolDesc：注入模型请求的工具说明（tool schema description）按
+//    工具名换成中文（工具名与参数不变，未收录工具原样保留）。
+export const ZH_AGENT_PROMPT_KEY = 'zhAgentPrompt'
+export const ZH_TOOL_DESC_KEY = 'zhToolDesc'

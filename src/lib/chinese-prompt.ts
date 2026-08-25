@@ -20,6 +20,19 @@ import { loadSchemastery } from './schemastery.js'
 import { log, warn } from './util.js'
 import type { HostContext } from './types.js'
 
+// 「模型请求中文化」共享状态：由本文件（dsh-zh 命名空间的唯一注册者）维护，
+// model-locale.js 通过 getModelState() 读取。ready 表示 settings 注册成功；
+// settings 服务不可用时保持 false，model-locale 随之停用。
+const modelState = { ready: false, zhAgentPrompt: false, zhToolDesc: false }
+
+/**
+ * 读取「模型请求中文化」的共享开关状态（只读）。该状态随本命名空间的
+ * settings watch 实时更新；settings 服务不可用时 ready 为 false。
+ */
+export function getModelState() {
+  return modelState
+}
+
 export function installChinesePrompt(ctx: HostContext): void {
   const settings = ctx.get('settings')
   if (settings === undefined || settings === null || typeof settings.register !== 'function') {
@@ -41,15 +54,22 @@ export function installChinesePrompt(ctx: HostContext): void {
       zhPromptText: z.string().default(ZH_PROMPT_TEXT),
       zhPromptTarget: z.string().default(ZH_PROMPT_TARGET_SYSTEM),
       zhAutoArchiveDays: z.number().default(ZH_AUTO_ARCHIVE_DAYS_DEFAULT),
+      zhAgentPrompt: z.boolean().default(false),
+      zhToolDesc: z.boolean().default(false),
     }), { applies: 'live' })
     const current = scope.get()
     state.enabled = current.zhPrompt === true
     if (typeof current.zhPromptText === 'string') state.text = current.zhPromptText
     state.target = normalizeTarget(current.zhPromptTarget)
+    modelState.ready = true
+    modelState.zhAgentPrompt = current.zhAgentPrompt === true
+    modelState.zhToolDesc = current.zhToolDesc === true
     const unwatchSettings = scope.watch(function (next) {
       state.enabled = next.zhPrompt === true
       if (typeof next.zhPromptText === 'string') state.text = next.zhPromptText
       state.target = normalizeTarget(next.zhPromptTarget)
+      modelState.zhAgentPrompt = next.zhAgentPrompt === true
+      modelState.zhToolDesc = next.zhToolDesc === true
     })
     ctx.effect(function () { return unwatchSettings }, 'dsh-zh: prompt settings watch')
 

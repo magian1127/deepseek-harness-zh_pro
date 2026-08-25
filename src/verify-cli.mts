@@ -246,6 +246,106 @@ try {
   check(systemPrompt.assemble, originalAssemble, '卸载后恢复 systemPrompt.assemble')
   check(settingsUnwatched, 1, '卸载后取消 settings watch')
 
+    // ---- 模型请求中文化：新会话生效、老会话不重新注入、开关关零改动 ----
+    // 复用同样的 stub 模式，但独立装配 chinese-prompt + model-locale 两个模块
+    // （带 query 绕开 ESM 缓存），验证 persona 与工具说明的中文化行为。
+      const standardPersona = 'You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.'
+    const localeOriginal = async function () {
+      return {
+        sections: [
+          { name: 'deployment:persona', text: standardPersona },
+          { name: 'harness:identity', text: 'You are an AI agent powered by DeepSeek Harness.' },
+          { name: 'harness:source', text: 'The DeepSeek Harness implementation checkout is at D:\\Projects\\dsh. The checkout location and current working directory are separate values and may differ.' },
+          { name: 'app:web-surface', text: 'You are interacting with the user through the DeepSeek Harness Web GUI at http://127.0.0.1:3080. When the user refers to "this page", "this GUI", or "this app" without naming another target, they mean this GUI.' },
+          { name: 'tool:read', text: 'Use the read tool — not shell commands like cat — to inspect text files. Results include line numbers. Use offset and limit to continue reading large files.' },
+          { name: 'tool:hashline', text: 'The read and edit tools are currently the Hashline read/editor. Use write for new files.' },
+        ],
+        tools: [
+          { name: 'pwsh', description: 'Execute a PowerShell command', parameters: { type: 'object', properties: {} } },
+          { name: 'edit', description: 'Edit an existing UTF-8 text file. Two input styles: (1) a simple unique literal replacement with old_string/new_string and optional replace_all, or (2) based on read.', parameters: { type: 'object', properties: {} } },
+          { name: 'unknown_tool', description: 'Keep me', parameters: { type: 'object', properties: {} } },
+        ],
+      }
+    }
+    const localeSystemPrompt = { assemble: localeOriginal }
+    const localeEffects = []
+    const localeCtx = {
+      fiber: { entry: { options: { id: 'dsh-zh' } } },
+      loader: { entries: function () { return [] } },
+      get: function (name) {
+        if (name === 'settings') return undefined
+        if (name === 'systemPrompt') return localeSystemPrompt
+        return undefined
+      },
+      on: function () {},
+      effect: function (setup) {
+        const dispose = setup()
+        if (typeof dispose === 'function') localeEffects.push(dispose)
+      },
+    }
+      // model-locale 内部 import 无 query 的 chinese-prompt.js；这里也 import
+      // 无 query 实例（与主测试共享同一模块实例），直接操作 getModelState()
+      // 返回的状态对象来切换开关，保证 model-locale 读到同一份状态。
+      const localePromptMod = await import('./lib/chinese-prompt.js')
+      const localeState = localePromptMod.getModelState()
+      localeState.ready = true
+      localeState.zhAgentPrompt = false
+      localeState.zhToolDesc = false
+      const localeMod = await import(`./lib/model-locale.js?verify=locale-${Date.now()}-${Math.random()}`)
+      const silentLog = function () {}
+      const originalSilentLog = console.log
+      const originalSilentWarn = console.warn
+      try {
+        console.log = silentLog
+        console.warn = silentLog
+        localeMod.installModelLocale(localeCtx)
+      } finally {
+        console.log = originalSilentLog
+        console.warn = originalSilentWarn
+      }
+      const newAgent = { session: { id: 'locale-new', events: [] } }
+      const oldAgent = { session: { id: 'locale-old', events: [{ type: 'assistant/message' }] } }
+      // 开关全关：新会话也零改动
+      let localeAssembly = await localeSystemPrompt.assemble({ agent: newAgent, scope: newAgent })
+      check(localeAssembly.sections[0].text, standardPersona, '开关全关时 persona 保持英文')
+      check(localeAssembly.tools[0].description, 'Execute a PowerShell command', '开关全关时工具说明保持英文')
+      // 两个开关都开 + 新会话：persona 与工具说明变中文，工具名与参数不变
+      localeState.zhAgentPrompt = true
+      localeState.zhToolDesc = true
+      localeAssembly = await localeSystemPrompt.assemble({ agent: newAgent, scope: newAgent })
+      check(localeAssembly.sections[0].text.includes('编码代理'), true, '新会话 persona 换成中文')
+      check(localeAssembly.sections[0].text.includes('{{model}}'), true, '中文 persona 保留 {{model}} 占位符')
+      // 系统级段落（开关1）：identity/source/web-surface 换成中文并保留动态信息
+      check(localeAssembly.sections[1].text.includes('DeepSeek Harness 驱动的 AI 代理'), true, '新会话 harness:identity 换成中文')
+      check(localeAssembly.sections[2].text.includes('检出目录位于'), true, '新会话 harness:source 换成中文')
+      check(localeAssembly.sections[2].text.includes('D:\\Projects\\dsh'), true, 'harness:source 保留检出路径')
+      check(localeAssembly.sections[3].text.includes('Web GUI 与用户交互'), true, '新会话 app:web-surface 换成中文')
+      check(localeAssembly.sections[3].text.includes('http://127.0.0.1:3080'), true, 'app:web-surface 保留 GUI 地址')
+      check(localeAssembly.tools[0].description.includes('PowerShell'), true, '新会话工具说明换成中文')
+      check(localeAssembly.tools[0].name, 'pwsh', '工具名保持不变')
+      check(localeAssembly.tools[0].parameters.type, 'object', '工具参数保持不变')
+      check(localeAssembly.tools[2].description, 'Keep me', '未收录工具说明原样保留')
+      // 被第三方替换的 edit（hashline 风格描述）不匹配官方特征 → 保持原样
+      check(localeAssembly.tools[1].description.includes('Two input styles'), true, '被替换的 edit 工具说明不翻译（保持第三方原样）')
+      // 工具指引段落（guidance sections）：官方 tool:* 换成中文，第三方 section 保持英文
+      check(localeAssembly.sections[4].text.includes('用 read 工具'), true, '新会话 tool:read 指引换成中文')
+      check(localeAssembly.sections[5].text.includes('Hashline'), true, '第三方 tool:hashline 指引保持英文')
+      // 老会话：不重新注入
+      localeAssembly = await localeSystemPrompt.assemble({ agent: oldAgent, scope: oldAgent })
+      check(localeAssembly.sections[0].text, standardPersona, '老会话 persona 不重新注入')
+      check(localeAssembly.tools[0].description, 'Execute a PowerShell command', '老会话工具说明不重新注入')
+      check(localeAssembly.sections[4].text.includes('Use the read tool'), true, '老会话 tool:read 指引不重新注入')
+      // 同会话连续请求保持中文（regime 锁定）
+      localeAssembly = await localeSystemPrompt.assemble({ agent: newAgent, scope: newAgent })
+      check(localeAssembly.sections[0].text.includes('编码代理'), true, '新会话第二次请求仍保持中文')
+      // 卸载后恢复原 assemble
+      for (let i = localeEffects.length - 1; i >= 0; i -= 1) await localeEffects[i]()
+      check(localeSystemPrompt.assemble, localeOriginal, '卸载后恢复 model-locale 的 assemble')
+      // 还原共享状态，避免影响后续测试
+      localeState.ready = false
+      localeState.zhAgentPrompt = false
+      localeState.zhToolDesc = false
+
   // ---- 会话删除（回收站）：live 会话归档隐藏 + 回收站登记 ----
   // 前面的 CLI shim 测试改过 PATH（可能找不到 powershell.exe），
   // 这里恢复原 PATH 让 trashItem 能调用 PowerShell 回收站。
