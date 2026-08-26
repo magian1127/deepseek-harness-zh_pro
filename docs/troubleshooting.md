@@ -18,44 +18,20 @@ npm test
 | --- | --- |
 | 缺少 `./package.json` 导出 | 检查 `package.json` exports；client-modules 依赖该导出发现客户端包 |
 | 客户端写成 ESM | `lib/client.js` 必须调用 `window.__ModuleLoader__.load`，不能使用 `export` |
-| 包名负面缓存 | 修正结构后重启 DSH；同进程可能继续沿用“非客户端包”判定 |
+| 包名负面缓存 | 修正结构后走受控动态 Client 通道或等待自然重启；同进程可能继续沿用“非客户端包”判定 |
 | profile 未安装或 bundles 未就绪 | 运行 `status`，检查 profile `package.json` 的 dependency 与 bundles |
 | 浏览器仍使用旧 bundle | 强制刷新页面，再检查 `/plugins/.../client.js` 的返回内容 |
 
-## 插件加载失败但页面无报错（CDP 调试）
+## 插件加载失败但页面无报错
 
-用户浏览器看不到控制台时，可用独立 headless 浏览器通过 CDP 验证，**不要动用户的
-浏览器**：
-
-```powershell
-# 独立用户数据目录 + 独立调试端口，避免与用户浏览器冲突
-& 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' `
-  --headless=new --remote-debugging-port=9333 `
-  --user-data-dir="$env:TEMP\dsh-cdp-test" http://127.0.0.1:3080/
-```
-
-然后连接 `http://127.0.0.1:9333/json` 的 page target，用原生 WebSocket 调 CDP：
-
-1. `Runtime.enable` 后收集 `Runtime.consoleAPICalled` 与 `Runtime.exceptionThrown`，
-   插件 apply 的异常（如 `ReferenceError`）会出现在这里；
-2. 检查模块加载状态：`window.__DSH_MODULES__.loadCache` / `factories` 是否有
-   `deepseek-harness-zh_pro`（页面完全加载后才有，需等待足够久）；
-3. 检查 bundle 内容：`fetch('/plugins/deepseek-harness-zh_pro/client.js')` 后
-   用 `new Function(text)` 或 acorn 验证语法、搜索关键标识符确认版本；
-4. 找不到「新会话」按钮等 UI 元素时，headless 页面可能未连上 websocket，先检查
-   `document.body.innerText` 是否只渲染了骨架（几十字符）而非完整界面。
-
-典型错误与结论：
+用独立 CDP 浏览器检查 `deepseek-harness-zh_pro` 的 client module、bundle 端点和 apply 异常。dsh-zh 常见专属判据：
 
 | 症状 | 结论 |
 | --- | --- |
-| `failed to apply loader entry ...: XXX is not defined` | 客户端引用了未定义标识符（常为误引用主机端常量），整个插件无法加载 |
-| `SyntaxError: Unexpected identifier 'exports'` 且报错在文件末尾 | apply 函数被多余 `return`/`}` 提前闭合，用 acorn 定位真实失衡行 |
-| 模块表有插件但无任何插件日志 | 插件 apply 未执行或 `ctx.inject` 回调未激活，改用同步 `ctx.get()`（见 development.md） |
-| bundle 返回 200 且语法正确但页面行为不变 | 浏览器缓存了旧 bundle，强制刷新；或页面 websocket 未连接（headless 骨架态） |
-
-清理时只结束自己启动的 headless 进程（按 `--user-data-dir` 或调试端口区分），不要
-`Stop-Process` 所有同名浏览器进程，避免误杀用户正在使用的浏览器。
+| `failed to apply loader entry ...: XXX is not defined` | Client 误引用 Host 常量或构建拼接遗漏，整个插件未加载 |
+| `SyntaxError: Unexpected identifier 'exports'` 且报错在文件末尾 | 经典 bundle 工厂被多余 `return`/`}` 提前闭合，用语法解析器定位失衡行 |
+| 模块表有本包但无插件日志 | apply 未执行，或浏览器嵌套 Fiber 的依赖回调未激活；检查 `development.md` 的 Client 服务接入 |
+| bundle 返回 200 且语法正确但行为不变 | 核对实际内容关键标识符、boot revision 和页面 websocket，不能只看 HTTP 状态 |
 
 ## DSH 启动时报重复 id
 
@@ -90,10 +66,10 @@ profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢
 查看日志：
 
 - “官方 hmr watcher 已覆盖”或“主机半边热重载已启用”表示保存后应自动更新；
-- “hmr 服务不可用”或“缺少 registerConfig/partialReload”表示需要重启；
+- “hmr 服务不可用”或“缺少 registerConfig/partialReload”表示当前热路径不可用，应诊断/报告，不能以重启代替；
 - watch-only HMR 实例同时承载 `watchUserPatches`，不要在运行中替换它。
 
-客户端文件不走主机 HMR；修改 `lib/client.js` 后刷新页面。
+客户端文件不走主机 HMR；修改 `lib/client.js` 后验证实际运行副本并刷新现有页面。
 
 ### 强制重载通道（HMR / watchUserPatches 失效时）
 
@@ -145,11 +121,10 @@ profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢
    settings API 网关，正常情况下会持久化到该文件；若 GUI 显示已关但文件没变，是客户端
    写入链路问题。
 3. **确认运行时状态与磁盘一致**：主机侧 `scope.watch` 回调负责把磁盘变更同步进
-   `modelState`（`getModelState()` 的共享对象）。若该回调因热重载、插件重挂而丢失，
-   进程内存里的 `modelState` 会停留在旧值，此时**重启 DSH 进程**是最直接的修复——
-   重启后从磁盘全新加载，`modelState` 直接初始化为磁盘值。
+   `modelState`（`getModelState()` 的共享对象）。若回调因热重载、插件重挂而丢失，
+   内存状态会停留在旧值；先修复 watcher 生命周期并按本项目的动态强制重载通道重建 Fiber，不能用重启掩盖。
 4. **确认加载的是新代码**：`lib/` 产物修改后，HMR / `watchUserPatches` 在当前运行版本
-   可能失效（见下文「主机文件修改后没有热重载」）。用动态 Cordis 插件强制重载
+   可能失效（见上文「主机文件修改后没有热重载」）。用动态 Cordis 插件强制重载
    （include 条目先 `disabled: true` 卸载、清 `loader.internal.loadCache` 中本包键、
    再 `disabled: false` 恢复）后，还要注意旧 fiber 的 `scope.watch` 是否随旧实例释放。
 

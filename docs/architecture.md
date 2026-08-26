@@ -1,24 +1,11 @@
 # 运行架构
 
-本文档解释插件在哪里运行、如何挂载以及各文件之间的职责。用户安装命令见
+本文档解释 dsh-zh 特有的运行结构、挂载与文件职责。用户安装命令见
 [`README.md`](../README.md)，TypeScript 源码与构建细节见 [`development.md`](development.md)。
 
 ## 运行目录
 
-DSH 根目录优先取环境变量 `DSH_HOME`，未设置时使用用户目录下的 `.dsh`。
-Windows 默认位置为 `%USERPROFILE%\.dsh`。
-
-| 路径 | 内容 |
-| --- | --- |
-| `profiles/web/package.json` | web profile 的依赖与 `dsh.profile.bundles` |
-| `profiles/web/cordis.patch.yml` | 用户补丁层，热安装时临时写入受管块 |
-| `profiles/node_modules` | DSH 共享运行包；具体布局由 profile 的 pnpm 安装结果决定 |
-| `profiles/web/node_modules` | profile 依赖链接或局部安装内容 |
-| `settings.yaml` | 主机 settings 数据 |
-| `sessions`、`storages` | 会话和其它持久数据 |
-
-**运行时真值是 active profile 实际加载的包，而不是 DSH checkout，也不是本仓库的
-`node_modules`。** 核对上游词典、组件字面量或服务行为时，应先定位 profile 中正在使用的版本。
+运行时真值是 active profile 实际加载的包，而不是 DSH checkout 或本仓库 `node_modules`。dsh-zh 特有的受管 profile 块、三条挂载行与清理逻辑见下文「双通道挂载」。核对上游词典、组件字面量或服务行为时，应先定位 profile 中正在使用的版本。
 
 ## 组件职责
 
@@ -57,11 +44,12 @@ Windows 默认位置为 `%USERPROFILE%\.dsh`。
 
 ### 热安装通道
 
-1. CLI 先完成依赖安装。
-2. 若 DSH 正在运行且尚未挂载插件，CLI 写入临时行 `dsh-zh-hot`。
-3. `watchUserPatches` 立即加载该行。
-4. 主机监督器创建 `dsh-zh-live`，随后删除临时行。
-5. 当前进程保留运行时单实例；下次启动由 `dsh-zh` 接管。
+当前运行版不把 `watchUserPatches` 视为可靠路径。dsh-zh 的专属流程是：
+
+1. CLI 先完成依赖安装；
+2. 若 DSH 正在运行且尚未挂载插件，CLI 写入临时行 `dsh-zh-hot`；
+3. 主机监督器通过 profile manifest reconcile 发现本包，创建 `dsh-zh-live`，随后删除临时行；
+4. 当前进程保留运行时单实例；下次启动由 `dsh-zh` 接管。
 
 若 bundle 行已经在线，监督器只删除临时行，不再创建运行时条目。所有路径最终都收敛为单实例；
 重复使用同一个 id 会触发 `duplicate loader entry id` 并阻止启动。
@@ -91,11 +79,4 @@ CLI 和官方 remove 都会删除依赖声明。主机监督器发现本包被�
 
 ## 更新与热重载
 
-- `src/lib/client/**/*.ts`：运行 `npm run build` 后，服务端点会读取新的 `lib/client.js`；已打开页面需要刷新后加载新代码。
-- `lib/index.js`、`bin/dsh-zh.mjs`（由 `src/lib`、`src/bin` 编译生成）：插件优先复用 DSH 官方 HMR 服务，监视两个主机文件并
-  以 150ms 防抖驱动 `partialReload`。
-- 若官方 watcher 已覆盖插件目录，插件不会重复注册监视。
-- 若 HMR 服务或必要方法不可用，日志会明确提示需要重启。
-- watch-only HMR 实例还负责 `watchUserPatches`，不要在运行中替换或重启该实例。
-
-服务重启会清除动态 Cordis 插件，但不会清除已经加入 profile bundles 的本插件。
+dsh-zh 的 Host 自监视目标是 `lib/index.js` 与 `bin/dsh-zh.mjs`，以 150ms 防抖驱动 `partialReload`；watch-only HMR 实例还承载遗留 `watchUserPatches`，不要在运行中替换它。动态 Cordis 插件不跨自然进程重启，而已加入 profile bundles 的持久插件会在下一次启动由持久行接管。

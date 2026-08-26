@@ -95,8 +95,7 @@ window.__ModuleLoader__.load({
 `src/lib/session-delete.ts`（会话删除编排与 `/dsh-zh/api` 路由）；CLI 实现拆在 `src/bin/cli/`，`src/bin/dsh-zh.mts`
 是转发导出并保留入口守卫的聚合入口。编译后对应的 `.js`/`.mjs` 文件供 DSH 和 npm 消费。
 
-client-modules 会缓存某个包名是否为有效客户端包。结构错误被判定为非客户端包后，修复文件
-不一定能让当前进程恢复；应先修正格式，再重启 DSH 清除负面缓存。
+client-modules 会缓存某个包名是否为有效客户端包。结构错误被判定为非客户端包后，本插件应先修正格式，再走受控动态 Client 通道或等待自然重启，不把重启作为开发动作。
 
 ## locale 补丁
 
@@ -184,26 +183,9 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
 
 ## 客户端服务接入（自动归档等跨服务功能）
 
-浏览器端读取 `sessions` / `workspaces` 等服务时，注意以下实测结论：
-
-- **`ctx.inject` 的嵌套 fiber 在浏览器 cordis 中可能不激活**：即使服务已通过
-  `ctx.provide` 注册、`ctx.get(name)` 能拿到实例，`ctx.inject([...], callback)` 的
-  回调也可能永远不执行（无报错、无日志）。优先用**同步 `ctx.get()` 获取服务**并
-  直接注册订阅；服务未就绪时监听 `internal/service` 事件，出现时重试初始化。
-- 服务名以官方插件（如 `ui-conversation`）的 `inject` 声明为准：`sessions`、
-  `workspaces`、`settingsScope`、`locale`、`slots`。
-- 订阅快照 store（`sessions.list.subscribe` / `workspaces.list.subscribe`）后
-  **立即主动执行一次检查**：若插件加载时目标界面已就绪，快照不变化则回调永不触发。
-- 客户端代码不能引用主机端常量。`ZH_AUTO_ARCHIVE_DAYS_DEFAULT` 这类默认值
-  必须在 `lib/client.js` 内各自定义；引用未定义标识符会让整个插件 apply 抛
-  `ReferenceError`，导致插件完全无法加载（中文补全、设置页一起失效，控制台只
-  能看到 loader 的 `failed to apply` 错误）。
-- 编辑大段代码时留意编辑残留：多余的 `return`/`}` 会让 apply 提前闭合，语法检查
-  报 `Unexpected identifier 'exports'` 这类「错误位置在文件末尾」的假象。用
-  acorn 解析定位真正的失衡行：`new (require('acorn').Parser)({ ecmaVersion: 2022 })`
-  或 `node --check` 报错行之前逐块核对。
-- 跨服务功能的生命周期：所有订阅、定时器、DOM 元素和 style 标签都挂在
-  `ctx.effect` 的 disposer 上，插件卸载时一并清理。
+- 自动归档与归档视图使用官方 `sessions`、`workspaces`、`settingsScope`、`locale`、`slots` 服务；名称以运行版 `ui-conversation` 等插件的契约为准。
+- `sessions.list` / `workspaces.list` 的订阅建立后要立即按当前快照刷新一次归档视图，否则插件加载时已存在的会话不会进入首次计算。
+- `ZH_AUTO_ARCHIVE_DAYS_DEFAULT` 等跨端默认值必须在 Client 构建输入中显式维护并由测试校对；误引用 Host 常量会使整个经典 bundle apply 失败。
 
 ## 主机提示词
 
@@ -267,7 +249,7 @@ profile patch 只编辑带 `# dsh-zh:begin/end` 的受管块，同时兼容旧�
 1. 先确认需求属于用户行为、实现、架构还是排障文档。
 2. 修改上游术语或 DOM 标签前读取部署版原文。
 3. 修改标识符后全局搜索旧名和新名；`node --check` 不会发现未定义变量。
-4. 执行 `npm run typecheck`、`npm run build`，再执行 [`../AGENTS.md`](../AGENTS.md) 规定的语法检查和两组回归。
-5. 客户端改动刷新页面并检查 bundle 端点；主机改动查看 HMR 日志，必要时重启。
-6. 用户可见行为同步 `README.md` 与 `behavior.md`；新的故障模式更新
+4. 执行 `npm run typecheck`、`npm run build`，再执行 [`../AGENTS.md`](../AGENTS.md) 规定的语法检查和三组回归。
+5. 客户端/主机改动验证实际运行副本、Fiber 与 GUI；不能以重启代替热路径。
+6. 用户可见行为同步双语 README 与 `behavior.md`；新的故障模式更新
    `troubleshooting.md`；发布要求只写入 `release.md`。

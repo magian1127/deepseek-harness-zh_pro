@@ -20,8 +20,8 @@ git check-ignore bin/dsh-zh.mjs lib/index.js scripts/build-client.mjs
 ## 2. 版本与文档
 
 1. 更新 `package.json` 的版本。
-2. 同步 `README.md` 版本徽章。
-3. 用户可见行为变化同步 `README.md` 和 `docs/behavior.md`。
+2. 同步 `README.md` 与 `README.en.md` 版本徽章。
+3. 用户可见行为变化同步双语 README 和 `docs/behavior.md`。
 4. 架构、开发、排障或发布事实只更新各自权威文档，避免复制到其它文件。
 5. 确认 `LICENSE`、repository、homepage 和 bugs 信息正确。
 
@@ -34,11 +34,12 @@ node --check lib/client.js
 node --check lib/index.js
 node --check bin/dsh-zh.mjs
 node verify-pairs.cjs
+node verify-archive.cjs
 node verify-cli.mjs
 npm pack --dry-run --json
 ```
 
-`npm test` 可替代两条 verify 命令。检查 pack 清单至少包含：
+`npm test` 可替代三条 verify 命令。检查 pack 清单至少包含：
 
 - `lib/client.js`
 - `lib/index.js`
@@ -113,7 +114,7 @@ node bin/dsh-zh.mjs status --profile web
 
 # 打包产物：确认 npm 包导出和 CLI 都可用
 npm pack
-npm install --prefix .tmp-install .\\deepseek-harness-zh_pro-0.6.2.tgz
+npm install --prefix .tmp-install .\\deepseek-harness-zh_pro-0.7.0.tgz
 node .tmp-install/node_modules/deepseek-harness-zh_pro/bin/dsh-zh.mjs status --profile web
 ```
 
@@ -126,7 +127,7 @@ node .tmp-install/node_modules/deepseek-harness-zh_pro/bin/dsh-zh.mjs status --p
 ```powershell
 # 第一轮：官方持久通道
 dsh plugin --profile web add deepseek-harness-zh_pro
-# 重启 DSH 并检查 status
+# 在自然下一次启动或已验证的热通道后检查 status（代理不得主动重启 DSH）
 dsh plugin --profile web remove deepseek-harness-zh_pro
 
 # 第二轮：DSH 已运行、profile 为空时验证热通道
@@ -135,5 +136,5 @@ npx -y deepseek-harness-zh_pro install --profile web
 npx -y deepseek-harness-zh_pro remove --profile web
 ```
 
-官方 add 应在重启后由持久 bundle 挂载；热安装应在当前进程收敛为单实例；remove 应清理依赖、
-临时行和运行中条目。详细排查见 [`troubleshooting.md`](troubleshooting.md)。
+官方 add 应在**自然的下一次启动**后由持久 bundle 挂载；热安装应在当前进程收敛为单实例；remove 应清理依赖、
+临时行和运行中条目。代理不得为此主动重启 DSH。详细排查见 [`troubleshooting.md`](troubleshooting.md)。

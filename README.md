@@ -36,7 +36,7 @@
 中文补全只在中文界面生效；其余界面增强（统计全显示、自动展开思考、对话宽度、
 自动归档、会话删除按钮等）在中文和英文界面都生效，文案随界面语言切换。
 所有功能都在 **DSH 设置 → 增强设置** 中配置。完整默认值和边界见
-[行为契约](https://github.com/magian1127/deepseek-harness-zh_pro/blob/master/docs/behavior.md)。
+[行为契约](https://github.com/magian1127/deepseek-harness-zh_pro/blob/main/docs/behavior.md)。
 
 ## 环境要求
 
@@ -46,7 +46,7 @@
 ## 安装
 
 ```sh
-# 官方通道：安装后重启一次 DSH
+# 官方持久通道：自然下一次启动后生效
 dsh plugin --profile web add deepseek-harness-zh_pro
 
 # 热安装：DSH 正在运行时可立即生效
@@ -81,7 +81,7 @@ npx -y deepseek-harness-zh_pro status --profile web
 ## 更新
 
 重新执行安装命令即可更新依赖和持久 bundle。浏览器端内容更新后刷新页面；使用本地 link
-开发时，主机文件在 DSH HMR 服务可用时自动热重载，否则按日志提示重启。
+开发时，主机文件在 DSH HMR 服务可用时自动热重载；不可用时检查实际构建产物与自监视状态并报告，不能以重启代替。
 
 ## 卸载
 
@@ -98,7 +98,7 @@ npx -y deepseek-harness-zh_pro remove --profile web
 
 | 数据 | 存储位置 |
 | --- | --- |
-| 中文补全、统计、思考展开、默认展开行数、对话宽度、查看已归档 | 浏览器 localStorage：`deepseek-harness-zh_pro:enhancements` |
+| 中文补全、统计、思考展开/模式/方向、默认展开行数、对话宽度、查看已归档、会话删除按钮 | 浏览器 localStorage：`deepseek-harness-zh_pro:enhancements` |
 | 提示词开关、文本、注入目标、自动归档天数 | DSH `settings.yaml`，命名空间 `dsh-zh` |
 | 代理角色提示中文化、工具说明中文化 | DSH `settings.yaml`，命名空间 `dsh-zh` |
 
@@ -114,11 +114,11 @@ npx -y deepseek-harness-zh_pro remove --profile web
 
 ## 开发文档
 
-- [行为契约](https://github.com/magian1127/deepseek-harness-zh_pro/blob/master/docs/behavior.md)
-- [运行架构](https://github.com/magian1127/deepseek-harness-zh_pro/blob/master/docs/architecture.md)
-- [开发指南](https://github.com/magian1127/deepseek-harness-zh_pro/blob/master/docs/development.md)
-- [故障排查](https://github.com/magian1127/deepseek-harness-zh_pro/blob/master/docs/troubleshooting.md)
-- [发布流程](https://github.com/magian1127/deepseek-harness-zh_pro/blob/master/docs/release.md)
+- [行为契约](https://github.com/magian1127/deepseek-harness-zh_pro/blob/main/docs/behavior.md)
+- [运行架构](https://github.com/magian1127/deepseek-harness-zh_pro/blob/main/docs/architecture.md)
+- [开发指南](https://github.com/magian1127/deepseek-harness-zh_pro/blob/main/docs/development.md)
+- [故障排查](https://github.com/magian1127/deepseek-harness-zh_pro/blob/main/docs/troubleshooting.md)
+- [发布流程](https://github.com/magian1127/deepseek-harness-zh_pro/blob/main/docs/release.md)
 
 ## License
 
