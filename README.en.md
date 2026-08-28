@@ -30,6 +30,7 @@ explicit toggles, all off by default.
 | Prompt injection | Off | Injects an editable prompt into subsequent model requests, targeting either the initial system prompt or the first user prompt |
 | Auto-archive old sessions | 7 days | When the New Session screen opens, auto-archives sessions inactive beyond the configured days (hidden from the list only, log kept; 0 disables it) |
 | Archived sessions view | On | Adds an "Archive" button to every workspace row: clicking it hides that group's normal sessions and shows archived sessions directly in the official list flow (sorted by most recent activity, 5 by default, +5 per expand); the row overflow menu has rename / fork / unarchive / delete; clicking a row restores and opens the session |
+| Service monitor | On | Shows locally started services between the session list and Settings in the sidebar: a green dot plus the address (e.g. 127.0.0.1:81) and its uptime; click an entry to open that service in a new tab. Its collapsible card at the bottom of the settings page (official plugin-card style) adds custom watch entries (name + address, always shown: green dot online / gray dot offline) and a refresh interval (default 10s, 2-300) |
 | Delete session (recycle bin) | On | Adds a "Delete session" item to a session row's overflow menu in both UI languages; moves the session log directory into the OS recycle bin (Windows Recycle Bin / macOS Trash / XDG Trash) and removes its workspace slot (no restore position) |
 | Other features · Session delete button | On | A flat row in the final Other features settings section controls whether the overflow-menu delete item is shown |
 
@@ -102,7 +103,7 @@ after reinstalling.
 
 | Data | Storage |
 | --- | --- |
-| Chinese completion, stats, thinking expansion/mode/direction, default expanded lines, chat width, archived-session view, session-delete button | Browser localStorage: `deepseek-harness-zh_pro:enhancements` |
+| Chinese completion, stats, thinking expansion/mode/direction, default expanded lines, chat width, archived-session view, service monitor, session-delete button | Browser localStorage: `deepseek-harness-zh_pro:enhancements` |
 | Prompt toggle, text, injection target, auto-archive days | DSH `settings.yaml`, namespace `dsh-zh` |
 | Agent-role and tool-description localization | DSH `settings.yaml`, namespace `dsh-zh` |
 

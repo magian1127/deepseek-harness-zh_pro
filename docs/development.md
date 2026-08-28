@@ -64,7 +64,7 @@ npm test
   `zh-dict.ts` 整句覆盖/部分翻译、`dom-labels.ts` DOM 精确映射、`traj-patterns.ts` 轨迹正则）；
 - `src/lib/client/logic/`：状态与逻辑（`settings-store.ts`、`prompt-store.ts`、`format-utils.ts`、
   `settings-section.ts` 设置页组件、`auto-archive.ts`、`register.ts`、`dom-enhance.ts`、
-  `session-menu.ts` 会话删除菜单、`apply.ts`）；
+  `session-menu.ts` 会话删除菜单、`service-monitor.ts` 服务监控面板、`apply.ts`）；
 - `src/lib/client/entry.ts`：客户端行为说明；`scripts/build-client.mjs` 负责生成包壳与导出，
   同时更新 `lib/client/` 下的旧路径生成快照，便于兼容既有审查工具。
 
@@ -92,7 +92,8 @@ window.__ModuleLoader__.load({
 主机半边同样已拆分：`src/lib/index.ts` 只做装配（自迁移、提示词注册、热重载、监督器），
 子系统在 `src/lib/constants.ts`、`src/lib/util.ts`、`src/lib/schemastery.ts`、`src/lib/hot-reload.ts`、
 `src/lib/chinese-prompt.ts`、`src/lib/hot-mount.ts`、`src/lib/trash.ts`（跨平台回收站）、
-`src/lib/session-delete.ts`（会话删除编排与 `/dsh-zh/api` 路由）；CLI 实现拆在 `src/bin/cli/`，`src/bin/dsh-zh.mts`
+`src/lib/session-delete.ts`（会话删除编排与 `/dsh-zh/api` 路由）、`src/lib/service-monitor.ts`
+（服务监控：本机监听端口扫描 + 基线 diff + 快照）；CLI 实现拆在 `src/bin/cli/`，`src/bin/dsh-zh.mts`
 是转发导出并保留入口守卫的聚合入口。编译后对应的 `.js`/`.mjs` 文件供 DSH 和 npm 消费。
 
 client-modules 会缓存某个包名是否为有效客户端包。结构错误被判定为非客户端包后，本插件应先修正格式，再走受控动态 Client 通道或等待自然重启，不把重启作为开发动作。
@@ -167,6 +168,31 @@ client-modules 会缓存某个包名是否为有效客户端包。结构错误�
 外，其余 DOM 效果与界面语言无关：中文/英文界面都按各自开关生效；只有中文补全的文本
 改写和提示词提供方隐藏随 `activeIsZh()` 门控，切换英文时按反向表还原文本改写。
 
+## 设置页卡片与表单列对齐（服务监控实践）
+
+- **复刻官方插件卡**：设置 → 插件的收缩卡片在 `packages/client/ui-settings-plugins` 的
+  `PluginCard.tsx/.module.css`（本仓库无法 import 它，按样式复刻）：12px 圆角 +
+  `--dsw-alias-border-l2` 边框 + `--dsw-alias-bg-layer-3` 背景，头部是名称(15/600)压
+  描述(13)的两行按钮 + 14px 下箭头 chevron（展开 rotate 180°，160ms 过渡），展开态
+  背景/边框加深，body 由 `border-top` 分隔并左右缩进 16px。图标用内联 SVG 复刻
+  `IconChevronDownOutline14`，不引入官方包依赖。
+- **纵向容器里的三个 flex 陷阱**（都真实踩过）：
+  1. 行样式 `flex: 1 1 180px` 原为横向行设计，放进 `flex-direction: column` 容器后
+     `flex-basis` 变成**强制高度**（说明行被撑出 180px 空白）——column 子项必须
+     显式 `flex: '0 0 auto'` 或 `0 1 auto`；
+  2. 文本输入框有浏览器按 `size` 属性给的内在最小宽度（约 170px+），会压过
+     `flex-basis`——两行要对齐时输入框必须显式 `min-width: 0; box-sizing: border-box`；
+  3. 文本列与输入框逐像素对齐：文本列用与输入框相同的 flex/padding，并补
+     `border: 1px solid transparent` 抵消输入框边框厚度。
+- **布局错乱优先怀疑嵌套层级**：手工拼 `React.createElement` 的多层括号一旦错位，
+  语法仍可能通过（外层借到闭合），元素却渲染到目标容器**外面**（丢失卡片背景与
+  body 缩进，表现为整块错位）。排查：TypeScript `createSourceFile().parseDiagnostics`
+  隔离解析可疑块；最终以无头浏览器实测为准（见根 `docs/validation.md` 布局实测）。
+- **多行编辑在 CRLF 源文件上优先用脚本行级替换**（pwsh `ReadAllLines` + 定位 +
+  `WriteAllLines`），锚点按精确缩进与行尾核对；每步立即 `tsc -p tsconfig.client.json
+  --noEmit` 验证，不要攒到最后。
+- **轮询间隔可配置的功能用 setTimeout 自循环**：每轮从设置读最新间隔再排下一轮，
+  改「刷新间隔」即时生效，无需重建 Fiber/定时器。
 ## 设置与 React store
 
 本地增强设置使用稳定 localStorage 键和不可变快照。`useSyncExternalStore` 要求状态变化后

@@ -26,6 +26,7 @@
  *   - `schemastery.ts`：schemastery 加载；
  *   - `hot-reload.ts`：主机半边自监视热重载；
  *   - `chinese-prompt.ts`：中文优先提示（settings + 注入）；
+ *   - `service-monitor.ts`：服务监控（本机监听端口扫描 + 快照）；
  *   - `hot-mount.ts`：热挂载/卸载/快照；
  *   - 本文件：实例身份、自迁移、协调监督器与 apply 装配。
  *
@@ -47,6 +48,7 @@ import {
 } from './hot-mount.js'
 import { installSelfHotReload } from './hot-reload.js'
 import { installSessionDeleteRoute } from './session-delete.js'
+import { installServiceMonitor } from './service-monitor.js'
 import { argvProfile, localProfileDir, log, manifestPath, warn } from './util.js'
 import type { HostContext, PackageSnapshot } from './types.js'
 
@@ -193,6 +195,10 @@ export function apply(ctx: HostContext): void {
   // 「删除会话（回收站）」：与 settings 注册同门槛，避免热迁移窗口双实例
   // 重复注册路由；服务未就绪时由内部重试等待（见 session-delete.js）。
   if (ownsPromptRegistration(ctx)) installSessionDeleteRoute(ctx, () => resolveSessionDeleteDeps(ctx))
+  // 「服务监控」：主机端口扫描（基线 = 插件启动时已在监听的端口），
+  // 快照经 /dsh-zh/api/service-monitor 供网页轮询；与路由同门槛避免
+  // 热迁移窗口双实例重复扫描。
+  if (ownsPromptRegistration(ctx)) installServiceMonitor(ctx)
   ctx.effect(() => {
     const profileDir = localProfileDir()
     cleanHotDir(profileDir)

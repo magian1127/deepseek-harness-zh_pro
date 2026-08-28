@@ -11,7 +11,7 @@
 
 | 组件 | 运行位置 | 职责 |
 | --- | --- | --- |
-| `src/lib/client/`（TypeScript 源片段） | 浏览器 | 中文补全、DOM 增强、设置分区、会话删除菜单和本地设置；`data/` 为语言数据，`logic/` 为逻辑 |
+| `src/lib/client/`（TypeScript 源片段） | 浏览器 | 中文补全、DOM 增强、设置分区、会话删除菜单、服务监控面板和本地设置；`data/` 为语言数据，`logic/` 为逻辑 |
 | `lib/client.js` | 浏览器 | 由 `scripts/build-client.mjs` 转译并拼接 `src/lib/client/` 生成的经典脚本 bundle |
 | `src/lib/*.ts` → `lib/*.js` | DSH Node.js 进程 | settings 注册、提示词注入、会话删除/回收站路由、热装卸监督和主机热重载 |
 | `src/bin/*.mts` → `bin/*.mjs` | 命令行进程 | 安装、卸载、状态检查和 Windows 命令转发 |
@@ -21,8 +21,10 @@
 浏览器与主机不通过自定义 RPC 传递设置。客户端使用 DSH 官方 `settingsScope` 读写命名空间
 `dsh-zh`，主机使用 `settings.register` 和 `scope.watch` 消费同一份数据。
 
-「删除会话（回收站）」是唯一使用自定义 HTTP 通道的功能：浏览器通过 `/dsh-zh/api`
-路由请求会话删除（路由由主机注册到 DSH `webServer`，仅接受回环主机 + 同源请求）。
+「删除会话（回收站）」与「服务监控」共用自定义 HTTP 通道 `/dsh-zh/api`：前者浏览器
+POST 请求会话删除（路由由主机注册到 DSH `webServer`，仅接受回环主机 + 同源请求）；
+后者浏览器 GET `/dsh-zh/api/service-monitor` 轮询只读快照（数据来自 `service-monitor.ts`
+的定时端口扫描，基线 = 插件实例启动时已在监听的端口）。
 删除逻辑本身完全使用官方服务面：`sessionPersistence`（locate/readRaw/list）定位日志、
 `Workspace.detachSession` 移除账本槽位、`trash.ts` 把目录移入系统回收站。
 

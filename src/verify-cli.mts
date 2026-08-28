@@ -453,6 +453,82 @@ try {
   const unarchiveIdempotent = await sessionDelete.unarchiveSession(unarchiveDeps, 'session-arch-gone')
   check(unarchiveIdempotent, { ok: true, changed: false }, '会话不在归档集合时 changed=false')
 
+    // ---- 服务监控：netstat/ss 解析与基线 diff ----
+    const serviceMonitor = await import(`./lib/service-monitor.js?verify=sm-${Date.now()}-${Math.random()}`)
+    const winSample = [
+      '  协议  本地地址          外部地址        状态           PID',
+      '  TCP    127.0.0.1:81      0.0.0.0:0      LISTENING       4716',
+      '  TCP    [::1]:81          [::]:0         LISTENING       4716',
+      '  TCP    0.0.0.0:3080      0.0.0.0:0      LISTENING       600',
+      '  TCP    127.0.0.1:3080    127.0.0.1:52344 ESTABLISHED    600',
+    ].join('\n')
+    const winEndpoints = serviceMonitor.parseListeningEndpoints('win32', winSample)
+    check(JSON.stringify(winEndpoints), JSON.stringify([
+      { address: '127.0.0.1', port: 81 },
+      { address: '[::1]', port: 81 },
+      { address: '0.0.0.0', port: 3080 },
+    ]), '服务监控 win32 netstat 解析（LISTENING + IPv6 方括号 + 排除 ESTABLISHED）')
+
+    const ssSample = [
+      'State  Recv-Q Send-Q Local Address:Port  Peer Address:Port',
+      'LISTEN 0      128    127.0.0.1:3000       0.0.0.0:*',
+      'LISTEN 0      511    *:5173               *:*',
+      'LISTEN 0      128    [::]:8080             [::]:*',
+    ].join('\n')
+    check(JSON.stringify(serviceMonitor.parseListeningEndpoints('linux', ssSample)), JSON.stringify([
+      { address: '127.0.0.1', port: 3000 },
+      { address: '0.0.0.0', port: 5173 },
+      { address: '[::]', port: 8080 },
+    ]), '服务监控 linux ss 解析（* 规范为 0.0.0.0）')
+
+    const darwinSample = [
+      'tcp4  0      0  127.0.0.1.81    *.*   LISTEN      4716',
+      'tcp6  0      0  [::1].49152      *.*   LISTEN      900',
+      'tcp4  0      0  127.0.0.1.3080   *.*   LISTEN      600',
+    ].join('\n')
+    check(JSON.stringify(serviceMonitor.parseListeningEndpoints('darwin', darwinSample)), JSON.stringify([
+      { address: '127.0.0.1', port: 81 },
+      { address: '[::1]', port: 49152 },
+      { address: '127.0.0.1', port: 3080 },
+    ]), '服务监控 darwin netstat 点分端口解析')
+
+    const netstatPosix = [
+      'tcp        0      0 0.0.0.0:22          0.0.0.0:*               LISTEN',
+      'tcp        0      0 127.0.0.1:6379      0.0.0.0:*               LISTEN',
+    ].join('\n')
+    check(JSON.stringify(serviceMonitor.parseListeningEndpoints('linux', netstatPosix)), JSON.stringify([
+      { address: '0.0.0.0', port: 22 },
+      { address: '127.0.0.1', port: 6379 },
+    ]), '服务监控 linux netstat 解析')
+
+    // 基线 diff：基线端口永不显示；新端口记录 since；停止监听即移除、重现视为新条目。
+    const smNow = 1700000000000
+    const smBaseline = new Set(['127.0.0.1|3080', '0.0.0.0|135'])
+    let smItems = serviceMonitor.computeMonitoredEndpoints(smBaseline, [], new Set(['127.0.0.1|3080', '127.0.0.1|81', '[::1]|81']), smNow)
+    check(JSON.stringify(smItems), JSON.stringify([
+      { address: '127.0.0.1', port: 81, since: smNow },
+      { address: '[::1]', port: 81, since: smNow },
+    ]), '服务监控 基线外新端口进入监控（基线内端口不显示）')
+    smItems = serviceMonitor.computeMonitoredEndpoints(smBaseline, smItems, new Set(['127.0.0.1|3080', '127.0.0.1|81']), smNow + 2000)
+    check(JSON.stringify(smItems), JSON.stringify([
+      { address: '127.0.0.1', port: 81, since: smNow },
+    ]), '服务监控 停止监听的端点移除且旧条目 since 保留')
+    smItems = serviceMonitor.computeMonitoredEndpoints(smBaseline, smItems, new Set(['127.0.0.1|81', '[::1]|81']), smNow + 4000)
+    check(smItems.length, 2, '服务监控 端口重现按新条目记录')
+    // ---- 服务监控：自定义监控项 TCP 探活（真实 listener 在线 / 关闭端口离线） ----
+    const netModule = await import('node:net')
+    const probeServer = netModule.createServer()
+    await new Promise<void>((resolve) => { probeServer.listen(0, '127.0.0.1', () => resolve()) })
+    const probeAddress = probeServer.address() as { port: number }
+    const probed = await serviceMonitor.probeTargets([
+      { name: 'self', host: '127.0.0.1', port: probeAddress.port },
+      { name: 'closed', host: '127.0.0.1', port: 1 },
+      'junk' as never,
+    ])
+    check(probed.length, 2, '服务监控探活 只接受结构合法的自定义监控项')
+    check(probed[0] !== undefined && probed[0].online, true, '服务监控探活 监听中的端口在线')
+    check(probed[1] !== undefined && probed[1].online, false, '服务监控探活 未监听的端口离线')
+    await new Promise<void>((resolve) => { probeServer.close(() => resolve()) })
   console.log(`OK: CLI/主机全部 ${checks} 项校验通过`)
 } finally {
   if (originalHome === undefined) delete process.env.DSH_HOME

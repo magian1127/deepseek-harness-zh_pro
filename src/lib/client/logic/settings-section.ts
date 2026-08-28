@@ -94,6 +94,36 @@ const ZhSettingsSection = function (props) {
   const promptDraft = promptDraftState[0]
   const setPromptDraft = promptDraftState[1]
   const shownPromptText = promptDraft !== null ? promptDraft : promptBaseText
+  // ---- 「服务监控」折叠分组状态：折叠态持久化到 localStorage，草稿与错误是本地态 ----
+  const svcOpenState = React.useState(snapshot.serviceMonitorSettingsOpen === true)
+  const svcOpen = svcOpenState[0]
+  const setSvcOpen = svcOpenState[1]
+  const svcDraftState = React.useState({ name: '', addr: '' })
+  const svcDraft = svcDraftState[0]
+  const setSvcDraft = svcDraftState[1]
+  const svcErrorState = React.useState(false)
+  const svcError = svcErrorState[0]
+  const setSvcError = svcErrorState[1]
+  const toggleSvcOpen = function () {
+    const next = !(snapshot.serviceMonitorSettingsOpen === true)
+    settingsStore.set('serviceMonitorSettingsOpen', next)
+    setSvcOpen(next)
+  }
+  const addServiceTarget = function () {
+    const parsed = parseServiceAddress(svcDraft.addr)
+    if (parsed === null) { setSvcError(true); return }
+    setSvcError(false)
+    const next = snapshot.serviceMonitorTargets.concat([
+      { name: svcDraft.name.trim().slice(0, 60), host: parsed.host, port: parsed.port },
+    ])
+    settingsStore.set('serviceMonitorTargets', next)
+    setSvcDraft({ name: '', addr: '' })
+  }
+  const removeServiceTarget = function (index) {
+    const next = snapshot.serviceMonitorTargets.slice()
+    next.splice(index, 1)
+    settingsStore.set('serviceMonitorTargets', next)
+  }
   const toggle = function (on, onChange, disabled, label) {
     return React.createElement('button', {
       type: 'button', 'aria-label': label, 'aria-pressed': on,
@@ -124,6 +154,81 @@ const ZhSettingsSection = function (props) {
   // border-bottom 分隔。
   const group = function (key, ...rows) {
     return React.createElement('div', { key: key, style: { display: 'flex', flexDirection: 'column' } }, ...rows)
+  }
+  // 服务监控分组局部样式：文本输入（名称/地址）、幽灵删除按钮、添加按钮、折叠头。
+  const svcTextNameStyle = {
+      flex: '0 1 120px', minWidth: 0, boxSizing: 'border-box',
+    border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
+    background: 'var(--dsw-specific-input-minor, transparent)',
+    color: 'var(--dsw-alias-label-primary, inherit)',
+    fontSize: 13, lineHeight: '20px',
+  }
+  const svcTextAddrStyle = Object.assign({}, svcTextNameStyle, { flex: '0 1 220px' })
+    const svcGhostButtonStyle = {
+    flex: 'none', padding: '4px 12px', borderRadius: 8,
+    border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
+    background: 'transparent', color: 'var(--dsw-alias-label-secondary, inherit)',
+    cursor: 'pointer', font: 'inherit', fontSize: 13, lineHeight: '20px',
+  }
+  const svcAddButtonStyle = {
+    flex: 'none', padding: '4px 14px', borderRadius: 8, border: 0,
+    background: 'var(--dsw-alias-state-business-primary, #4D6BFE)',
+    color: 'var(--dsw-alias-label-primary-inverted, #fff)',
+    cursor: 'pointer', font: 'inherit', fontSize: 13, lineHeight: '20px',
+  }
+  // 官方插件卡（ui-settings-plugins PluginCard）收缩样式的复刻：
+  // 12px 圆角边框卡片，header 是名称(15/600)压描述(13)的两行按钮，
+  // 展开时背景变 layer-2、chevron 旋转 180°，body 由 top 分隔线开始。
+  const svcCardBaseStyle = {
+    border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.28))',
+    borderRadius: 12,
+    background: 'var(--dsw-alias-bg-layer-3, transparent)',
+    transition: 'border-color .16s, background .16s',
+  }
+  const svcCardStyle = function (open) {
+    return Object.assign({}, svcCardBaseStyle, open === true ? {
+    background: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.06))',
+    borderColor: 'var(--dsw-alias-label-dimmed, rgba(127,127,127,0.45))',
+    } : {})
+  }
+  const svcCardHeadStyle = {
+    width: '100%', appearance: 'none', border: 0, background: 'none',
+    font: 'inherit', color: 'inherit', textAlign: 'left', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', borderRadius: 12,
+  }
+  const svcCardHeadTextStyle = { flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }
+  const svcCardNameStyle = { fontSize: 15, fontWeight: 600, lineHeight: '1.4', color: 'var(--dsw-alias-label-primary, inherit)' }
+  const svcCardDescStyle = { fontSize: 13, lineHeight: 1.5, color: 'var(--dsw-alias-label-tertiary, #666)' }
+  const svcCardBadgeStyle = {
+    flex: 'none', borderRadius: 999, padding: '1px 8px', fontSize: 11, lineHeight: '17px',
+    fontWeight: 500, whiteSpace: 'nowrap',
+    background: 'var(--dsw-alias-bg-module-platform, rgba(127,127,127,0.12))',
+    color: 'var(--dsw-alias-label-secondary, inherit)',
+  }
+  const svcChevronStyle = function (open) {
+    return {
+    flex: 'none', display: 'inline-flex', alignItems: 'center',
+    color: 'var(--dsw-alias-label-tertiary, #666)',
+    transition: 'transform .16s',
+    transform: open === true ? 'rotate(180deg)' : 'rotate(0deg)',
+    }
+  }
+    const svcTargetNameStyle = {
+      flex: '0 1 120px', minWidth: 0, boxSizing: 'border-box',
+      border: '1px solid transparent',
+      fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-primary, inherit)',
+      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    }
+    const svcTargetAddrStyle = {
+      flex: '0 1 220px', minWidth: 0, boxSizing: 'border-box',
+      border: '1px solid transparent',
+      fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary, inherit)',
+      fontVariantNumeric: 'tabular-nums',
+      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    }
+  const svcCardBodyStyle = {
+    borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.28))',
+    margin: '0 16px', padding: '4px 0 12px',
   }
   return React.createElement('div', { style: zhSectionStyle },
     React.createElement('h3', { style: zhTitleStyle }, t('nav')),
@@ -327,5 +432,109 @@ const ZhSettingsSection = function (props) {
           toggle(snapshot.deleteSessionEnabled, function () {
             settingsStore.set('deleteSessionEnabled', !snapshot.deleteSessionEnabled)
           }, false, t('deleteSession')), true)),
-    ))
+      // ---- 「服务监控」卡片（复刻官方插件设置卡的收缩样式，位于设置页最下方） ----
+        React.createElement('div', {
+          key: 'serviceMonitorCard',
+          style: svcCardStyle(svcOpen === true),
+        },
+          React.createElement('button', {
+            type: 'button',
+            'aria-expanded': svcOpen === true,
+            'aria-label': t('serviceMonitor'),
+            onClick: function () { toggleSvcOpen() },
+            style: svcCardHeadStyle,
+          },
+            React.createElement('span', { style: svcCardHeadTextStyle },
+              React.createElement('span', { style: svcCardNameStyle }, t('serviceMonitor')),
+              React.createElement('span', { style: svcCardDescStyle }, t('serviceMonitorCardDesc'))),
+            snapshot.serviceMonitorTargets.length > 0
+              ? React.createElement('span', { style: svcCardBadgeStyle }, String(snapshot.serviceMonitorTargets.length))
+              : null,
+            React.createElement('span', { style: svcChevronStyle(svcOpen === true), 'aria-hidden': 'true' },
+              React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none' },
+                React.createElement('path', {
+                  d: 'M3.5 5.5L7 9L10.5 5.5',
+                  stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round',
+                })))),
+          svcOpen === true && React.createElement('div', { style: svcCardBodyStyle },
+            row('serviceMonitor', t('serviceMonitor'), t('serviceMonitorDesc'),
+              toggle(snapshot.serviceMonitorEnabled, function () {
+                settingsStore.set('serviceMonitorEnabled', !snapshot.serviceMonitorEnabled)
+              }, false, t('serviceMonitor')),
+              true),
+            row('serviceMonitorInterval', t('serviceMonitorInterval'), t('serviceMonitorIntervalDesc'),
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                React.createElement('input', {
+                  type: 'number', min: 2, max: 300, step: 1,
+                  value: snapshot.serviceMonitorIntervalSec,
+                  style: inputStyle,
+                  'aria-label': t('serviceMonitorInterval'),
+                  onChange: function (event) {
+                    const n = parseInt(event.target.value, 10)
+                    if (!isNaN(n)) settingsStore.set('serviceMonitorIntervalSec', Math.max(2, Math.min(300, Math.round(n))))
+                  },
+                }),
+                React.createElement('span', { style: zhDescStyle }, t('serviceMonitorIntervalUnit')))),
+            React.createElement('div', {
+              key: 'serviceTargets',
+                style: { display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '8px' },
+            },
+                React.createElement('div', { style: Object.assign({}, zhRowTextStyle, { flex: '0 0 auto' }) },
+                React.createElement('div', { style: zhRowTitleStyle }, t('serviceTargetsLabel')),
+                React.createElement('div', { style: zhDescStyle }, t('serviceTargetsDesc'))),
+              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+                React.createElement('input', {
+                  type: 'text',
+                  value: svcDraft.name,
+                  placeholder: t('serviceTargetNamePlaceholder'),
+                  'aria-label': t('serviceTargetNamePlaceholder'),
+                  style: svcTextNameStyle,
+                  onChange: function (event) {
+                    setSvcError(false)
+                    setSvcDraft({ name: event.target.value, addr: svcDraft.addr })
+                  },
+                }),
+                React.createElement('input', {
+                  type: 'text',
+                  value: svcDraft.addr,
+                  placeholder: t('serviceTargetAddrPlaceholder'),
+                  'aria-label': t('serviceTargetAddrPlaceholder'),
+                  style: svcTextAddrStyle,
+                  onChange: function (event) {
+                    setSvcError(false)
+                    setSvcDraft({ name: svcDraft.name, addr: event.target.value })
+                  },
+                  onKeyDown: function (event) {
+                    if (event.key === 'Enter') addServiceTarget()
+                  },
+                }),
+                React.createElement('button', {
+                  type: 'button',
+                  onClick: function () { addServiceTarget() },
+                  style: svcAddButtonStyle,
+                }, t('serviceTargetAdd'))),
+              svcError === true && React.createElement('div', {
+                style: { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary, #d93026)' },
+                }, t('serviceTargetInvalid'))),
+                snapshot.serviceMonitorTargets.map(function (item, index) {
+                  // 条目行与添加行三列对齐：名字列 / 地址列 / 删除按钮，
+                  // 列宽与 flex 与两个输入框一致，文字 padding 同输入框，
+                  // 使条目文字与上方输入框文字垂直对齐。
+                  const targetAddr = item.host + ':' + String(item.port)
+                  const targetLabel = item.name === '' ? '—' : item.name
+                  return React.createElement('div', {
+                    key: 'svc-target-' + String(index),
+                    title: targetLabel === '—' ? targetAddr : (item.name + '（' + targetAddr + '）'),
+                    style: { display: 'flex', alignItems: 'center', gap: '8px' },
+                  },
+                    React.createElement('span', { style: svcTargetNameStyle }, targetLabel),
+                    React.createElement('span', { style: svcTargetAddrStyle }, targetAddr),
+                    React.createElement('button', {
+                      type: 'button',
+                      'aria-label': t('serviceTargetRemove'),
+                      onClick: function () { removeServiceTarget(index) },
+                      style: svcGhostButtonStyle,
+                    }, t('serviceTargetRemove')))
+                }),
+    ))))
 }

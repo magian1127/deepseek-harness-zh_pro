@@ -30,6 +30,7 @@ const BODY_ORDER = [
   'logic/auto-archive.ts',
   'logic/session-menu.ts',
   'logic/archive-view.ts',
+  'logic/service-monitor.ts',
   'logic/register.ts',
   'logic/dom-enhance.ts',
   'logic/apply.ts',

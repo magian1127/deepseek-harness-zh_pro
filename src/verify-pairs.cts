@@ -999,6 +999,22 @@ check(settingsStoreUnderTest.getSnapshot().deleteSessionEnabled, false, '会话�
 settingsStoreUnderTest.set('deleteSessionEnabled', true)
 check(settingsStoreUnderTest.getSnapshot().deleteSessionEnabled, true, '会话删除按钮 可重新开启')
 
+// ---- 服务监控开关（设置 store 默认值与读写） ----
+check(settingsStoreUnderTest.getSnapshot().serviceMonitorEnabled, true, '服务监控 默认开启')
+settingsStoreUnderTest.set('serviceMonitorEnabled', false)
+check(settingsStoreUnderTest.getSnapshot().serviceMonitorEnabled, false, '服务监控 可关闭')
+settingsStoreUnderTest.set('serviceMonitorEnabled', true)
+check(settingsStoreUnderTest.getSnapshot().serviceMonitorEnabled, true, '服务监控 可重新开启')
+
+// ---- 服务监控扩展字段（刷新间隔与自定义监控项） ----
+check(settingsStoreUnderTest.getSnapshot().serviceMonitorIntervalSec, 10, '服务监控 刷新间隔默认 10 秒')
+settingsStoreUnderTest.set('serviceMonitorIntervalSec', 5)
+check(settingsStoreUnderTest.getSnapshot().serviceMonitorIntervalSec, 5, '服务监控 刷新间隔可修改')
+check(JSON.stringify(settingsStoreUnderTest.getSnapshot().serviceMonitorTargets), '[]', '服务监控 自定义监控项默认为空')
+settingsStoreUnderTest.set('serviceMonitorTargets', [{ name: '测试', host: '127.0.0.1', port: 81 }])
+check(JSON.stringify(settingsStoreUnderTest.getSnapshot().serviceMonitorTargets), '[{"name":"测试","host":"127.0.0.1","port":81}]', '服务监控 自定义监控项可添加')
+settingsStoreUnderTest.set('serviceMonitorTargets', [])
+
 // ---- 查看已归档开关（设置 store 默认值与读写） ----
 check(settingsStoreUnderTest.getSnapshot().archiveViewEnabled, true, '查看已归档 默认开启')
 settingsStoreUnderTest.set('archiveViewEnabled', false)

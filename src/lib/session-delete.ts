@@ -31,6 +31,10 @@
 //   5. 回收站清单：由本文件维护的内存清单 + 每项的唯一 token，通过
 //      路由 /dsh-zh/api 提供给网页（列表/恢复）。清单在进程重启后
 //      丢失属预期（回收站内容已由操作系统管理）。
+//   6. GET /dsh-zh/api/service-monitor：「服务监控」只读快照（数据由
+//      service-monitor.ts 的端口扫描维护），仅此一个 GET 端点。
+//      路由 /dsh-zh/api 提供给网页（列表/恢复）。清单在进程重启后
+//      丢失属预期（回收站内容已由操作系统管理）。
 
 import { dirname } from 'node:path'
 import { rm } from 'node:fs/promises'
@@ -39,6 +43,7 @@ import { PKG } from '../bin/dsh-zh.mjs'
 import { ZH_SETTINGS_NS } from './constants.js'
 import { log, warn } from './util.js'
 import { trashItem, restoreItem } from './trash.js'
+import { getServiceMonitorSnapshot, probeTargets } from './service-monitor.js'
 import type { HostContext } from './types.js'
 
 // 会话 id 校验：形如 /^[A-Za-z0-9_-]{1,128}$/ 的字符串，防御路径注入。
@@ -463,7 +468,7 @@ function writeJson(res: RouteResponse, status: number, body: unknown): void {
 }
 
 /**
- * 安装 /dsh-zh/api 路由：会话删除 / 回收站列表 / 恢复。
+ * 安装 /dsh-zh/api 路由：会话删除 / 回收站列表 / 恢复 + GET 服务监控快照。
  * @param ctx - 主机上下文（webServer 服务）。
  * @param deps - 服务面解析器（惰性读取，支持 HMR 后重新解析）。
  */
@@ -473,31 +478,47 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
     if (webServer === undefined || webServer === null || typeof webServer.register !== 'function') {
       return false
     }
-    const handler = async (req: RouteRequest, res: RouteResponse): Promise<void> => {
-      if (!isTrustedApiRequest(req)) {
-        writeJson(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } })
-        return
-      }
-      if (req.method !== 'POST') {
-        writeJson(res, 405, { ok: false, error: { code: 'method-error', message: 'method not allowed' } })
-        return
-      }
-      let payload: Record<string, unknown>
-      try {
-        const body = await readJsonBody(req)
-        if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-          writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'payload must be a JSON object' } })
+      const handler = async (req: RouteRequest, res: RouteResponse): Promise<void> => {
+        if (!isTrustedApiRequest(req)) {
+          writeJson(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } })
           return
         }
-        payload = body as Record<string, unknown>
-      } catch (error) {
-        writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: error instanceof Error ? error.message : String(error) } })
-        return
-      }
+        const url = new URL(req.url ?? '/', 'http://dsh.internal')
+        const pathname = url.pathname
+        // GET 仅服务「服务监控」只读快照（端口扫描由 service-monitor.ts 维护）。
+        if (req.method === 'GET') {
+          if (pathname === '/dsh-zh/api/service-monitor') {
+            writeJson(res, 200, { ok: true, value: getServiceMonitorSnapshot() })
+            return
+          }
+          writeJson(res, 404, { ok: false, error: { code: 'not-found', message: 'unknown method' } })
+          return
+        }
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { ok: false, error: { code: 'method-error', message: 'method not allowed' } })
+          return
+        }
+        let payload: Record<string, unknown>
+        try {
+          const body = await readJsonBody(req)
+          if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+            writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'payload must be a JSON object' } })
+            return
+          }
+          payload = body as Record<string, unknown>
+        } catch (error) {
+          writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: error instanceof Error ? error.message : String(error) } })
+          return
+        }
 
-      const url = new URL(req.url ?? '/', 'http://dsh.internal')
-      const pathname = url.pathname
-      try {
+        try {
+        if (pathname === '/dsh-zh/api/service-monitor') {
+          // 自定义监控项探活：请求体 { targets: [{ name, host, port }] }，
+          // 逐项 TCP connect 判定在线状态，与自动发现快照一并返回。
+          const probeResults = await probeTargets(payload.targets)
+          writeJson(res, 200, { ok: true, value: Object.assign(getServiceMonitorSnapshot(), { targets: probeResults }) })
+          return
+        }
         if (pathname === '/dsh-zh/api/session.unarchive') {
           const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
           if (!isValidSessionId(sessionId)) {
