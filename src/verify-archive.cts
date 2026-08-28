@@ -382,9 +382,9 @@ const workspacesService = {
 }
 const registeredDicts = {}
 const localeListeners = []
-// 模拟真实 DSH locale：中文补全包装 lookup（优先 ZH['*'] 通用词兜底）。
-// 真实环境里 dom-enhance 包装 locale.lookup，先查 ZH['*'] 再回退官方词典；
-// dsh-zh-archive 命名空间必须跳过兜底（词典自备完整译文，expand/empty
+// 模拟真实 DSH locale：中文补全包装 translate（模板解析时先查 ZH['*'] 通用词
+// 兜底）。真实环境里 dom-enhance 覆盖 locale.translate（DSH 0.1.2 起 lookup 不再
+// 公开），dsh-zh-archive 命名空间必须跳过兜底（词典自备完整译文，expand/empty
 // 等键不能被 ZH['*'] 的「展开」「空」拦截）。
 const zhStar = { more: '更多', expand: '展开', collapse: '收起', empty: '空', delete: '删除', rename: '重命名' }
 const localeService = {

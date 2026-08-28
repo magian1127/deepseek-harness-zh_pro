@@ -124,13 +124,25 @@ function trimNumber(x) {
   return s
 }
 
-/** 参数需要转换的键（ns -> key -> 参数名 -> 转换函数）。 */
+/** 与上游 translate 相同规则的 {name} 插值：键存在则替换，否则保留占位符。 */
+function interpolateZh(template, params) {
+  if (params === undefined || params === null || typeof params !== 'object') return template
+  return String(template).replace(/\{(\w+)\}/g, function (match, name) {
+    return name in params ? String(params[name]) : match
+  })
+}
+
+/** 参数需要转换的键（ns -> key -> 参数名 -> 转换函数）。
+ * DSH 0.1.2 起统计与消息键从 conversation 拆到 chat 命名空间
+ * （ui-chat 包）；input.accessMode 仍留在 conversation（ui-conversation 包）。 */
 const PARAM_TRANSFORMS = {
-  conversation: {
+  chat: {
     'stats.llm': { duration: formatEnDurationToZh },
     'stats.toolCall': { duration: formatEnDurationToZh },
     'stats.ttftAverage': { duration: formatEnDurationToZh },
     'stats.tokens': { input: formatCompactNumberToZh, output: formatCompactNumberToZh },
+  },
+  conversation: {
     'input.accessMode': { name: function (raw) {
       const v = PERMISSION_NAMES[String(raw)]
       return v !== undefined ? v : String(raw)

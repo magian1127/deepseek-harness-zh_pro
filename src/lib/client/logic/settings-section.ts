@@ -202,20 +202,7 @@ const ZhSettingsSection = function (props) {
           },
             React.createElement('option', { value: 'button' }, t('thinkModeButton')),
             React.createElement('option', { value: 'scroll' }, t('thinkModeScroll'))))),
-      row('chatWidth', t('chatWidth'), t('chatWidthDesc'),
-        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-          toggle(snapshot.chatWidthEnabled, function () {
-            settingsStore.set('chatWidthEnabled', !snapshot.chatWidthEnabled)
-          }, false, t('chatWidth')),
-          snapshot.chatWidthEnabled ? React.createElement('input', {
-            type: 'number', min: 50, max: 100, step: 5, value: snapshot.chatWidth, style: inputStyle,
-            'aria-label': t('chatWidthPercent'),
-            onChange: function (event) {
-              const n = parseInt(event.target.value, 10)
-              if (!isNaN(n)) settingsStore.set('chatWidth', Math.max(50, Math.min(100, n)))
-            },
-          }) : null,
-          snapshot.chatWidthEnabled ? React.createElement('span', { style: zhDescStyle }, '%') : null)),
+      // 对话宽度设置已移除：DSH 0.1.2 起上游原生支持宽度自适应与拖拽调节。
       // 归档分组：自动归档旧会话 + 查看已归档同属归档相关设置，共用一个容器
       // （组内行不画分隔线，组与组之间仍由各自行的 border-bottom 分隔）。
       group('archiveGroup',

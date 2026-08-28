@@ -1,12 +1,14 @@
 // 整句覆盖（命名空间 -> 键 -> 全中文值）。
 // 仅保留「必须改写整句」的键；能只换个别词的键一律放 ZH_PARTIAL。
+// DSH 0.1.2 起统计与消息键属 chat 命名空间（ui-chat 包），
+// conversation 命名空间只保留 access/ask 等骨架键（ui-conversation 包）。
 const ZH = {
-  conversation: {
+  chat: {
     // 重试倒计时的 lookup 兜底；正常路径在 translate 里整句拼装。
     'message.retry.status': '{label}（{retry}/{maximum}） · {seconds}秒',
-  },
-  model: {
-    retry: '重试',
+    // 上游新增「对话显示」设置行的两档未翻译：Normal/Compact。
+    'settings.transcript.normal': '标准',
+    'settings.transcript.compact': '紧凑',
   },
   cordis: {
     // 上游 zh 词典漏翻：Cordis 面板按钮标题与运行数量。
@@ -33,19 +35,24 @@ const ZH = {
 // 上游改词后未命中的片段原样保留 —— 正是「跟随上游」而不是整句覆盖。
 // 条目可以是术语名（查 TERMS），也可以是 [原文, 译文] 字面对（仅此键使用）。
 const ZH_PARTIAL = {
-  conversation: {
+  chat: {
     'stats.llm': ['llm'],
     'stats.ttftAverage': ['token'],
     'stats.tokensPerSecond': ['tokPerSec'],
     'stats.tokens': ['tok'],
-    'access.confirm.title': ['fullAccess'],
-    'access.confirm.description': ['fullAccess', 'agent'],
-    'access.confirm.enable': ['fullAccess'],
     'message.compaction.completed': ['token'],
     'message.unknownSurface': ['surface'],
     'message.maxTokens': ['token'],
     'message.ttft': ['token'],
     'message.tokensPerSecond': ['tokPerSec'],
+    // 上游新增的轮次过程摘要行：'{count} 个 subagent'。
+    'message.turnProcess.subagents.one': ['subagent'],
+    'message.turnProcess.subagents.other': ['subagent'],
+  },
+  conversation: {
+    'access.confirm.title': ['fullAccess'],
+    'access.confirm.description': ['fullAccess', 'agent'],
+    'access.confirm.enable': ['fullAccess'],
   },
   trajectory: {
     // 该命名空间 zh 词典整体还是英文，按整条短语替换；上游补齐 zh 后这些术语自然不再命中。
@@ -101,8 +108,8 @@ const ZH_PARTIAL = {
     nav: ['agentLabel'],
     sectionIntro: ['agentLabel'],
     presetStandardDescription: ['agentLabel', 'shell', 'skills'],
-    presetCodeName: ['ptc'],
-    presetCodeDescription: ['codeModeSdk'],
+    // presetPtcName/presetPtcDescription（旧名 presetCodeName/presetCodeDescription）：
+    // 上游 0.1.2 已补全中文（「PTC 模式」/完整中文说明），不再需要本插件覆盖。
     presetMinimalDescription: ['bash', 'strReplaceEditor', 'agentLabel'],
     presetCordisDescription: ['agentLabel', 'preset'],
   },

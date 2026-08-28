@@ -1,6 +1,8 @@
 // 增强设置状态（localStorage 持久化，键名稳定）。
+// chatWidthEnabled/chatWidth 已随「对话宽度」功能移除（DSH 0.1.2 上游原生支持
+// 宽度调节）；localStorage 里残留的旧字段读取时被忽略。
 const SETTINGS_KEY = 'deepseek-harness-zh_pro:enhancements'
-const SETTINGS_DEFAULTS = { zhComplete: true, statsFull: true, chatWidthEnabled: true, chatWidth: 90, thinkingAuto: true, thinkMaxLines: 20, thinkMaxLinesFrom: 'latest', thinkMode: 'button', deleteSessionEnabled: true, archiveViewEnabled: true }
+const SETTINGS_DEFAULTS = { zhComplete: true, statsFull: true, thinkingAuto: true, thinkMaxLines: 20, thinkMaxLinesFrom: 'latest', thinkMode: 'button', deleteSessionEnabled: true, archiveViewEnabled: true }
 const SETTINGS_NS = 'dsh-zh-settings'
 let settingsSnapshot = (function () {
   try {
@@ -10,8 +12,6 @@ let settingsSnapshot = (function () {
       return {
         zhComplete: parsed.zhComplete !== false,
         statsFull: parsed.statsFull !== false,
-        chatWidthEnabled: parsed.chatWidthEnabled !== false,
-        chatWidth: typeof parsed.chatWidth === 'number' ? Math.max(50, Math.min(100, Math.round(parsed.chatWidth))) : SETTINGS_DEFAULTS.chatWidth,
         thinkingAuto: parsed.thinkingAuto !== false,
         thinkMaxLines: typeof parsed.thinkMaxLines === 'number' ? Math.max(0, Math.min(200, Math.round(parsed.thinkMaxLines))) : SETTINGS_DEFAULTS.thinkMaxLines,
         thinkMaxLinesFrom: parsed.thinkMaxLinesFrom === 'earliest' ? 'earliest' : SETTINGS_DEFAULTS.thinkMaxLinesFrom,

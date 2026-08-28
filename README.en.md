@@ -5,7 +5,7 @@
 **语言 / Language:** [中文](README.md) · [English](README.en.md)
 
 <p align="center">
-  <img alt="Version 0.7.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.7.0-5965d8">
+  <img alt="Version 0.8.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.8.0-5965d8">
   <img alt="Interface Chinese" src="https://img.shields.io/badge/%E7%95%8C%E9%9D%A2-%E4%B8%AD%E6%96%87-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -27,7 +27,6 @@ explicit toggles, all off by default.
 | Auto-expand latest thinking | On | Expands the newest thinking output as it streams in and collapses the previous auto-expanded one when a new one appears |
 | Default expanded lines | 20 lines | Limits an expanded thinking block to N visible lines; 0 disables the limit |
 | Expand mode | Button mode | Button mode reveals more lines in batches; scroll mode keeps an independent scrolling viewport, with the configured earliest/latest direction controlling its initial position |
-| Chat width | On, 90% | Adjusts the chat column width by 50%–100% on large screens, splitting the side margins evenly |
 | Prompt injection | Off | Injects an editable prompt into subsequent model requests, targeting either the initial system prompt or the first user prompt |
 | Auto-archive old sessions | 7 days | When the New Session screen opens, auto-archives sessions inactive beyond the configured days (hidden from the list only, log kept; 0 disables it) |
 | Archived sessions view | On | Adds an "Archive" button to every workspace row: clicking it hides that group's normal sessions and shows archived sessions directly in the official list flow (sorted by most recent activity, 5 by default, +5 per expand); the row overflow menu has rename / fork / unarchive / delete; clicking a row restores and opens the session |

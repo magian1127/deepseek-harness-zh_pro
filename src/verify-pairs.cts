@@ -5,15 +5,21 @@ const fs = require('fs')
 // ---------- 上游 zh 词典（摘自 checkout packages/client/**/locales.ts） ----------
 const UPSTREAM = {
   conversation: {
+    'hint.goal.active': '当前目标进行中。可输入 edit 修改 / pause 暂停 / resume 继续 / clear 清除',
+    'access.confirm.title': '确认启用 Full access？',
+    'access.confirm.description': '启用 Full access 后，agent 将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
+    'access.confirm.enable': '启用 Full access',
+    'input.accessMode': '访问模式，当前：{name}',
+  },
+  // DSH 0.1.2：统计与消息键由 conversation 拆到 chat（ui-chat 包）。
+  chat: {
     'stats.llm': 'LLM {duration}',
     'stats.toolCall': '工具调用 {duration}',
     'stats.ttftAverage': '首 token 平均 {duration}',
     'stats.tokensPerSecond': '{throughput} tok/s',
     'stats.tokens': '输入 {input} tok · 输出 {output} tok',
-    'hint.goal.active': '当前目标进行中。可输入 edit 修改 / pause 暂停 / resume 继续 / clear 清除',
-    'access.confirm.title': '确认启用 Full access？',
-    'access.confirm.description': '启用 Full access 后，agent 将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
-    'access.confirm.enable': '启用 Full access',
+    'settings.transcript.normal': 'Normal',
+    'settings.transcript.compact': 'Compact',
     'message.compaction.completed': '已压缩 {items} 条历史记录（约 {tokens} tokens）',
     'message.unknownSurface': '未知 surface 事件：{type}',
     'message.maxTokens': '已达到输出 token 上限',
@@ -21,7 +27,8 @@ const UPSTREAM = {
     'message.ttft': '首 token {seconds}秒',
     'message.tokensPerSecond': '{tps} tok/s',
     'message.retry.status': '{label}（{retry}/{maximum}） · {seconds}s',
-    'input.accessMode': '访问模式，当前：{name}',
+    'message.turnProcess.subagents.one': '{count} 个 subagent',
+    'message.turnProcess.subagents.other': '{count} 个 subagent',
   },
   trajectory: {
     'toolbar.duration': 'Duration',
@@ -80,8 +87,8 @@ const UPSTREAM = {
     nav: 'Agent 预设',
     sectionIntro: '预设即一个会话的 Agent 所运行的插件组装 —— 它的工具、提示词与能力。复制一份既有预设改成自己的，或用「创造模式」让 Agent 帮你创建。',
     presetStandardDescription: '功能完整的编码 Agent，支持文件编辑、Shell、文件与网页检索、Skills、计划、目标、子代理和工作流。',
-    presetCodeName: 'PTC 模式',
-    presetCodeDescription: '具备标准模式的全部能力，并通过 Code Mode SDK 呈现工具，让模型用一个 TypeScript 程序组合多步操作。',
+    presetPtcName: 'PTC 模式',
+    presetPtcDescription: '具备标准模式的全部能力，并通过 PTC 模式 SDK 呈现工具，让模型用一个 TypeScript 程序组合多步操作。',
     presetMinimalDescription: '仅提供持久 bash 与 str_replace_editor 的双工具编码 Agent。',
     presetCordisDescription: '用于创建自定义 Agent preset：具备标准模式的全部能力，并提供运行时检查、插件实验和 preset 创作指导。',
     creatorDraft: '用「创造模式」创作自定义预设',
@@ -134,22 +141,27 @@ const UPSTREAM = {
 // 期望输出（与旧版整句覆盖时的显示完全一致，plan 悬停提示按设计保留 /plan 命令）
 const EXPECT = {
   conversation: {
-    'stats.llm': '大模型 {duration}',
-    'stats.ttftAverage': '首词元平均 {duration}',
-    'stats.tokensPerSecond': '{throughput} 词元/秒',
-    'stats.tokens': '输入 {input} 词元 · 输出 {output} 词元',
     // goalActions 术语已删（用户接受）：该提示保留上游英文命令词
     'hint.goal.active': '当前目标进行中。可输入 edit 修改 / pause 暂停 / resume 继续 / clear 清除',
     'access.confirm.title': '确认启用完全访问？',
     'access.confirm.description': '启用完全访问后，代理将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
     'access.confirm.enable': '启用完全访问',
+  },
+  chat: {
+    'stats.llm': '大模型 {duration}',
+    'stats.ttftAverage': '首词元平均 {duration}',
+    'stats.tokensPerSecond': '{throughput} 词元/秒',
+    'stats.tokens': '输入 {input} 词元 · 输出 {output} 词元',
+    'settings.transcript.normal': '标准',
+    'settings.transcript.compact': '紧凑',
     'message.compaction.completed': '已压缩 {items} 条历史记录（约 {tokens} 词元）',
     'message.unknownSurface': '未知界面事件：{type}',
     'message.maxTokens': '已达到输出词元上限',
-    'message.maxTokens.hint': '回答被截断，已有输出保留在对话中。发送“继续”可让模型接着输出。',
     'message.ttft': '首词元 {seconds}秒',
     'message.tokensPerSecond': '{tps} 词元/秒',
     'message.retry.status': '{label}（{retry}/{maximum}） · {seconds}秒',
+    'message.turnProcess.subagents.one': '{count} 个子代理',
+    'message.turnProcess.subagents.other': '{count} 个子代理',
   },
   trajectory: {
     'toolbar.duration': '时长',
@@ -209,8 +221,7 @@ const EXPECT = {
     nav: '代理预设',
     sectionIntro: '预设即一个会话的代理所运行的插件组装 —— 它的工具、提示词与能力。复制一份既有预设改成自己的，或用「创造模式」让代理帮你创建。',
     presetStandardDescription: '功能完整的编码代理，支持文件编辑、终端、文件与网页检索、技能、计划、目标、子代理和工作流。',
-    presetCodeName: '程序模式',
-    presetCodeDescription: '具备标准模式的全部能力，并通过代码模式开发套件呈现工具，让模型用一个 TypeScript 程序组合多步操作。',
+    // presetPtcName/presetPtcDescription 上游 0.1.2 已补全中文，不再覆盖。
     presetMinimalDescription: '仅提供持久命令行与字符串替换编辑器的双工具编码代理。',
     presetCordisDescription: '用于创建自定义代理预设：具备标准模式的全部能力，并提供运行时检查、插件实验和预设创作指导。',
     creatorDraft: '用「创造模式」创作自定义预设',
@@ -910,25 +921,27 @@ injectedThinkRoots = []
 // 结束思考块夹具：后续 pass（英文还原/卸载）不应再扫描该夹具。
 injectedThinkRoots = []
 
+// DSH 0.1.2 起 LocaleRuntime 不再暴露公开 lookup；补丁统一走 translate
+// （不带参数调用返回模板级结果，等价于旧 lookup 断言）。
 for (const ns of Object.keys(EXPECT)) {
   for (const key of Object.keys(EXPECT[ns])) {
-    check(locale.lookup(ns, key), EXPECT[ns][key], ns + '.' + key)
+    check(locale.translate(ns, key), EXPECT[ns][key], ns + '.' + key)
   }
 }
 
 // translate 路径（参数格式化 + 部分翻译联动）
-check(locale.translate('conversation', 'message.retry.status', { label: '重试', retry: 2, maximum: 5, seconds: 3723 }), '重试（2/5） · 1小时2分3秒', 'translate message.retry.status')
+check(locale.translate('chat', 'message.retry.status', { label: '重试', retry: 2, maximum: 5, seconds: 3723 }), '重试（2/5） · 1小时2分3秒', 'translate message.retry.status')
 check(locale.translate('conversation', 'input.accessMode', { name: 'Workspace Write' }), '访问模式，当前：工作区写入', 'translate input.accessMode')
-check(locale.translate('conversation', 'stats.llm', { duration: '48m48s' }), '大模型 48分48秒', 'translate stats.llm')
-check(locale.translate('conversation', 'stats.ttftAverage', { duration: '2.4s' }), '首词元平均 2.4秒', 'translate stats.ttftAverage')
-check(locale.translate('conversation', 'stats.tokens', { input: '12.2K', output: '40.9M' }), '输入 1.22万 词元 · 输出 4090万 词元', 'translate stats.tokens')
-check(locale.translate('conversation', 'stats.tokens', { input: '8K', output: '46.7M' }), '输入 0.8万 词元 · 输出 4670万 词元', 'translate stats.tokens 46.7M')
-check(locale.translate('conversation', 'stats.tokens', { input: '5K', output: '123.4M' }), '输入 0.5万 词元 · 输出 1.234亿 词元', 'translate stats.tokens 123.4M')
+check(locale.translate('chat', 'stats.llm', { duration: '48m48s' }), '大模型 48分48秒', 'translate stats.llm')
+check(locale.translate('chat', 'stats.ttftAverage', { duration: '2.4s' }), '首词元平均 2.4秒', 'translate stats.ttftAverage')
+check(locale.translate('chat', 'stats.tokens', { input: '12.2K', output: '40.9M' }), '输入 1.22万 词元 · 输出 4090万 词元', 'translate stats.tokens')
+check(locale.translate('chat', 'stats.tokens', { input: '8K', output: '46.7M' }), '输入 0.8万 词元 · 输出 4670万 词元', 'translate stats.tokens 46.7M')
+check(locale.translate('chat', 'stats.tokens', { input: '5K', output: '123.4M' }), '输入 0.5万 词元 · 输出 1.234亿 词元', 'translate stats.tokens 123.4M')
 check(locale.translate('settings.models', 'deleteDescriptionWithCredential', { provider: 'openai' }), '删除 openai 会移除其配置和存储的接口密钥。', 'translate deleteDescriptionWithCredential')
 
 // 英文界面必须原样
 active = 'en'
-check(locale.lookup('conversation', 'stats.llm'), 'LLM {duration}', 'en passthrough')
+check(locale.translate('chat', 'stats.llm'), 'LLM {duration}', 'en passthrough')
 // 英文界面下 DOM 文本层按反向表还原
 for (const o of fakeObserverCbs) o.cb()
 check(fakeBody.firstChild.data, 'Workspace Write', 'DOM 文本层 英文还原')
@@ -970,7 +983,7 @@ check(enThinkBody.getAttribute('data-dsh-zh-think'), 'clamped', '英文界面 �
 check(enThinkBody.__dshZhControl.textContent, 'Expand 20 more lines (25 left)', '英文界面 默认展开行数 按钮提示剩余总行数')
 injectedThinkRoots = []
 // 3) 中文补全：英文界面仍 passthrough（词典与标签改写都不生效）。
-check(locale.lookup('conversation', 'stats.llm'), 'LLM {duration}', '英文界面 中文补全 passthrough')
+check(locale.translate('chat', 'stats.llm'), 'LLM {duration}', '英文界面 中文补全 passthrough')
 check(fakeBody.firstChild.data, 'Workspace Write', '英文界面 中文补全 标签不改写')
 // 复位统计夹具，供后续卸载清理校验使用。
 statsText.data = '9 轮 · 203 步'
@@ -995,11 +1008,11 @@ check(settingsStoreUnderTest.getSnapshot().archiveViewEnabled, true, '查看已�
 
 // 上游改词后：部分翻译只动列出的片段，其余跟随上游
 active = 'zh'
-check(locale.lookup('settings.models', 'deleteDescriptionWithCredential'),
+check(locale.translate('settings.models', 'deleteDescriptionWithCredential'),
   '删除 {provider} 会移除其配置和存储的接口密钥。', 'zh partial baseline')
 const ORIGINAL_UPSTREAM = UPSTREAM['settings.models'].deleteDescriptionWithCredential
 UPSTREAM['settings.models'].deleteDescriptionWithCredential = '删除 {provider} 将移除其配置与保存的 API 密钥，此操作不可恢复。'
-check(locale.lookup('settings.models', 'deleteDescriptionWithCredential'),
+check(locale.translate('settings.models', 'deleteDescriptionWithCredential'),
   '删除 {provider} 将移除其配置与保存的接口密钥，此操作不可恢复。', 'zh partial follows upstream')
 UPSTREAM['settings.models'].deleteDescriptionWithCredential = ORIGINAL_UPSTREAM
 

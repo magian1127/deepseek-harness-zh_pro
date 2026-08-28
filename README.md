@@ -5,7 +5,7 @@
 **语言 / Language:** [中文](README.md) · [English](README.en.md)
 
 <p align="center">
-  <img alt="版本 0.7.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.7.0-5965d8">
+  <img alt="版本 0.8.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.8.0-5965d8">
   <img alt="界面 中文" src="https://img.shields.io/badge/%E7%95%8C%E9%9D%A2-%E4%B8%AD%E6%96%87-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -26,15 +26,15 @@
 | 自动展开最新思考 | 开 | 流式思考出现时展开最新一条，新思考出现时收起上一条自动展开内容 |
 | 默认展开行数 | 20 行 | 思考展开后默认只显示 N 行，超出部分折叠，按钮带剩余行数提示（如「再展开 20 行（还有 60 行）」）；点过「再展开」后保持展开进度不缩回；0 表示不限制 |
 | 展开模式 | 按钮模式 | 按钮模式：折叠后点「再展开」按钮逐批展开；滚动模式：折叠正文自带独立滚动条（高度 = 默认展开行数），用鼠标滚轮上下查看——最新 N 行初始在底部、流式跟随（上滚暂停、回底恢复），最早 N 行初始在顶部、位置交给用户 |
-| 对话宽度 | 开，90% | 大屏下按 50%–100% 调整聊天列宽，两侧留白均分 |
 | 提示词注入 | 关 | 向后续模型请求注入可编辑提示词，可选初始系统提示或首用户提示词 |
 | 自动归档旧会话 | 7 天 | 新建会话界面打开时自动归档超过指定天数未活动的会话（仅从列表隐藏，日志保留；设为 0 关闭） |
 | 查看已归档 | 开 | 每个工作区行新增「归档」按钮：点击后该分组正常会话隐藏，归档会话行直接出现在官方列表该分组内（随列表整体滚动、按最近活动时间降序、默认 5 个、每批再展开 5 个），行尾三点菜单含重命名 / 分叉 / 取消归档 / 删除，点击归档行即恢复并打开 |
 | 删除会话（回收站） | 开 | 会话列表三点菜单新增「删除会话」：日志目录整体移入系统回收站（Windows 回收站 / macOS 废纸篓 / Linux XDG Trash），并移除工作区账本槽位（不保留恢复位） |
 | 其他功能 · 会话删除按钮 | 开 | 设置页最下方的「其他功能」分区（分区标题 + 扁平行）：「会话删除按钮」开关控制三点菜单是否显示「删除会话」项 |
 
-中文补全只在中文界面生效；其余界面增强（统计全显示、自动展开思考、对话宽度、
+中文补全只在中文界面生效；其余界面增强（统计全显示、自动展开思考、
 自动归档、会话删除按钮等）在中文和英文界面都生效，文案随界面语言切换。
+（「对话宽度」功能已移除：DSH 0.1.2 起上游原生支持宽度自适应与拖拽调节。）
 所有功能都在 **DSH 设置 → 增强设置** 中配置。完整默认值和边界见
 [行为契约](https://github.com/magian1127/deepseek-harness-zh_pro/blob/main/docs/behavior.md)。
 
@@ -57,7 +57,7 @@ npx -y deepseek-harness-zh_pro install --profile web
 
 ```powershell
 pnpm install
-node bin/dsh-zh.mjs install --profile web --link $PWD
+dsh plugin --profile web add --link $PWD
 ```
 
 TypeScript 源码构建与检查：
@@ -98,7 +98,7 @@ npx -y deepseek-harness-zh_pro remove --profile web
 
 | 数据 | 存储位置 |
 | --- | --- |
-| 中文补全、统计、思考展开/模式/方向、默认展开行数、对话宽度、查看已归档、会话删除按钮 | 浏览器 localStorage：`deepseek-harness-zh_pro:enhancements` |
+| 中文补全、统计、思考展开/模式/方向、默认展开行数、查看已归档、会话删除按钮 | 浏览器 localStorage：`deepseek-harness-zh_pro:enhancements` |
 | 提示词开关、文本、注入目标、自动归档天数 | DSH `settings.yaml`，命名空间 `dsh-zh` |
 | 代理角色提示中文化、工具说明中文化 | DSH `settings.yaml`，命名空间 `dsh-zh` |
 

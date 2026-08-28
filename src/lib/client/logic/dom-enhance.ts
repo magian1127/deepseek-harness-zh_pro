@@ -1,65 +1,67 @@
-// 中文补全核心：locale.lookup/translate 重写 + DOM 文本层增强。
+// 中文补全核心：locale.translate 重写 + DOM 文本层增强。
 // 仅中文界面 + 「中文补全」开启时改写文本；英文界面按反向表还原。
-// 其余 DOM 效果（统计全显示、自动展开思考、默认展开行数、对话宽度、
-// 隐藏提示词提供方行）与界面语言无关，按各自开关生效。
+// 其余 DOM 效果（统计全显示、自动展开思考、默认展开行数、隐藏提示词提供方行）
+// 与界面语言无关，按各自开关生效。
+// DSH 0.1.2 起 LocaleRuntime 不再暴露公开的 lookup，translate 也移出公开面
+// （TS 私有，但运行时仍是实例可达方法；bind 的闭包在调用时解析 this.translate）。
+// 因此只在实例上覆盖 translate：无论 ui 包在我们之前还是之后 bind，都会经过本包装。
 function installChineseEnhance(ctx) {
   ctx.effect(() => {
     const locale = ctx.get('locale')
     if (locale === undefined || locale === null) return
-    const originalLookup = locale.lookup
     const originalTranslate = locale.translate
-    if (typeof originalLookup !== 'function' || typeof originalTranslate !== 'function') return
+    if (typeof originalTranslate !== 'function') return
+    const translateWasOwn = Object.prototype.hasOwnProperty.call(locale, 'translate')
     const activeIsZh = function () {
       return locale.getLocale !== undefined && locale.getLocale().active === 'zh'
     }
     const zhEnhanceOn = function () {
       return activeIsZh() && settingsStore.getSnapshot().zhComplete === true
     }
-    locale.lookup = function (ns, key) {
+    locale.translate = function (ns, key, params) {
       // 只在中文界面 + 「中文补全」开启时生效：其余情况保持原样。
-      if (!zhEnhanceOn()) return originalLookup.call(this, ns, key)
+      if (!zhEnhanceOn()) return originalTranslate.call(this, ns, key, params)
       // 本插件自带词典的命名空间跳过通用词兜底：它们按界面语言自备
       // 完整译文（含 {n} 参数模板），不能被 ZH['*'] 的通用词（如「展开」）
       // 吞掉归档视图的「再展开 N 个归档」等参数文案。
       if (ns === 'dsh-zh-settings' || ns === 'dsh-zh-archive') {
-        return originalLookup.call(this, ns, key)
+        return originalTranslate.call(this, ns, key, params)
       }
-      const table = ZH[ns]
-      if (table !== undefined && table[key] !== undefined) return table[key]
-      // 部分翻译：先取上游原值，只替换引用的术语，其余随上游更新。
-      // 注意要在 '*' 兜底之前：键级修正优先于通用词兜底（如 agentPreset.error）。
-      const partial = ZH_PARTIAL[ns]
-      if (partial !== undefined && partial[key] !== undefined) {
-        const original = originalLookup.call(this, ns, key)
-        if (typeof original !== 'string') return original
-        return applyPairs(original, resolvePairs(partial[key]))
-      }
-      const star = ZH['*'][key]
-      if (star !== undefined) return star
-      return originalLookup.call(this, ns, key)
-    }
-    locale.translate = function (ns, key, params) {
-      if (!zhEnhanceOn()) return originalTranslate.call(this, ns, key, params)
-      // 重试倒计时：原始秒数按时/分/秒显示，直接拼装整句。
-      if (ns === 'conversation' && key === 'message.retry.status'
+      // 重试倒计时（DSH 0.1.2 起位于 chat 命名空间）：原始秒数按时/分/秒
+      // 显示，直接拼装整句。
+      if (ns === 'chat' && key === 'message.retry.status'
         && params !== undefined && params !== null && typeof params === 'object') {
         const label = params.label === undefined || params.label === null ? '' : String(params.label)
         const retry = params.retry === undefined || params.retry === null ? '' : String(params.retry)
         const maximum = params.maximum === undefined || params.maximum === null ? '' : String(params.maximum)
         return label + '（' + retry + '/' + maximum + '） · ' + formatZhSeconds(params.seconds)
       }
-      // 其余参数转换：先换算参数，再走原模板插值。
+      // 参数转换（时长/数量单位）先于模板解析，模板命中顺序与旧版一致：
+      // ZH 整句 → ZH_PARTIAL 术语 → ZH['*'] 通用词 → 上游原值。
+      let nextParams = params
       const table = PARAM_TRANSFORMS[ns]
       if (table !== undefined && table[key] !== undefined
         && params !== undefined && params !== null && typeof params === 'object') {
-        const next = {}
+        nextParams = {}
         for (const k of Object.keys(params)) {
           const fn = table[key][k]
-          next[k] = fn === undefined ? params[k] : fn(params[k])
+          nextParams[k] = fn === undefined ? params[k] : fn(params[k])
         }
-        return originalTranslate.call(this, ns, key, next)
       }
-      return originalTranslate.call(this, ns, key, params)
+      const zhTable = ZH[ns]
+      if (zhTable !== undefined && zhTable[key] !== undefined) return interpolateZh(zhTable[key], nextParams)
+      // 部分翻译：先取上游原模板（不带参数调用返回原文模板），只替换引用的
+      // 术语，其余随上游更新，再自行插值参数。
+      const partial = ZH_PARTIAL[ns]
+      if (partial !== undefined && partial[key] !== undefined) {
+        const template = originalTranslate.call(this, ns, key)
+        if (typeof template === 'string') {
+          return interpolateZh(applyPairs(template, resolvePairs(partial[key])), nextParams)
+        }
+      }
+      const star = ZH['*'][key]
+      if (star !== undefined) return interpolateZh(star, nextParams)
+      return originalTranslate.call(this, ns, key, nextParams)
     }
     // 权限预设标签 / 斜杠命令说明 / 轨迹界面标签的 DOM 文本层（词典管不到的地方）：
     // 仅中文界面，改写「整段文本恰好等于已知英文标签/描述」或「整段匹配
@@ -72,8 +74,9 @@ function installChineseEnhance(ctx) {
     let settingsUnsubscribe
     let localeUnsubscribe
     let resetDomEffects
-    let chatWidthResizeObserver
-    let chatWidthResizeTarget = null
+    // 对话宽度功能已移除：DSH 0.1.2 起上游原生支持会话流宽度自适应与拖拽
+    // 调节（ConversationRoot 手柄 + dsh.conversation.contentWidth 偏好），
+    // 与本插件按百分比覆盖 --dsh-chat-content-width 的做法冲突，让位给上游。
     let autoThinkTarget = null
     if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined') {
       const forward = Object.assign({}, PERMISSION_NAMES, PERMISSION_DESCRIPTIONS, COMMAND_DESCRIPTIONS, CHAT_LABELS)
@@ -189,74 +192,12 @@ function installChineseEnhance(ctx) {
           el.removeAttribute(PROMPT_PROVIDER_KEY)
         }
       }
-      // 对话宽度：大屏（≥1200px）时，按用户设定百分比
-      // 计算当前滚动列内容盒的像素宽度（如 90% → 两侧各 5% 留白）；其余情况还原 DSH 默认。
-      const CHAT_WIDTH_MIN_SCREEN = 1200
-      const chatWidthRoot = function () {
-        if (typeof document === 'undefined' || document.body === null) return null
-        if (typeof document.body.querySelector !== 'function') return null
-        const scroll = document.body.querySelector('[data-conversation-scroll]')
-        return scroll === null ? null : scroll.parentElement
-      }
-      const stopChatWidthResizeObserver = function () {
-        if (chatWidthResizeObserver !== undefined) chatWidthResizeObserver.disconnect()
-        chatWidthResizeObserver = undefined
-        chatWidthResizeTarget = null
-      }
-      const observeChatWidthResize = function (scroll) {
-        if (typeof ResizeObserver === 'undefined' || scroll === null) {
-          stopChatWidthResizeObserver()
-          return
-        }
-        if (chatWidthResizeTarget === scroll) return
-        stopChatWidthResizeObserver()
-        chatWidthResizeTarget = scroll
-        chatWidthResizeObserver = new ResizeObserver(function () {
-          applyChatWidth()
-        })
-        chatWidthResizeObserver.observe(scroll)
-      }
-      const clearChatWidth = function () {
-        stopChatWidthResizeObserver()
-        const root = chatWidthRoot()
-        if (root !== null && typeof root.style !== 'undefined') root.style.removeProperty('--dsh-chat-content-width')
-      }
-      const applyChatWidth = function () {
-        const root = chatWidthRoot()
-        if (root === null || typeof root.style === 'undefined') {
-          stopChatWidthResizeObserver()
-          return
-        }
-        const snapshot = settingsStore.getSnapshot()
-        const large = typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth >= CHAT_WIDTH_MIN_SCREEN
-        if (snapshot.chatWidthEnabled === true && large && snapshot.chatWidth > 0) {
-          // 不能直接写百分比：变量会在 composerHero 和 InputBar 的不同包含块内
-          // 分别解析，导致 Hero 与输入卡使用不同宽度。先以滚动列内容盒为基准
-          // 计算像素值，让所有下游消费者复用同一个绝对宽度。
-          const scroll = typeof root.querySelector === 'function'
-            ? root.querySelector('[data-conversation-scroll]')
-            : null
-          const baseWidth = scroll !== null && typeof scroll.clientWidth === 'number' && scroll.clientWidth > 0
-            ? scroll.clientWidth
-            : typeof root.clientWidth === 'number' ? root.clientWidth : 0
-          if (baseWidth > 0) {
-            root.style.setProperty('--dsh-chat-content-width', baseWidth * snapshot.chatWidth / 100 + 'px', 'important')
-          } else {
-            root.style.removeProperty('--dsh-chat-content-width')
-          }
-          observeChatWidthResize(scroll)
-        } else {
-          stopChatWidthResizeObserver()
-          root.style.removeProperty('--dsh-chat-content-width')
-        }
-      }
       statsResizeListener = function () {
         if (typeof document === 'undefined' || document.body === null) return
         if (statsResizeTimer !== undefined) clearTimeout(statsResizeTimer)
         statsResizeTimer = setTimeout(function () {
           statsResizeTimer = undefined
           if (document.body !== null) fitAllStats(document.body)
-          applyChatWidth()
         }, 100)
       }
       if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
@@ -766,7 +707,6 @@ function installChineseEnhance(ctx) {
         for (const target of targets) rewrite(target, exact, patterns)
         // 思考折叠在通用改写之后执行，使捕获到的「完整原文」已是规范化后的文本。
         if (snapshot.thinkMaxLines > 0) applyThinkMaxLines()
-        applyChatWidth()
       }
       const observeDom = function () {
         if (!domStarted || observer === undefined) return
@@ -833,7 +773,6 @@ function installChineseEnhance(ctx) {
           restoreAllThinkLines()
           undoStatsFull(document.body)
           unhidePromptProvider(document.body)
-          clearChatWidth()
         }
       }
       if (document.readyState === 'loading') {
@@ -853,8 +792,9 @@ function installChineseEnhance(ctx) {
       if (settingsUnsubscribe !== undefined) settingsUnsubscribe()
       if (localeUnsubscribe !== undefined) localeUnsubscribe()
       if (resetDomEffects !== undefined) resetDomEffects()
-      locale.lookup = originalLookup
-      locale.translate = originalTranslate
+      // 还原 translate：原本是原型方法时移除实例覆盖，避免留下多余的自有属性。
+      if (translateWasOwn) locale.translate = originalTranslate
+      else delete locale.translate
     }
   }, 'deepseek-harness-zh_pro: 中文增强')
 }

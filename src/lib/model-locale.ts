@@ -180,10 +180,8 @@ const SECTION_ZH: Record<string, string> = {
   'tool:jobs': '跟踪你启动的每个后台任务 id。任务完成时你会收到会话内通知——不要忙轮询或 sleep 等待；继续处理独立步骤，不要重复正在运行任务的工作。给出最终回答前，用 job_output 收集每个仍相关的任务（仅当你确实被它阻塞时才设置 wait: true），并用 job_kill 结束已不再重要的任务。',
   'tool:web_search': '用 web_search 工具发现网络上的当前信息。必填的 queries 数组接受 1–4 条非空搜索查询；单次搜索用单元素数组。它返回可选答案与源 URL 列表。可用时使用返回的源摘要，并把相关 URL 以 markdown 链接引用。',
   'tool:goal': '用 goal 工具处理当前会话中的一个长期完成目标。create_goal 可以从任何语言的直接人类请求推断目标意图；不要为琐碎的单一轮次工作创建目标。在 update_goal 前调用 get_goal 并复制其确切的 goal_id 与 revision。会话恢复或分叉后，活动目标会被解除武装：当人类以任何措辞或语言要求继续或恢复时，用 update_goal action resume 重新武装它。仅当目标确实实现时才标记完成。仅当同一阻塞条件连续至少 3 个目标轮次持续存在时才标记 blocked，并在 blocked_reason 中报告该具体条件；困难、不确定或有用的剩余工作不是阻塞。',
-  'tool:workflow': '仅当用户明确要求 workflow 或大规模多代理编排时才用 workflow 工具：你编写一个 JavaScript 脚本（工具描述记录了确切格式），把工作扇出到许多子代理，带阶段与结构化结果。一两次委派优先用普通 subagent 调用。',
   'tool:ralph': '仅当直接人类明确要求 Ralph 循环或全新代理迭代执行时才用 ralph 工具。每一轮 Ralph 都会开启一个没有对话种子的全新子代理，并把共享工作区作为持久记忆。完成与阻塞是 worker 报告，不是独立评估。普通长期目标用同会话 goal 工具，有界委派与扇出用普通 subagents 或 workflows。',
   'tool:subagent': '默认在后台使用 subagent。在一条助手消息中同时启动独立委派，并在它们运行时继续有用工作。仅当你的下一步依赖该子代理的结果时才设置 `run_in_background: false`。后台运行结束时，运行时会向你发送包含其结果与任何最终助手消息的通知。',
-  'tool:subagent_fork': '默认在后台使用 subagent_fork。在一条助手消息中同时启动独立委派，并在它们运行时继续有用工作。仅当你的下一步依赖该子代理的结果时才设置 `run_in_background: false`。后台运行结束时，运行时会向你发送包含其结果与任何最终助手消息的通知。',
 }
 
 // ============ 会话语言锁定 ============

@@ -66,7 +66,7 @@ node bin/dsh-zh.mjs status --profile web
 
 - 设置页能显示增强设置；
 - 中文/英文切换能正确应用和恢复；
-- 统计、思考展开和宽度开关即时生效并能清理；
+- 统计、思考展开开关即时生效并能清理；
 - 提示词设置可读取、编辑和切换目标；
 - `system` 与 `user` 目标至少各完成一次真实模型请求验收。
 
@@ -114,7 +114,7 @@ node bin/dsh-zh.mjs status --profile web
 
 # 打包产物：确认 npm 包导出和 CLI 都可用
 npm pack
-npm install --prefix .tmp-install .\\deepseek-harness-zh_pro-0.7.0.tgz
+npm install --prefix .tmp-install .\\deepseek-harness-zh_pro-0.8.0.tgz
 node .tmp-install/node_modules/deepseek-harness-zh_pro/bin/dsh-zh.mjs status --profile web
 ```
 
