@@ -104,6 +104,14 @@ const ZhSettingsSection = function (props) {
   const svcErrorState = React.useState(false)
   const svcError = svcErrorState[0]
   const setSvcError = svcErrorState[1]
+  // 行内编辑（已添加条目）：草稿按行号存本地态，回车/失焦才写回 store
+  //（避免每键入一字符就写 localStorage + 刷新面板）；地址非法保留草稿并标红。
+  const svcEditDraftsState = React.useState({})
+  const svcEditDrafts = svcEditDraftsState[0]
+  const setSvcEditDrafts = svcEditDraftsState[1]
+  const svcEditErrorIndexState = React.useState(null)
+  const svcEditErrorIndex = svcEditErrorIndexState[0]
+  const setSvcEditErrorIndex = svcEditErrorIndexState[1]
   const toggleSvcOpen = function () {
     const next = !(snapshot.serviceMonitorSettingsOpen === true)
     settingsStore.set('serviceMonitorSettingsOpen', next)
@@ -123,6 +131,31 @@ const ZhSettingsSection = function (props) {
     const next = snapshot.serviceMonitorTargets.slice()
     next.splice(index, 1)
     settingsStore.set('serviceMonitorTargets', next)
+    const drafts = Object.assign({}, svcEditDrafts)
+    delete drafts[String(index)]
+    setSvcEditDrafts(drafts)
+    if (svcEditErrorIndex === index) setSvcEditErrorIndex(null)
+  }
+  // 行内编辑提交（回车或失焦）：未改动直接返回；缺省字段回落存储值
+  //（只改名字时地址取原值）；地址非法保留草稿并标红该行，不写入。
+  const commitServiceTarget = function (index) {
+    const draft = svcEditDrafts[String(index)]
+    if (draft === undefined) return
+    const stored = snapshot.serviceMonitorTargets[index]
+    if (stored === null || typeof stored !== 'object') return
+    const draftName = typeof draft.name === 'string' ? draft.name : stored.name
+    const draftAddr = typeof draft.addr === 'string'
+      ? draft.addr
+      : stored.host + ':' + String(stored.port)
+    const parsed = parseServiceAddress(draftAddr)
+    if (parsed === null) { setSvcEditErrorIndex(index); return }
+    const next = snapshot.serviceMonitorTargets.slice()
+    next.splice(index, 1, { name: draftName.trim().slice(0, 60), host: parsed.host, port: parsed.port })
+    settingsStore.set('serviceMonitorTargets', next)
+    const drafts = Object.assign({}, svcEditDrafts)
+    delete drafts[String(index)]
+    setSvcEditDrafts(drafts)
+    setSvcEditErrorIndex(null)
   }
   const toggle = function (on, onChange, disabled, label) {
     return React.createElement('button', {
@@ -213,19 +246,6 @@ const ZhSettingsSection = function (props) {
     transform: open === true ? 'rotate(180deg)' : 'rotate(0deg)',
     }
   }
-    const svcTargetNameStyle = {
-      flex: '0 1 120px', minWidth: 0, boxSizing: 'border-box',
-      border: '1px solid transparent',
-      fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-primary, inherit)',
-      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    }
-    const svcTargetAddrStyle = {
-      flex: '0 1 220px', minWidth: 0, boxSizing: 'border-box',
-      border: '1px solid transparent',
-      fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary, inherit)',
-      fontVariantNumeric: 'tabular-nums',
-      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    }
   const svcCardBodyStyle = {
     borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.28))',
     margin: '0 16px', padding: '4px 0 12px',
@@ -517,18 +537,60 @@ const ZhSettingsSection = function (props) {
                 style: { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary, #d93026)' },
                 }, t('serviceTargetInvalid'))),
                 snapshot.serviceMonitorTargets.map(function (item, index) {
-                  // 条目行与添加行三列对齐：名字列 / 地址列 / 删除按钮，
-                  // 列宽与 flex 与两个输入框一致，文字 padding 同输入框，
-                  // 使条目文字与上方输入框文字垂直对齐。
-                  const targetAddr = item.host + ':' + String(item.port)
-                  const targetLabel = item.name === '' ? '—' : item.name
+                  // 行内编辑：名字/地址都是文本框，回车或失焦提交（地址非法
+                  // 保留草稿并标红该行，不写入）；列宽与上方添加行一致。
+                  const draft = svcEditDrafts[String(index)]
+                  const nameValue = draft !== undefined && typeof draft.name === 'string'
+                    ? draft.name
+                    : item.name
+                  const addrValue = draft !== undefined && typeof draft.addr === 'string'
+                    ? draft.addr
+                    : item.host + ':' + String(item.port)
+                  const addrInvalid = svcEditErrorIndex === index
+                  const setDraftField = function (field) {
+                    return function (event) {
+                      const current = svcEditDrafts[String(index)]
+                      const base = current !== undefined && typeof current === 'object'
+                        ? current
+                        : { name: item.name, addr: item.host + ':' + String(item.port) }
+                      const nextDraft = Object.assign({}, base)
+                      nextDraft[field] = event.target.value
+                      const drafts = Object.assign({}, svcEditDrafts)
+                      drafts[String(index)] = nextDraft
+                      setSvcEditDrafts(drafts)
+                      if (svcEditErrorIndex === index) setSvcEditErrorIndex(null)
+                    }
+                  }
                   return React.createElement('div', {
                     key: 'svc-target-' + String(index),
-                    title: targetLabel === '—' ? targetAddr : (item.name + '（' + targetAddr + '）'),
                     style: { display: 'flex', alignItems: 'center', gap: '8px' },
                   },
-                    React.createElement('span', { style: svcTargetNameStyle }, targetLabel),
-                    React.createElement('span', { style: svcTargetAddrStyle }, targetAddr),
+                    React.createElement('input', {
+                      type: 'text',
+                      value: nameValue,
+                      placeholder: t('serviceTargetNamePlaceholder'),
+                      'aria-label': t('serviceTargetNamePlaceholder'),
+                      style: svcTextNameStyle,
+                      onChange: setDraftField('name'),
+                      onKeyDown: function (event) {
+                        if (event.key === 'Enter') commitServiceTarget(index)
+                      },
+                      onBlur: function () { commitServiceTarget(index) },
+                    }),
+                    React.createElement('input', {
+                      type: 'text',
+                      value: addrValue,
+                      placeholder: t('serviceTargetAddrPlaceholder'),
+                      'aria-label': t('serviceTargetAddrPlaceholder'),
+                      style: addrInvalid === true
+                        ? Object.assign({}, svcTextAddrStyle, { borderColor: 'var(--dsw-alias-state-error-primary, #d93026)' })
+                        : svcTextAddrStyle,
+                      onChange: setDraftField('addr'),
+                      onKeyDown: function (event) {
+                        if (event.key === 'Enter') commitServiceTarget(index)
+                      },
+                      onBlur: function () { commitServiceTarget(index) },
+                    }),
                     React.createElement('button', {
                       type: 'button',
                       'aria-label': t('serviceTargetRemove'),
@@ -536,5 +598,8 @@ const ZhSettingsSection = function (props) {
                       style: svcGhostButtonStyle,
                     }, t('serviceTargetRemove')))
                 }),
+              svcEditErrorIndex !== null && React.createElement('div', {
+                style: { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary, #d93026)' },
+              }, t('serviceTargetInvalid')),
     ))))
 }

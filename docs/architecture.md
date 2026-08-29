@@ -23,8 +23,12 @@
 
 「删除会话（回收站）」与「服务监控」共用自定义 HTTP 通道 `/dsh-zh/api`：前者浏览器
 POST 请求会话删除（路由由主机注册到 DSH `webServer`，仅接受回环主机 + 同源请求）；
-后者浏览器 GET `/dsh-zh/api/service-monitor` 轮询只读快照（数据来自 `service-monitor.ts`
-的定时端口扫描，基线 = 插件实例启动时已在监听的端口）。
+后者浏览器 POST `/dsh-zh/api/service-monitor` 轮询快照并探活自定义监控项、
+POST `/dsh-zh/api/service-monitor/resolve` 按需解析监听进程归属、
+POST `/dsh-zh/api/service-monitor/open` 定位监听进程目录。主机没有后台定时任务：
+扫描结果带时间戳缓存，拉取时请求携带网页设置的刷新间隔，超过一个间隔才重扫
+（并发拉取共享同一次扫描；基线 = 第一次扫描时的监听集合），进程归属由悬停触发
+的 resolve 按需解析；目录路径由主机进程枚举得出，不接受请求传入。
 删除逻辑本身完全使用官方服务面：`sessionPersistence`（locate/readRaw/list）定位日志、
 `Workspace.detachSession` 移除账本槽位、`trash.ts` 把目录移入系统回收站。
 

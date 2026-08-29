@@ -31,10 +31,12 @@
 //   5. 回收站清单：由本文件维护的内存清单 + 每项的唯一 token，通过
 //      路由 /dsh-zh/api 提供给网页（列表/恢复）。清单在进程重启后
 //      丢失属预期（回收站内容已由操作系统管理）。
-//   6. GET /dsh-zh/api/service-monitor：「服务监控」只读快照（数据由
-//      service-monitor.ts 的端口扫描维护），仅此一个 GET 端点。
-//      路由 /dsh-zh/api 提供给网页（列表/恢复）。清单在进程重启后
-//      丢失属预期（回收站内容已由操作系统管理）。
+//   6. GET /dsh-zh/api/service-monitor：「服务监控」快照——拉取即触发一次
+//      主机扫描（无后台定时任务，节奏完全由网页轮询决定），仅此一个 GET
+//      端点。POST 同路径探活自定义监控项（与扫描并行）；POST
+//      /dsh-zh/api/service-monitor/resolve 按需解析监听进程归属（悬停触发，
+//      端点级缓存，服务消失即清）；POST /dsh-zh/api/service-monitor/open
+//      按已缓存归属在文件管理器中定位监听进程目录（路径不接受请求传入）。
 
 import { dirname } from 'node:path'
 import { rm } from 'node:fs/promises'
@@ -43,7 +45,7 @@ import { PKG } from '../bin/dsh-zh.mjs'
 import { ZH_SETTINGS_NS } from './constants.js'
 import { log, warn } from './util.js'
 import { trashItem, restoreItem } from './trash.js'
-import { getServiceMonitorSnapshot, probeTargets } from './service-monitor.js'
+import { ensureFreshScan, getServiceMonitorSnapshot, openServiceOwnerDirectory, probeTargets, resolveServiceOwner } from './service-monitor.js'
 import type { HostContext } from './types.js'
 
 // 会话 id 校验：形如 /^[A-Za-z0-9_-]{1,128}$/ 的字符串，防御路径注入。
@@ -444,6 +446,36 @@ interface RouteResponse {
   end(body?: string | Uint8Array): void
 }
 
+/** 请求携带的刷新间隔（秒）→ 缓存允许的最大年龄（毫秒）；非法回退 0（要求最新）。 */
+function parseScanMaxAgeMs(raw: unknown): number {
+  const seconds = typeof raw === 'number' && Number.isFinite(raw) ? Math.round(raw) : Number.parseInt(String(raw ?? ''), 10)
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0
+  return Math.min(300, seconds) * 1000
+}
+
+async function handleServiceMonitorRoutes(
+  req: RouteRequest,
+  res: RouteResponse,
+  pathname: string,
+  payload: Record<string, unknown>,
+  url: URL,
+): Promise<boolean> {
+  if (pathname !== '/dsh-zh/api/service-monitor') return false
+  const maxAgeMs = req.method === 'GET'
+    ? parseScanMaxAgeMs(url.searchParams.get('intervalSec'))
+    : parseScanMaxAgeMs(payload.intervalSec)
+  // 拉取即查缓存：距上次扫描超过网页设置的刷新间隔才重新扫描，否则
+  // 直接返回缓存（POST 的自定义项探活与扫描/缓存判定并行执行）。
+  const [, probeResults] = await Promise.all([
+    ensureFreshScan(process.platform, maxAgeMs),
+    req.method === 'GET' ? Promise.resolve([]) : probeTargets(payload.targets),
+  ])
+  writeJson(res, 200, { ok: true, value: Object.assign(getServiceMonitorSnapshot(), {
+    targets: probeResults as unknown[],
+  }) })
+  return true
+}
+
 async function readJsonBody(req: RouteRequest): Promise<unknown> {
   const chunks: Uint8Array[] = []
   let total = 0
@@ -485,12 +517,10 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
         }
         const url = new URL(req.url ?? '/', 'http://dsh.internal')
         const pathname = url.pathname
-        // GET 仅服务「服务监控」只读快照（端口扫描由 service-monitor.ts 维护）。
+        // GET 仅服务「服务监控」快照：拉取即查缓存（超过网页设置的刷新
+        // 间隔才重新扫描，间隔经查询参数 intervalSec 携带）。
         if (req.method === 'GET') {
-          if (pathname === '/dsh-zh/api/service-monitor') {
-            writeJson(res, 200, { ok: true, value: getServiceMonitorSnapshot() })
-            return
-          }
+          if (await handleServiceMonitorRoutes(req, res, pathname, {}, url)) return
           writeJson(res, 404, { ok: false, error: { code: 'not-found', message: 'unknown method' } })
           return
         }
@@ -512,11 +542,33 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
         }
 
         try {
-        if (pathname === '/dsh-zh/api/service-monitor') {
-          // 自定义监控项探活：请求体 { targets: [{ name, host, port }] }，
-          // 逐项 TCP connect 判定在线状态，与自动发现快照一并返回。
-          const probeResults = await probeTargets(payload.targets)
-          writeJson(res, 200, { ok: true, value: Object.assign(getServiceMonitorSnapshot(), { targets: probeResults }) })
+        if (await handleServiceMonitorRoutes(req, res, pathname, payload, url)) return
+        if (pathname === '/dsh-zh/api/service-monitor/resolve') {
+          // 按需解析监听进程归属（悬停触发）：请求体 { address, port }，
+          // 端点级缓存；服务停止监听后缓存由扫描清运，重现后重新解析。
+          // 目标不是本机监听时 value.owner 为 null（不缓存，不报错）。
+          try {
+            const owner = await resolveServiceOwner(process.platform, payload.address, payload.port)
+            writeJson(res, 200, { ok: true, value: { owner } })
+          } catch (error) {
+            writeJson(res, 200, { ok: true, value: { owner: null } })
+          }
+          return
+        }
+        if (pathname === '/dsh-zh/api/service-monitor/open') {
+          // 在文件管理器中定位监听进程目录：请求体 { address, port }，
+          // 主机读取该端点**已缓存**的归属（悬停查询过才有）后执行平台
+          // reveal 命令；无缓存归属时返回 404，绝不接受请求传入的路径。
+          try {
+            const opened = await openServiceOwnerDirectory(process.platform, payload.address, payload.port)
+            if (opened === null) {
+              writeJson(res, 404, { ok: false, error: { code: 'owner-unavailable', message: '未定位到监听进程目录' } })
+              return
+            }
+            writeJson(res, 200, { ok: true, value: opened })
+          } catch (error) {
+            writeJson(res, 500, { ok: false, error: { code: 'open-failed', message: error instanceof Error ? error.message : String(error) } })
+          }
           return
         }
         if (pathname === '/dsh-zh/api/session.unarchive') {

@@ -69,6 +69,13 @@ const wrapperStart = `window.__ModuleLoader__.load({
 const wrapperEnd = `    exports.inject = ['locale', 'slots'];
     exports.apply = apply;
     exports.settingsStore = settingsStore;
+    exports.serviceMonitor = {
+      parseServiceAddress: parseServiceAddress,
+      describeServiceOwner: describeServiceOwner,
+      ownerTipText: ownerTipText,
+      orderedPanelEntries: orderedPanelEntries,
+      serviceElapsedText: serviceElapsedText,
+    };
     return module.exports;
   },
 });`

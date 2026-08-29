@@ -999,12 +999,12 @@ check(settingsStoreUnderTest.getSnapshot().deleteSessionEnabled, false, '会话�
 settingsStoreUnderTest.set('deleteSessionEnabled', true)
 check(settingsStoreUnderTest.getSnapshot().deleteSessionEnabled, true, '会话删除按钮 可重新开启')
 
-// ---- 服务监控开关（设置 store 默认值与读写） ----
-check(settingsStoreUnderTest.getSnapshot().serviceMonitorEnabled, true, '服务监控 默认开启')
-settingsStoreUnderTest.set('serviceMonitorEnabled', false)
-check(settingsStoreUnderTest.getSnapshot().serviceMonitorEnabled, false, '服务监控 可关闭')
+// ---- 服务监控开关（设置 store 默认值与读写；归属/定位按平台尽力而为 → 默认关） ----
+check(settingsStoreUnderTest.getSnapshot().serviceMonitorEnabled, false, '服务监控 默认关闭')
 settingsStoreUnderTest.set('serviceMonitorEnabled', true)
-check(settingsStoreUnderTest.getSnapshot().serviceMonitorEnabled, true, '服务监控 可重新开启')
+check(settingsStoreUnderTest.getSnapshot().serviceMonitorEnabled, true, '服务监控 可开启')
+settingsStoreUnderTest.set('serviceMonitorEnabled', false)
+check(settingsStoreUnderTest.getSnapshot().serviceMonitorEnabled, false, '服务监控 可再次关闭')
 
 // ---- 服务监控扩展字段（刷新间隔与自定义监控项） ----
 check(settingsStoreUnderTest.getSnapshot().serviceMonitorIntervalSec, 10, '服务监控 刷新间隔默认 10 秒')
@@ -1014,6 +1014,72 @@ check(JSON.stringify(settingsStoreUnderTest.getSnapshot().serviceMonitorTargets)
 settingsStoreUnderTest.set('serviceMonitorTargets', [{ name: '测试', host: '127.0.0.1', port: 81 }])
 check(JSON.stringify(settingsStoreUnderTest.getSnapshot().serviceMonitorTargets), '[{"name":"测试","host":"127.0.0.1","port":81}]', '服务监控 自定义监控项可添加')
 settingsStoreUnderTest.set('serviceMonitorTargets', [])
+
+// ---- 服务监控面板（地址解析 / 归属悬停文案） ----
+const serviceMonitorUnderTest = pluginExports.serviceMonitor
+check(serviceMonitorUnderTest !== undefined, true, '服务监控 面板测试导出存在')
+check(JSON.stringify(serviceMonitorUnderTest.parseServiceAddress('127.0.0.1:81')), '{"host":"127.0.0.1","port":81}', '服务监控 地址解析 IPv4')
+check(JSON.stringify(serviceMonitorUnderTest.parseServiceAddress('localhost:3000')), '{"host":"localhost","port":3000}', '服务监控 地址解析 localhost')
+check(JSON.stringify(serviceMonitorUnderTest.parseServiceAddress('[::1]:8080')), '{"host":"[::1]","port":8080}', '服务监控 地址解析 IPv6')
+check(serviceMonitorUnderTest.parseServiceAddress('not an address'), null, '服务监控 地址解析 非法输入返回 null')
+
+const smStubCopy = {
+  autoTitle: '{addr} · 监听 {time}',
+  ownerLine: '{name}（PID {pid}）',
+  ownerCmd: '命令行：{cmd}',
+  ownerHttpSys: '经 http.sys 内核队列定位',
+  ownerMissing: '未定位到监听进程',
+  ownerResolving: '正在查询监听进程…',
+  hoverHint: '悬停查询监听进程',
+  openHint: '点击打开进程所在目录',
+}
+const smNoOwner = serviceMonitorUnderTest.describeServiceOwner(smStubCopy, '127.0.0.1:19443 · 刚刚', null)
+check(smNoOwner.canOpen, false, '服务监控 无归属条目不可点击')
+check(smNoOwner.title, '127.0.0.1:19443 · 刚刚\n未定位到监听进程', '服务监控 无归属悬停提示回退文案')
+const smProcessOwner = serviceMonitorUnderTest.describeServiceOwner(smStubCopy, '0.0.0.0:81 · 4 分钟', {
+  pid: 38528, name: 'httpd.exe', path: 'C:\\Apache24\\bin\\httpd.exe', cmdline: 'httpd -k start', via: 'process',
+})
+check(smProcessOwner.canOpen, true, '服务监控 归属含路径时可点击')
+check(smProcessOwner.title,
+  '0.0.0.0:81 · 4 分钟\nhttpd.exe（PID 38528）\nC:\\Apache24\\bin\\httpd.exe\n命令行：httpd -k start\n点击打开进程所在目录',
+  '服务监控 进程归属悬停提示多行文案')
+const smHttpSysOwner = serviceMonitorUnderTest.describeServiceOwner(smStubCopy, '127.0.0.1:19443 · 刚刚', {
+  pid: 33704, name: 'RemoteDesktopManager.exe', path: 'D:\\Soft\\Remote Desktop Manager\\RemoteDesktopManager.exe', cmdline: '', via: 'http.sys',
+})
+check(smHttpSysOwner.canOpen, true, '服务监控 http.sys 归属可点击')
+check(smHttpSysOwner.title.includes('经 http.sys 内核队列定位'), true, '服务监控 http.sys 归属标注来源')
+const smOwnerNoPath = serviceMonitorUnderTest.describeServiceOwner(smStubCopy, '0.0.0.0:445 · 1 小时', {
+  pid: 4, name: 'System', path: '', cmdline: '', via: 'process',
+})
+check(smOwnerNoPath.canOpen, false, '服务监控 归属无路径时不可点击')
+// 悬停按需查询的状态机提示：未查询 → 查询中 → 定位完成原位替换。
+check(serviceMonitorUnderTest.ownerTipText(smStubCopy, '127.0.0.1:81 · 刚刚', 'idle', null),
+  '127.0.0.1:81 · 刚刚\n悬停查询监听进程', '服务监控悬停提示 未查询状态')
+check(serviceMonitorUnderTest.ownerTipText(smStubCopy, '127.0.0.1:81 · 刚刚', 'resolving', null),
+  '127.0.0.1:81 · 刚刚\n正在查询监听进程…', '服务监控悬停提示 查询中状态')
+check(serviceMonitorUnderTest.ownerTipText(smStubCopy, '127.0.0.1:81 · 刚刚', 'owner',
+  { pid: 38528, name: 'httpd.exe', path: 'C:\\Apache24\\bin\\httpd.exe', cmdline: '', via: 'process' })
+  .includes('点击打开进程所在目录'), true, '服务监控悬停提示 定位完成后替换为归属内容')
+check(serviceMonitorUnderTest.ownerTipText(smStubCopy, '127.0.0.1:81 · 刚刚', 'none', null),
+  '127.0.0.1:81 · 刚刚\n未定位到监听进程', '服务监控悬停提示 未定位状态')
+
+// ---- 服务监控面板排序：自动发现在顶（新→旧），自定义在线随后，离线沉底 ----
+const smOrdered = serviceMonitorUnderTest.orderedPanelEntries(
+  [{ address: '127.0.0.1:3080', port: 3080, since: 1 }, { address: '0.0.0.0:81', port: 81, since: 2 }],
+  [
+    { name: '离线库', host: '127.0.0.1', port: 1433, online: false },
+    { name: '在线项', host: '127.0.0.1', port: 3000, online: true },
+  ])
+check(JSON.stringify(smOrdered.map(function (entry) {
+  return (entry.isTarget ? 't:' : 'a:') + (entry.isTarget
+    ? entry.entry.host + ':' + entry.entry.port + ':' + (entry.entry.online ? 'on' : 'off')
+    : entry.entry.address + ':' + entry.entry.port)
+})), JSON.stringify([
+  'a:127.0.0.1:3080:3080',
+  'a:0.0.0.0:81:81',
+  't:127.0.0.1:3000:on',
+  't:127.0.0.1:1433:off',
+]), '服务监控排序 自动发现最上（保持新→旧）、在线自定义随后、离线自定义沉底')
 
 // ---- 查看已归档开关（设置 store 默认值与读写） ----
 check(settingsStoreUnderTest.getSnapshot().archiveViewEnabled, true, '查看已归档 默认开启')

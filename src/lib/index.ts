@@ -48,7 +48,6 @@ import {
 } from './hot-mount.js'
 import { installSelfHotReload } from './hot-reload.js'
 import { installSessionDeleteRoute } from './session-delete.js'
-import { installServiceMonitor } from './service-monitor.js'
 import { argvProfile, localProfileDir, log, manifestPath, warn } from './util.js'
 import type { HostContext, PackageSnapshot } from './types.js'
 
@@ -195,10 +194,8 @@ export function apply(ctx: HostContext): void {
   // 「删除会话（回收站）」：与 settings 注册同门槛，避免热迁移窗口双实例
   // 重复注册路由；服务未就绪时由内部重试等待（见 session-delete.js）。
   if (ownsPromptRegistration(ctx)) installSessionDeleteRoute(ctx, () => resolveSessionDeleteDeps(ctx))
-  // 「服务监控」：主机端口扫描（基线 = 插件启动时已在监听的端口），
-  // 快照经 /dsh-zh/api/service-monitor 供网页轮询；与路由同门槛避免
-  // 热迁移窗口双实例重复扫描。
-  if (ownsPromptRegistration(ctx)) installServiceMonitor(ctx)
+  // 「服务监控」无独立后台任务：主机只在网页拉取快照时即时扫描一次
+  // （netstat），节奏完全由面板刷新间隔（serviceMonitorIntervalSec）驱动。
   ctx.effect(() => {
     const profileDir = localProfileDir()
     cleanHotDir(profileDir)

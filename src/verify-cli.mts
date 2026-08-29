@@ -464,10 +464,10 @@ try {
     ].join('\n')
     const winEndpoints = serviceMonitor.parseListeningEndpoints('win32', winSample)
     check(JSON.stringify(winEndpoints), JSON.stringify([
-      { address: '127.0.0.1', port: 81 },
-      { address: '[::1]', port: 81 },
-      { address: '0.0.0.0', port: 3080 },
-    ]), '服务监控 win32 netstat 解析（LISTENING + IPv6 方括号 + 排除 ESTABLISHED）')
+      { address: '127.0.0.1', port: 81, pid: 4716 },
+      { address: '[::1]', port: 81, pid: 4716 },
+      { address: '0.0.0.0', port: 3080, pid: 600 },
+    ]), '服务监控 win32 netstat 解析（LISTENING + PID + IPv6 方括号 + 排除 ESTABLISHED）')
 
     const ssSample = [
       'State  Recv-Q Send-Q Local Address:Port  Peer Address:Port',
@@ -476,10 +476,20 @@ try {
       'LISTEN 0      128    [::]:8080             [::]:*',
     ].join('\n')
     check(JSON.stringify(serviceMonitor.parseListeningEndpoints('linux', ssSample)), JSON.stringify([
-      { address: '127.0.0.1', port: 3000 },
-      { address: '0.0.0.0', port: 5173 },
-      { address: '[::]', port: 8080 },
-    ]), '服务监控 linux ss 解析（* 规范为 0.0.0.0）')
+      { address: '127.0.0.1', port: 3000, pid: null },
+      { address: '0.0.0.0', port: 5173, pid: null },
+      { address: '[::]', port: 8080, pid: null },
+    ]), '服务监控 linux ss 解析（* 规范为 0.0.0.0，无 -p 时 PID 缺失）')
+
+    const ssProcSample = [
+      'State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process',
+      'LISTEN 0      128    0.0.0.0:6379         0.0.0.0:*     users:(("redis-server",pid=32720,fd=7))',
+      'LISTEN 0      511    127.0.0.1:3000       0.0.0.0:*     users:(("node",pid=4242,fd=23))',
+    ].join('\n')
+    check(JSON.stringify(serviceMonitor.parseListeningEndpoints('linux', ssProcSample)), JSON.stringify([
+      { address: '0.0.0.0', port: 6379, pid: 32720 },
+      { address: '127.0.0.1', port: 3000, pid: 4242 },
+    ]), '服务监控 linux ss -tlnp 解析（行尾 users pid 提取）')
 
     const darwinSample = [
       'tcp4  0      0  127.0.0.1.81    *.*   LISTEN      4716',
@@ -487,9 +497,9 @@ try {
       'tcp4  0      0  127.0.0.1.3080   *.*   LISTEN      600',
     ].join('\n')
     check(JSON.stringify(serviceMonitor.parseListeningEndpoints('darwin', darwinSample)), JSON.stringify([
-      { address: '127.0.0.1', port: 81 },
-      { address: '[::1]', port: 49152 },
-      { address: '127.0.0.1', port: 3080 },
+      { address: '127.0.0.1', port: 81, pid: 4716 },
+      { address: '[::1]', port: 49152, pid: 900 },
+      { address: '127.0.0.1', port: 3080, pid: 600 },
     ]), '服务监控 darwin netstat 点分端口解析')
 
     const netstatPosix = [
@@ -497,9 +507,91 @@ try {
       'tcp        0      0 127.0.0.1:6379      0.0.0.0:*               LISTEN',
     ].join('\n')
     check(JSON.stringify(serviceMonitor.parseListeningEndpoints('linux', netstatPosix)), JSON.stringify([
-      { address: '0.0.0.0', port: 22 },
-      { address: '127.0.0.1', port: 6379 },
-    ]), '服务监控 linux netstat 解析')
+      { address: '0.0.0.0', port: 22, pid: null },
+      { address: '127.0.0.1', port: 6379, pid: null },
+    ]), '服务监控 linux netstat 解析（无 PID 列）')
+
+    // http.sys 内核端点归属：按注册 URL 命中端口，取上方最近的 ID/Services 行；
+    // 端口匹配必须是完整数字（:8100 不得命中 81）。
+    const netshSample = [
+      '    Request queue name: Request queue is unnamed.',
+      '        Number of active processes attached: 1',
+      '        Processes:',
+      '            ID: 8496, image: <?>',
+      '            Services: WinRM',
+      '            Tagged Service: WinRM',
+      '        Registered URLs:',
+      '            HTTP://+:47001/wsman/',
+      '    Request queue name: Request queue is unnamed.',
+      '        Version: 2.0',
+      '        State: Active',
+      '        Number of active processes attached: 1',
+      '        Processes:',
+      '            ID: 33704, image: D:\\Soft\\Remote Desktop Manager\\RemoteDesktopManager.exe',
+      '        URL groups:',
+      '        URL group ID: FE0000022000001B',
+      '            State: Active',
+      '            Number of registered URLs: 1',
+      '            Registered URLs:',
+      '                HTTP://127.0.0.1:19443:127.0.0.1/',
+      '    Request queue name: Request queue is unnamed.',
+      '        Number of active processes attached: 1',
+      '        Processes:',
+      '            ID: 6856, image: <?>',
+      '            Services: WMPNetworkSvc',
+      '            Tagged Service: WMPNetworkSvc',
+      '        Registered URLs:',
+      '            HTTP://+:10243/WMPNSSV4/2359394386/',
+      '            HTTP://+:8100/WMPNSSDeployment/',
+    ].join('\n')
+    check(JSON.stringify(serviceMonitor.parseHttpSysQueueOwner(netshSample, 19443)), JSON.stringify({
+      pid: 33704,
+      image: 'D:\\Soft\\Remote Desktop Manager\\RemoteDesktopManager.exe',
+      services: '',
+    }), '服务监控 http.sys 归属 按注册 URL 反查 PID 与映像路径（不跨块误取 WinRM 标注）')
+    check(JSON.stringify(serviceMonitor.parseHttpSysQueueOwner(netshSample, 47001)), JSON.stringify({
+      pid: 8496,
+      image: '<?>',
+      services: 'WinRM',
+    }), '服务监控 http.sys 归属 同块 Services 行正常取到')
+    check(JSON.stringify(serviceMonitor.parseHttpSysQueueOwner(netshSample, 10243)), JSON.stringify({
+      pid: 6856,
+      image: '<?>',
+      services: 'WMPNetworkSvc',
+    }), '服务监控 http.sys 归属 无映像时取 Services 行')
+    check(serviceMonitor.parseHttpSysQueueOwner(netshSample, 81), null, '服务监控 http.sys 归属 端口不匹配返回 null')
+    check(serviceMonitor.parseHttpSysQueueOwner(netshSample, 100), null, '服务监控 http.sys 归属 :8100 不得命中 :10/:100')
+    check(serviceMonitor.parseHttpSysQueueOwner(netshSample, 8100)?.image, '<?>', '服务监控 http.sys 归属 通配 +:8100 命中所在队列')
+
+    // 自定义目标与监听端点的匹配：localhost 归一化、通配监听、协议族一致；
+    // 域名（非 IP 字面量/localhost）不归属本机监听。
+    check(serviceMonitor.isAttributableHost('127.0.0.1'), true, '服务监控可归属主机 IPv4 字面量')
+    check(serviceMonitor.isAttributableHost('localhost'), true, '服务监控可归属主机 localhost')
+    check(serviceMonitor.isAttributableHost('[::1]'), true, '服务监控可归属主机 IPv6')
+    check(serviceMonitor.isAttributableHost('example.com'), false, '服务监控可归属主机 域名不可归属')
+    check(serviceMonitor.targetMatchesListen('127.0.0.1', 81, '0.0.0.0', 81), true, '服务监控目标匹配 IPv4 目标命中 0.0.0.0 监听')
+    check(serviceMonitor.targetMatchesListen('localhost', 3000, '127.0.0.1', 3000), true, '服务监控目标匹配 localhost 归一化')
+    check(serviceMonitor.targetMatchesListen('[::1]', 81, '[::]', 81), true, '服务监控目标匹配 IPv6 目标命中 [::] 监听')
+    check(serviceMonitor.targetMatchesListen('127.0.0.1', 81, '[::]', 81), false, '服务监控目标匹配 IPv4 目标不命中 IPv6 通配')
+    check(serviceMonitor.targetMatchesListen('127.0.0.1', 81, '127.0.0.1', 82), false, '服务监控目标匹配 端口不一致')
+    check(serviceMonitor.targetMatchesListen('example.com', 80, '0.0.0.0', 80), false, '服务监控目标匹配 远程域名不归属本机监听')
+
+    // 扫描缓存新鲜度：未扫描过一律重扫；maxAge 非法视为 0（要求最新）；
+    // 年龄不超过请求携带的刷新间隔（网页设置）才复用缓存。
+    check(serviceMonitor.scanIsFresh(0, 1000, 10000), false, '服务监控扫描缓存 从未扫描必须重扫')
+    check(serviceMonitor.scanIsFresh(500, 1000, 0), false, '服务监控扫描缓存 maxAge=0 每次都要最新')
+    check(serviceMonitor.scanIsFresh(500, 1000, Number.NaN), false, '服务监控扫描缓存 非法 maxAge 视为 0')
+    check(serviceMonitor.scanIsFresh(500, 1000, 500), true, '服务监控扫描缓存 年龄等于间隔（边界）复用')
+    check(serviceMonitor.scanIsFresh(600, 1000, 500), true, '服务监控扫描缓存 年龄小于间隔复用')
+    check(serviceMonitor.scanIsFresh(499, 1000, 500), false, '服务监控扫描缓存 年龄超过间隔重扫')
+
+    // 目录打开命令：win32 explorer /select、darwin open -R、linux xdg-open 目录。
+    check(JSON.stringify(serviceMonitor.revealCommandFor('win32', 'C:\\Apache24\\bin\\httpd.exe')),
+      JSON.stringify({ file: 'explorer.exe', args: ['/select,C:\\Apache24\\bin\\httpd.exe'] }), '服务监控目录打开 win32 explorer /select')
+    check(JSON.stringify(serviceMonitor.revealCommandFor('darwin', '/usr/local/bin/node')),
+      JSON.stringify({ file: 'open', args: ['-R', '/usr/local/bin/node'] }), '服务监控目录打开 darwin open -R')
+    check(JSON.stringify(serviceMonitor.revealCommandFor('linux', '/usr/bin/redis-server')),
+      JSON.stringify({ file: 'xdg-open', args: ['/usr/bin'] }), '服务监控目录打开 linux xdg-open 所在目录')
 
     // 基线 diff：基线端口永不显示；新端口记录 since；停止监听即移除、重现视为新条目。
     const smNow = 1700000000000

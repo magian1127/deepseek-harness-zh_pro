@@ -93,7 +93,7 @@ window.__ModuleLoader__.load({
 子系统在 `src/lib/constants.ts`、`src/lib/util.ts`、`src/lib/schemastery.ts`、`src/lib/hot-reload.ts`、
 `src/lib/chinese-prompt.ts`、`src/lib/hot-mount.ts`、`src/lib/trash.ts`（跨平台回收站）、
 `src/lib/session-delete.ts`（会话删除编排与 `/dsh-zh/api` 路由）、`src/lib/service-monitor.ts`
-（服务监控：本机监听端口扫描 + 基线 diff + 快照）；CLI 实现拆在 `src/bin/cli/`，`src/bin/dsh-zh.mts`
+（服务监控：本机监听端口扫描 + 基线 diff + 进程归属解析 + 快照与目录打开）；CLI 实现拆在 `src/bin/cli/`，`src/bin/dsh-zh.mts`
 是转发导出并保留入口守卫的聚合入口。编译后对应的 `.js`/`.mjs` 文件供 DSH 和 npm 消费。
 
 client-modules 会缓存某个包名是否为有效客户端包。结构错误被判定为非客户端包后，本插件应先修正格式，再走受控动态 Client 通道或等待自然重启，不把重启作为开发动作。
