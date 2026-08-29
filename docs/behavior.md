@@ -20,21 +20,30 @@
 | 设置 | 默认值 | 存储 | 生效范围 |
 | --- | --- | --- | --- |
 | `zhComplete` 中文补全 | 开 | localStorage | 中文界面 |
-| `statsFull` 统计全显示 | 开 | localStorage | 中文/英文界面 |
 | `zhAgentPrompt` 代理角色提示中文化 | 关 | `settings.yaml` | 新会话的模型请求（system prompt） |
 | `zhToolDesc` 工具说明中文化 | 关 | `settings.yaml` | 新会话的模型请求（工具说明） |
-| `thinkingAuto` 自动展开最新思考 | 开 | localStorage | 中文/英文界面 |
-| `thinkMaxLines` 默认展开行数 | 20，范围 0–200 | localStorage | 中文/英文界面 |
 | `zhPrompt` 提示词注入 | 关 | `settings.yaml` | 后续模型请求 |
 | `zhPromptText` 注入文本 | `思考过程和回复始终使用中文输出` | `settings.yaml` | 提示词注入开启时 |
 | `zhPromptTarget` 注入目标 | `system` | `settings.yaml` | `system` 或 `user` |
+| `thinkingAuto` 自动展开最新思考 | 开 | localStorage | 中文/英文界面 |
+| `thinkMaxLines` 默认展开行数 | 20，范围 0–200 | localStorage | 中文/英文界面 |
+| `statsFull` 统计全显示 | 开 | localStorage | 中文/英文界面 |
 | `zhAutoArchiveDays` 自动归档天数 | 7，范围 0–365 | `settings.yaml` | 新建会话界面打开时 |
 | `archiveViewEnabled` 查看已归档 | 开 | localStorage | 中文/英文界面（与「自动归档旧会话」同组） |
-| `deleteSessionEnabled` 会话删除按钮 | 开 | localStorage | 中文/英文界面（「其他功能」分区在设置页最下方，分区标题 + 扁平行）；关闭时多选菜单的「批量删除」一并隐藏 |
+| `deleteSessionEnabled` 会话删除按钮 | 开 | localStorage | 中文/英文界面；关闭时多选菜单的「批量删除」一并隐藏 |
 | `batchOpsEnabled` 会话批量操作 | 开 | localStorage | 中文/英文界面；悬停复选框 + 三点菜单批量项 |
-| `serviceMonitorEnabled` 服务监控 | 关 | localStorage | 中文/英文界面（独立折叠分组） |
-| `serviceMonitorIntervalSec` 服务监控刷新间隔 | 10 秒，范围 2–300 | localStorage | 服务监控折叠分组 |
-| `serviceMonitorTargets` 自定义监控项 | 空 | localStorage | 服务监控折叠分组（每项 { name, host, port }，上限 100） |
+| `serviceMonitorEnabled` 服务监控 | 关 | localStorage | 中文/英文界面（独立收缩卡片） |
+| `serviceMonitorIntervalSec` 服务监控刷新间隔 | 10 秒，范围 2–300 | localStorage | 服务监控收缩卡片 |
+| `serviceMonitorTargets` 自定义监控项 | 空 | localStorage | 服务监控收缩卡片（每项 { name, host, port }，上限 100） |
+| `styleSettingsOpen` 「对话样式相关」卡片展开态 | 关（收起） | localStorage | 设置页该卡片 |
+| `listSettingsOpen` 「对话列表相关」卡片展开态 | 关（收起） | localStorage | 设置页该卡片 |
+| `serviceMonitorSettingsOpen` 「服务监控」卡片展开态 | 关（收起） | localStorage | 设置页该卡片 |
+
+设置页布局：中文补全、代理角色提示中文化、工具说明中文化、提示词注入四项平铺
+（hairline 行）；其下三张可收缩卡片（复刻官方插件卡样式，折叠态各自记忆在
+localStorage）——「对话样式相关」（自动展开最新思考、默认展开行数、展开模式、
+统计全显示）、「对话列表相关」（自动归档旧会话、查看已归档、会话删除按钮、
+会话批量操作）、「服务监控」（总开关、刷新间隔、自定义监控项）。
 
 localStorage 键为 `deepseek-harness-zh_pro:enhancements`；主机 settings 命名空间为
 `dsh-zh`。`settingsScope` 不可用时提示词开关显示为禁用，其余增强仍可使用。
@@ -319,7 +328,7 @@ DOM。运行时翻转开关立即生效：关闭即卸载全部副作用（已�
 
 ## 服务监控
 
-设置页「服务监控」是设置页最下方的独立收缩卡片（复刻官方插件设置卡样式：12px 圆角边框、头部两行标题/描述 + 旋转箭头、展开换背景，默认收起，折叠态记忆在 localStorage）：总开关、刷新间隔与自定义监控项都在卡片内。总开关（`serviceMonitorEnabled`，**默认关**——进程归属与定位目录按平台尽力而为，并非所有环境都可用，需要时显式开启）在中文和英文界面都生效；关闭时面板完全隐藏，且主机本来就没有后台任务，零开销。开启时主机没有后台定时任务：网页每次拉取快照时对比扫描缓存年龄，超过网页设置的刷新间隔才重新扫描本机 TCP 监听端口（Windows `netstat`、Linux 优先 `ss` 回退 `netstat`、macOS `netstat`），与「基线」（面板开始工作后第一次扫描时已在监听的端口集合）对比；并发拉取共享同一次进行中的扫描：
+设置页「服务监控」是与「对话样式相关」「对话列表相关」并列的独立收缩卡片（复刻官方插件设置卡样式：12px 圆角边框、头部两行标题/描述 + 旋转箭头、展开换背景，默认收起，折叠态记忆在 localStorage）：总开关、刷新间隔与自定义监控项都在卡片内。总开关（`serviceMonitorEnabled`，**默认关**——进程归属与定位目录按平台尽力而为，并非所有环境都可用，需要时显式开启）在中文和英文界面都生效；关闭时面板完全隐藏，且主机本来就没有后台任务，零开销。开启时主机没有后台定时任务：网页每次拉取快照时对比扫描缓存年龄，超过网页设置的刷新间隔才重新扫描本机 TCP 监听端口（Windows `netstat`、Linux 优先 `ss` 回退 `netstat`、macOS `netstat`），与「基线」（面板开始工作后第一次扫描时已在监听的端口集合）对比；并发拉取共享同一次进行中的扫描：
 
 - 对话中启动的本地服务（基线之外新出现的监听端口，如 `127.0.0.1:81`）出现在左侧会话列表与底部设置之间的监控面板：绿色圆点 + 地址:端口 + 存活时长（刚刚 / N 分钟 / N 小时 / N 天），按启动时间从新到旧排列。悬停（或键盘聚焦）在线条目时**按需查询**监听进程归属：首次悬停先显示「正在查询监听进程…」，主机解析完成后提示**原位替换**为归属内容——进程名（PID）、可执行文件完整路径、启动命令行；Windows 上 PID 4 的内核 http.sys 端点由主机按 `netsh http show servicestate view=requestq verbose=yes` 的注册 URL 反查挂靠进程，并标注「经 http.sys 内核队列定位」。点击在线且已定位到进程的条目，由主机在文件管理器中定位该进程文件所在目录（Windows `explorer /select`、macOS Finder 显示、Linux xdg-open 所在目录）；未定位到进程的条目不可点击。
 - 归属查询的缓存语义：查询一次即按监听端点缓存（自定义监控项与自动发现条目一致），再次悬停立即显示；服务停止监听后缓存清除，服务重现后下次悬停重新查询。解析命令失败（如权限不足）30 秒内同端点不重复发起，之后悬停自动重试。轮询、快照与点击路径不产生进程查询——查询只由悬停/聚焦触发，这是该功能唯一的进程枚举开销。

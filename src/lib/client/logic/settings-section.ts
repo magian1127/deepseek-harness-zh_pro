@@ -1,7 +1,8 @@
 // 增强设置页组件（注册进 DSH 设置）——仅界面逻辑，文案来自 settings-dicts.js。
 // 设计语言对齐 dsh-session-notification 的通知设置页：扁平 hairline 行
-// （非卡片）、18/28 分区标题、14/22 行名、12/18 说明、官方风格 switch
-// 与胶囊控件，颜色全部走 --dsw-alias-* 令牌（带回退）。
+// （18/28 分区标题、14/22 行名、12/18 说明、官方风格 switch 与胶囊控件）
+// + 三个可收缩卡片（对话样式相关 / 对话列表相关 / 服务监控，复刻官方
+// 插件卡收缩样式），颜色全部走 --dsw-alias-* 令牌（带回退）。
 const zhSectionStyle = {
   display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '720px',
   color: 'var(--dsw-alias-label-primary, inherit)',
@@ -182,12 +183,7 @@ const ZhSettingsSection = function (props) {
         React.createElement('div', { style: zhDescStyle }, desc)),
       React.createElement('div', { style: zhRowActionsStyle }, node))
   }
-  // 相关设置分组：把语义上属于同一功能的若干行放进同一个容器，
-  // 组内行之间不画分隔线（首行 noDivider），组与组之间仍由各自行的
-  // border-bottom 分隔。
-  const group = function (key, ...rows) {
-    return React.createElement('div', { key: key, style: { display: 'flex', flexDirection: 'column' } }, ...rows)
-  }
+  // 相关设置分组已由 collapseCard 收缩卡片取代（对话样式/对话列表/服务监控）。
   // 服务监控分组局部样式：文本输入（名称/地址）、幽灵删除按钮、添加按钮、折叠头。
   const svcTextNameStyle = {
       flex: '0 1 120px', minWidth: 0, boxSizing: 'border-box',
@@ -250,110 +246,52 @@ const ZhSettingsSection = function (props) {
     borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.28))',
     margin: '0 16px', padding: '4px 0 12px',
   }
+  // 可收缩卡片（与服务监控卡同一套官方插件卡样式）：header 为名称+描述按钮
+  // + chevron，body 由 top 分隔线开始；对话样式/对话列表/服务监控三卡共用。
+  const collapseCard = function (key, open, onToggle, nameText, descText, badgeCount, bodyChildren) {
+    return React.createElement('div', { key: key, style: svcCardStyle(open === true) },
+      React.createElement('button', {
+        type: 'button',
+        'aria-expanded': open === true,
+        'aria-label': nameText,
+        onClick: onToggle,
+        style: svcCardHeadStyle,
+      },
+        React.createElement('span', { style: svcCardHeadTextStyle },
+          React.createElement('span', { style: svcCardNameStyle }, nameText),
+          React.createElement('span', { style: svcCardDescStyle }, descText)),
+        badgeCount !== null && badgeCount !== undefined
+          ? React.createElement('span', { style: svcCardBadgeStyle }, String(badgeCount))
+          : null,
+        React.createElement('span', { style: svcChevronStyle(open === true), 'aria-hidden': 'true' },
+          React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none' },
+            React.createElement('path', {
+              d: 'M3.5 5.5L7 9L10.5 5.5',
+              stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round',
+            })))),
+      open === true ? React.createElement.apply(React, ['div', { style: svcCardBodyStyle }].concat(bodyChildren)) : null)
+  }
   return React.createElement('div', { style: zhSectionStyle },
     React.createElement('h3', { style: zhTitleStyle }, t('nav')),
     React.createElement('p', { style: zhIntroStyle }, t('sectionIntro')),
     React.createElement('div', { style: zhRowsStyle },
-        // 中文补全分组：界面中文补全 + 代理角色提示中文化 + 工具说明中文化
-        // 同属「中文」设置，共用一个容器（组内行不画分隔线）。后两个开关
-        // 与「提示词注入」同走主机 settings（dsh-zh 命名空间，默认关闭），
+        // 平铺四项：中文补全 / 代理角色提示中文化 / 工具说明中文化 / 提示词注入。
+        // 后三者与「提示词注入」同走主机 settings（dsh-zh 命名空间，默认关闭），
         // 只作用于新会话的模型请求；settingsScope 未就绪时显示为禁用。
-        group('zhCompleteGroup',
-          row('zhComplete', t('zhComplete'), t('zhCompleteDesc'),
-            toggle(snapshot.zhComplete, function () { settingsStore.set('zhComplete', !snapshot.zhComplete) }, false, t('zhComplete')),
-            true),
-          row('zhAgentPrompt', t('zhAgentPrompt'), t('zhAgentPromptDesc'),
-            toggle(promptReady && promptSnapshot.value.zhAgentPrompt === true, function () {
-              if (boundPromptScope !== null && promptReady === true) {
-                void boundPromptScope.set('zhAgentPrompt', !(promptReady && promptSnapshot.value.zhAgentPrompt === true))
-              }
-            }, boundPromptScope === null, t('zhAgentPrompt')),
-            true),
-          row('zhToolDesc', t('zhToolDesc'), t('zhToolDescDesc'),
-            toggle(promptReady && promptSnapshot.value.zhToolDesc === true, function () {
-              if (boundPromptScope !== null && promptReady === true) {
-                void boundPromptScope.set('zhToolDesc', !(promptReady && promptSnapshot.value.zhToolDesc === true))
-              }
-            }, boundPromptScope === null, t('zhToolDesc')))),
-      row('statsFull', t('statsFull'), t('statsFullDesc'),
-        toggle(snapshot.statsFull, function () { settingsStore.set('statsFull', !snapshot.statsFull) }, false, t('statsFull'))),
-      // 思考展开分组：自动展开 + 默认展开行数同属思考显示设置，共用一个容器。
-      group('thinkingGroup',
-        row('thinkingAuto', t('thinkingAuto'), t('thinkingAutoDesc'),
-          toggle(snapshot.thinkingAuto, function () { settingsStore.set('thinkingAuto', !snapshot.thinkingAuto) }, false, t('thinkingAuto')),
-          true),
-        row('thinkMaxLines', t('thinkMaxLines'), t('thinkMaxLinesDesc'),
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-            React.createElement('input', {
-              type: 'number', min: 0, max: 200, step: 1, value: snapshot.thinkMaxLines, style: inputStyle,
-              'aria-label': t('thinkMaxLines'),
-              onChange: function (event) {
-                const n = parseInt(event.target.value, 10)
-                if (!isNaN(n)) settingsStore.set('thinkMaxLines', Math.max(0, Math.min(200, Math.round(n))))
-              },
-            }),
-            React.createElement('span', { style: zhDescStyle }, t('thinkMaxLinesUnit')),
-            React.createElement('select', {
-              value: snapshot.thinkMaxLinesFrom === 'earliest' ? 'earliest' : 'latest',
-              'aria-label': t('thinkMaxLinesFrom'),
-              style: {
-                flex: 'none', padding: '4px 8px', borderRadius: 8,
-                border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
-                background: 'var(--dsw-specific-input-minor, transparent)',
-                color: 'var(--dsw-alias-label-primary, inherit)',
-                fontSize: 13, lineHeight: '20px',
-              },
-              onChange: function (event) {
-                settingsStore.set('thinkMaxLinesFrom', event.target.value === 'earliest' ? 'earliest' : 'latest')
-              },
-            },
-              React.createElement('option', { value: 'latest' }, t('thinkMaxLinesFromLatest')),
-              React.createElement('option', { value: 'earliest' }, t('thinkMaxLinesFromEarliest')))),
-          true),
-        row('thinkMode', t('thinkMode'), t('thinkModeDesc'),
-          React.createElement('select', {
-            value: snapshot.thinkMode === 'scroll' ? 'scroll' : 'button',
-            'aria-label': t('thinkMode'),
-            style: {
-              flex: 'none', padding: '4px 8px', borderRadius: 8,
-              border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
-              background: 'var(--dsw-specific-input-minor, transparent)',
-              color: 'var(--dsw-alias-label-primary, inherit)',
-              fontSize: 13, lineHeight: '20px',
-            },
-            onChange: function (event) {
-              settingsStore.set('thinkMode', event.target.value === 'scroll' ? 'scroll' : 'button')
-            },
-          },
-            React.createElement('option', { value: 'button' }, t('thinkModeButton')),
-            React.createElement('option', { value: 'scroll' }, t('thinkModeScroll'))))),
-      // 对话宽度设置已移除：DSH 0.1.2 起上游原生支持宽度自适应与拖拽调节。
-      // 归档分组：自动归档旧会话 + 查看已归档同属归档相关设置，共用一个容器
-      // （组内行不画分隔线，组与组之间仍由各自行的 border-bottom 分隔）。
-      group('archiveGroup',
-        row('autoArchive', t('autoArchive'), t('autoArchiveDesc'),
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
-            React.createElement('input', {
-              type: 'number', min: 0, max: 365, step: 1,
-              value: (promptReady && typeof promptSnapshot.value.zhAutoArchiveDays === 'number')
-                ? promptSnapshot.value.zhAutoArchiveDays
-                : 7,
-              style: inputStyle,
-              'aria-label': t('autoArchive'),
-              disabled: promptReady === false,
-              onChange: function (event) {
-                const n = parseInt(event.target.value, 10)
-                if (boundPromptScope !== null && promptReady === true && !isNaN(n)) {
-                  void boundPromptScope.set('zhAutoArchiveDays', Math.max(0, Math.min(365, Math.round(n))))
-                }
-              },
-            }),
-            React.createElement('span', { style: zhDescStyle }, t('autoArchiveUnit'))),
-          true),
-        row('archiveView', t('archiveView'), t('archiveViewDesc'),
-          toggle(snapshot.archiveViewEnabled, function () {
-            settingsStore.set('archiveViewEnabled', !snapshot.archiveViewEnabled)
-          }, false, t('archiveView')))),
+        row('zhComplete', t('zhComplete'), t('zhCompleteDesc'),
+          toggle(snapshot.zhComplete, function () { settingsStore.set('zhComplete', !snapshot.zhComplete) }, false, t('zhComplete'))),
+        row('zhAgentPrompt', t('zhAgentPrompt'), t('zhAgentPromptDesc'),
+          toggle(promptReady && promptSnapshot.value.zhAgentPrompt === true, function () {
+            if (boundPromptScope !== null && promptReady === true) {
+              void boundPromptScope.set('zhAgentPrompt', !(promptReady && promptSnapshot.value.zhAgentPrompt === true))
+            }
+          }, boundPromptScope === null, t('zhAgentPrompt'))),
+        row('zhToolDesc', t('zhToolDesc'), t('zhToolDescDesc'),
+          toggle(promptReady && promptSnapshot.value.zhToolDesc === true, function () {
+            if (boundPromptScope !== null && promptReady === true) {
+              void boundPromptScope.set('zhToolDesc', !(promptReady && promptSnapshot.value.zhToolDesc === true))
+            }
+          }, boundPromptScope === null, t('zhToolDesc'))),
       // ---- 提示词注入：列布局复杂行，hairline 分隔 ----
       React.createElement('div', {
         key: 'zhPrompt',
@@ -440,22 +378,103 @@ const ZhSettingsSection = function (props) {
             setPromptDraft(null)
           },
         })),
-      // ---- 「其他功能」分区：最下方，分区标题 + 扁平行 ----
+      // ---- 三张收缩卡片：与官方插件页同款纵向列表（gap 12px），与上方
+      // hairline 行之间留一档距离。 ----
       React.createElement('div', {
-        key: 'otherFeatures',
-        style: { display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '4px' },
+        key: 'collapseCards',
+        style: { display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' },
       },
-        React.createElement('div', {
-          style: { fontSize: 14, lineHeight: '22px', fontWeight: 600, color: 'var(--dsw-alias-label-primary, inherit)' },
-        }, t('otherFeatures')),
+      // ---- 「对话样式相关」收缩卡片：思考展开与统计显示 ----
+      collapseCard('styleGroup', snapshot.styleSettingsOpen === true,
+        function () { settingsStore.set('styleSettingsOpen', !(snapshot.styleSettingsOpen === true)) },
+        t('styleGroup'), t('styleGroupDesc'), null, [
+        row('thinkingAuto', t('thinkingAuto'), t('thinkingAutoDesc'),
+          toggle(snapshot.thinkingAuto, function () { settingsStore.set('thinkingAuto', !snapshot.thinkingAuto) }, false, t('thinkingAuto')),
+          true),
+        row('thinkMaxLines', t('thinkMaxLines'), t('thinkMaxLinesDesc'),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+            React.createElement('input', {
+              type: 'number', min: 0, max: 200, step: 1, value: snapshot.thinkMaxLines, style: inputStyle,
+              'aria-label': t('thinkMaxLines'),
+              onChange: function (event) {
+                const n = parseInt(event.target.value, 10)
+                if (!isNaN(n)) settingsStore.set('thinkMaxLines', Math.max(0, Math.min(200, Math.round(n))))
+              },
+            }),
+            React.createElement('span', { style: zhDescStyle }, t('thinkMaxLinesUnit')),
+            React.createElement('select', {
+              value: snapshot.thinkMaxLinesFrom === 'earliest' ? 'earliest' : 'latest',
+              'aria-label': t('thinkMaxLinesFrom'),
+              style: {
+                flex: 'none', padding: '4px 8px', borderRadius: 8,
+                border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
+                background: 'var(--dsw-specific-input-minor, transparent)',
+                color: 'var(--dsw-alias-label-primary, inherit)',
+                fontSize: 13, lineHeight: '20px',
+              },
+              onChange: function (event) {
+                settingsStore.set('thinkMaxLinesFrom', event.target.value === 'earliest' ? 'earliest' : 'latest')
+              },
+            },
+              React.createElement('option', { value: 'latest' }, t('thinkMaxLinesFromLatest')),
+              React.createElement('option', { value: 'earliest' }, t('thinkMaxLinesFromEarliest')))),
+          true),
+        row('thinkMode', t('thinkMode'), t('thinkModeDesc'),
+          React.createElement('select', {
+            value: snapshot.thinkMode === 'scroll' ? 'scroll' : 'button',
+            'aria-label': t('thinkMode'),
+            style: {
+              flex: 'none', padding: '4px 8px', borderRadius: 8,
+              border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
+              background: 'var(--dsw-specific-input-minor, transparent)',
+              color: 'var(--dsw-alias-label-primary, inherit)',
+              fontSize: 13, lineHeight: '20px',
+            },
+            onChange: function (event) {
+              settingsStore.set('thinkMode', event.target.value === 'scroll' ? 'scroll' : 'button')
+            },
+          },
+            React.createElement('option', { value: 'button' }, t('thinkModeButton')),
+            React.createElement('option', { value: 'scroll' }, t('thinkModeScroll')))),
+        row('statsFull', t('statsFull'), t('statsFullDesc'),
+          toggle(snapshot.statsFull, function () { settingsStore.set('statsFull', !snapshot.statsFull) }, false, t('statsFull'))),
+      ]),
+      // ---- 「对话列表相关」收缩卡片：归档 / 删除 / 多选 ----
+      collapseCard('listGroup', snapshot.listSettingsOpen === true,
+        function () { settingsStore.set('listSettingsOpen', !(snapshot.listSettingsOpen === true)) },
+        t('listGroup'), t('listGroupDesc'), null, [
+        row('autoArchive', t('autoArchive'), t('autoArchiveDesc'),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+            React.createElement('input', {
+              type: 'number', min: 0, max: 365, step: 1,
+              value: (promptReady && typeof promptSnapshot.value.zhAutoArchiveDays === 'number')
+                ? promptSnapshot.value.zhAutoArchiveDays
+                : 7,
+              style: inputStyle,
+              'aria-label': t('autoArchive'),
+              disabled: promptReady === false,
+              onChange: function (event) {
+                const n = parseInt(event.target.value, 10)
+                if (boundPromptScope !== null && promptReady === true && !isNaN(n)) {
+                  void boundPromptScope.set('zhAutoArchiveDays', Math.max(0, Math.min(365, Math.round(n))))
+                }
+              },
+            }),
+            React.createElement('span', { style: zhDescStyle }, t('autoArchiveUnit'))),
+          true),
+        row('archiveView', t('archiveView'), t('archiveViewDesc'),
+          toggle(snapshot.archiveViewEnabled, function () {
+            settingsStore.set('archiveViewEnabled', !snapshot.archiveViewEnabled)
+          }, false, t('archiveView'))),
         row('deleteSession', t('deleteSession'), t('deleteSessionDesc'),
           toggle(snapshot.deleteSessionEnabled, function () {
             settingsStore.set('deleteSessionEnabled', !snapshot.deleteSessionEnabled)
-          }, false, t('deleteSession')), true),
+          }, false, t('deleteSession'))),
         row('batchOps', t('batchOps'), t('batchOpsDesc'),
           toggle(snapshot.batchOpsEnabled, function () {
             settingsStore.set('batchOpsEnabled', !snapshot.batchOpsEnabled)
-          }, false, t('batchOps')), true)),
+          }, false, t('batchOps'))),
+      ]),
       // ---- 「服务监控」卡片（复刻官方插件设置卡的收缩样式，位于设置页最下方） ----
         React.createElement('div', {
           key: 'serviceMonitorCard',
@@ -605,5 +624,5 @@ const ZhSettingsSection = function (props) {
               svcEditErrorIndex !== null && React.createElement('div', {
                 style: { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary, #d93026)' },
               }, t('serviceTargetInvalid')),
-    ))))
+    )))))
 }

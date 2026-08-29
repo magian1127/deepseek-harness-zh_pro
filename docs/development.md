@@ -64,7 +64,9 @@ npm test
   `zh-dict.ts` 整句覆盖/部分翻译、`dom-labels.ts` DOM 精确映射、`traj-patterns.ts` 轨迹正则）；
 - `src/lib/client/logic/`：状态与逻辑（`settings-store.ts`、`prompt-store.ts`、`format-utils.ts`、
   `settings-section.ts` 设置页组件、`auto-archive.ts`、`register.ts`、`dom-enhance.ts`、
-  `session-menu.ts` 会话删除菜单、`service-monitor.ts` 服务监控面板、`apply.ts`）；
+  `session-menu.ts` 会话删除菜单（含批量项注入与批量执行）、`session-batch.ts` 会话批量操作
+  （行首复选框 + 多选状态）、`archive-view.ts` 归档视图、`service-monitor.ts` 服务监控面板、
+  `apply.ts`）；
 - `src/lib/client/entry.ts`：客户端行为说明；`scripts/build-client.mjs` 负责生成包壳与导出，
   同时更新 `lib/client/` 下的旧路径生成快照，便于兼容既有审查工具。
 
@@ -165,6 +167,11 @@ client-modules 会缓存某个包名是否为有效客户端包。结构错误�
 - **滚动模式的方向决定初始位置与跟随策略**：最新 N 行初始在底部、流式跟随（上滚暂停、回底恢复）；
   最早 N 行只在「首次折叠或方向切换」时定位到顶部，之后位置完全交给用户滚动——每帧 pass 不得重置
   滚动位置，否则用户一滚就被拉回。用正文状态里的 `from` 与当前方向比较来判断是否重置。
+- **observer 回调处理行内变化必须向上定位宿主**：回调里只扫 `record.target` 的**子树**时，
+  发生在注入容器内部的变化（如会话行 slot 里出现/移除状态图标）永远扫不到宿主行——启动
+  全量 pass 能注入、动态变化全部失效（2026-08-29 会话批量操作真实 GUI 验收发现）。回调
+  必须对 target 做 `closest(宿主选择器)` 向上找行再扫描；同时 pass 要处理「扫描根自身匹配
+  选择器」的情况（`matches` 检查），新增单节点直接传入时才不漏。
 
 统计、提示词提供方隐藏和自动展开思考都是独立 DOM 效果，关闭开关和 Fiber
 卸载时必须分别清理，不能依赖“中文补全”总开关代替。除「中文补全」和提示词提供方隐藏
@@ -196,6 +203,12 @@ client-modules 会缓存某个包名是否为有效客户端包。结构错误�
   --noEmit` 验证，不要攒到最后。
 - **轮询间隔可配置的功能用 setTimeout 自循环**：每轮从设置读最新间隔再排下一轮，
   改「刷新间隔」即时生效，无需重建 Fiber/定时器。
+- **在既有 createElement 参数列表里插入兄弟行，先核对括号层级**：分组容器里最后一行的
+  末尾往往同时闭合了行与容器（`... true))`），把新行插到这之后就成了容器的**兄弟**——
+  typecheck 与 build 都不报错，渲染位置却错（2026-08-29 批量操作开关渲染成设置卡片上的
+  裸行、分组里看不到）。插入后必须以真实渲染层级验收（打开设置页查 DOM 祖先链），
+  不能以编译通过代替。
+
 ## 设置与 React store
 
 本地增强设置使用稳定 localStorage 键和不可变快照。`useSyncExternalStore` 要求状态变化后
@@ -296,6 +309,12 @@ profile patch 只编辑带 `# dsh-zh:begin/end` 的受管块，同时兼容旧�
 2. 修改上游术语或 DOM 标签前读取部署版原文。
 3. 修改标识符后全局搜索旧名和新名；`node --check` 不会发现未定义变量。
 4. 执行 `npm run typecheck`、`npm run build`，再执行 [`../AGENTS.md`](../AGENTS.md) 规定的语法检查和三组回归。
+   回归脚本定位被测模块不要按 MutationObserver 实例索引（archive-view 等模块内部有多个
+   observer、保活回调运行期还会再创建，索引随实现漂移，且遍历活数组会被新建项撑成死循环
+   ——快照后再遍历）；从 bundle 导出确定性入口调用（如 `exports.sessionBatch.pass`、
+   `exports.settingsStore`）。Fake DOM 夹具要与被测代码能力同步补齐（`matches`、深克隆
+   `cloneNode`、`:first/:last-child` 伪类、`*=` 属性选择器、document 级查询），否则断言
+   假绿或装置缺方法崩溃。
 5. 客户端/主机改动验证实际运行副本、Fiber 与 GUI；不能以重启代替热路径。
 6. 用户可见行为同步双语 README 与 `behavior.md`；新的故障模式更新
    `troubleshooting.md`；发布要求只写入 `release.md`。

@@ -6,7 +6,7 @@
 // 刷新间隔（秒）、serviceMonitorTargets 自定义监控项（{ name, host, port }，
 // 常驻面板显示在线/离线）、serviceMonitorSettingsOpen 设置页分组折叠态。
 const SETTINGS_KEY = 'deepseek-harness-zh_pro:enhancements'
-const SETTINGS_DEFAULTS = { zhComplete: true, statsFull: true, thinkingAuto: true, thinkMaxLines: 20, thinkMaxLinesFrom: 'latest', thinkMode: 'button', deleteSessionEnabled: true, batchOpsEnabled: true, archiveViewEnabled: true, serviceMonitorEnabled: false, serviceMonitorIntervalSec: 10, serviceMonitorTargets: [], serviceMonitorSettingsOpen: false }
+const SETTINGS_DEFAULTS = { zhComplete: true, statsFull: true, thinkingAuto: true, thinkMaxLines: 20, thinkMaxLinesFrom: 'latest', thinkMode: 'button', deleteSessionEnabled: true, batchOpsEnabled: true, archiveViewEnabled: true, styleSettingsOpen: false, listSettingsOpen: false, serviceMonitorEnabled: false, serviceMonitorIntervalSec: 10, serviceMonitorTargets: [], serviceMonitorSettingsOpen: false }
 const SETTINGS_NS = 'dsh-zh-settings'
 // 自定义监控项归一化：结构合法的 { name, host, port } 才保留（防手改 localStorage 注入脏数据）。
 function normalizeServiceTargets(value) {
@@ -38,6 +38,8 @@ let settingsSnapshot = (function () {
         deleteSessionEnabled: parsed.deleteSessionEnabled !== false,
         batchOpsEnabled: parsed.batchOpsEnabled !== false,
         archiveViewEnabled: parsed.archiveViewEnabled !== false,
+        styleSettingsOpen: parsed.styleSettingsOpen === true,
+        listSettingsOpen: parsed.listSettingsOpen === true,
         serviceMonitorEnabled: parsed.serviceMonitorEnabled === true,
         serviceMonitorIntervalSec: typeof parsed.serviceMonitorIntervalSec === 'number' ? Math.max(2, Math.min(300, Math.round(parsed.serviceMonitorIntervalSec))) : SETTINGS_DEFAULTS.serviceMonitorIntervalSec,
         serviceMonitorTargets: normalizeServiceTargets(parsed.serviceMonitorTargets),

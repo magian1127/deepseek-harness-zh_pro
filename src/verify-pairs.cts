@@ -621,6 +621,9 @@ function findElement(node, predicate) {
   return findElement(node.props && node.props.children, predicate)
 }
 check(typeof settingsRender, 'function', '增强设置 已注册')
+// 统计全显示 / 默认展开行数收在「对话样式相关」收缩卡片内：测试前展开
+// （卡片折叠态持久化在 localStorage，mock 环境默认收起、body 不渲染）。
+pluginExports.settingsStore.set('styleSettingsOpen', true)
 let settingsTree = settingsRender()
 const promptToggle = findElement(settingsTree, function (node) {
   return node.type === 'button' && node.props && node.props['aria-label'] === '提示词注入'
