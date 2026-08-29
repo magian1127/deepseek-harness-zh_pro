@@ -29,6 +29,7 @@ const BODY_ORDER = [
   'logic/settings-section.ts',
   'logic/auto-archive.ts',
   'logic/session-menu.ts',
+  'logic/session-batch.ts',
   'logic/archive-view.ts',
   'logic/service-monitor.ts',
   'logic/register.ts',
@@ -75,6 +76,10 @@ const wrapperEnd = `    exports.inject = ['locale', 'slots'];
       ownerTipText: ownerTipText,
       orderedPanelEntries: orderedPanelEntries,
       serviceElapsedText: serviceElapsedText,
+    };
+    exports.sessionBatch = {
+      pass: runBatchPassForTest,
+      selectionSize: batchSelectionSize,
     };
     return module.exports;
   },

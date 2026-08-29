@@ -14,18 +14,19 @@ const fs = require('fs')
 
 // ---------- 最小 DOM mock ----------
 function attrSelectorOf(sel) {
-  const re = /\[([a-zA-Z-]+)(?:\^?=?"([^"]*)")?\]/g
+  const re = /\[([a-zA-Z-]+)(?:([*^$|]?=)"([^"]*)")?\]/g
   const tests = []
   let m
   while ((m = re.exec(sel)) !== null) {
     const name = m[1]
-    const expect = m[2]
-    const isPrefix = m[0].indexOf('^=') !== -1
+    const op = m[2]
+    const expect = m[3]
     tests.push(function (el) {
       const actual = el.getAttribute(name)
       if (actual === null) return false
-      if (expect === undefined) return true
-      if (isPrefix) return actual.startsWith(expect)
+      if (op === undefined) return true
+      if (op === '*=') return actual.indexOf(expect) !== -1
+      if (op === '^=') return actual.startsWith(expect)
       return actual === expect
     })
   }
@@ -56,6 +57,18 @@ function matchSingle(el, single) {
     const attr = typeof el.getAttribute === 'function' ? el.getAttribute('class') : null
     if (attr === null || attr === undefined || (' ' + attr + ' ').indexOf(' ' + cls + ' ') === -1) return false
     rest = rest.slice(classMatch[0].length)
+  }
+  // 伪类 :first-child / :last-child：按父元素的元素子节点位置匹配。
+  const firstMatch = rest.match(/^:first-child/)
+  const lastMatch = rest.match(/^:last-child/)
+  if (firstMatch !== null || lastMatch !== null) {
+    const pseudo = firstMatch !== null ? firstMatch[0] : lastMatch[0]
+    const pseudoParent = el.parentElement
+    const siblings = pseudoParent !== null && pseudoParent !== undefined && pseudoParent.children !== undefined
+      ? pseudoParent.children.filter(c => c.nodeType === 1) : []
+    if (firstMatch !== null && siblings[0] !== el) return false
+    if (lastMatch !== null && siblings[siblings.length - 1] !== el) return false
+    rest = rest.slice(pseudo.length)
   }
   const tests = attrSelectorOf(rest)
   for (const test of tests) {
@@ -118,8 +131,23 @@ class FakeEl {
       this.children[j].nextElementSibling = this.children[j + 1] || null
     }
   }
-  querySelector(sel) { return this._query(sel, false) }
-  querySelectorAll(sel) { return this._query(sel, true) }
+  querySelector(sel) {
+    // 逗号选择器：任一组命中即返回（官方代码里有 'button[a],button[b]' 形态）。
+    for (const part of String(sel).split(',')) {
+      const hit = this._query(part.trim(), false)
+      if (hit !== null) return hit
+    }
+    return null
+  }
+  querySelectorAll(sel) {
+    const out = []
+    for (const part of String(sel).split(',')) {
+      for (const hit of this._query(part.trim(), true)) {
+        if (out.indexOf(hit) === -1) out.push(hit)
+      }
+    }
+    return out
+  }
   _query(sel, all) {
     const out = []
     const walk = (el) => {
@@ -130,8 +158,7 @@ class FakeEl {
     }
     walk(this)
     return all ? out : (out[0] || null)
-  }
-  contains(node) {
+  }  contains(node) {
     let el = node
     while (el !== null) {
       if (el === this) return true
@@ -147,6 +174,7 @@ class FakeEl {
     }
     return null
   }
+  matches(sel) { return matchSel(this, sel) }
   addEventListener(t, fn) { this._handlers[t] = fn }
   removeEventListener(t) { delete this._handlers[t] }
   get isConnected() {
@@ -161,11 +189,15 @@ class FakeEl {
   }
   click(type) { const fn = this._handlers[type || 'click']; if (typeof fn === 'function') fn({ preventDefault() {}, stopPropagation() {}, currentTarget: this, target: this, key: undefined }) }
   getBoundingClientRect() { return this._rect || { left: 0, right: 300, top: 0, bottom: 600, width: 300, height: 600 } }
-  cloneNode() {
+  cloneNode(deep = true) {
     const clone = new FakeEl(this.tagName)
     for (const k of Object.keys(this._attrs)) clone._attrs[k] = this._attrs[k]
     clone.textContent = this.textContent
     clone.title = this.title
+    // 深克隆：菜单项注入依赖克隆出的子结构（button > icon span + label span）。
+    if (deep !== false) {
+      for (const c of this.children) clone.appendChild(c.cloneNode(true))
+    }
     return clone
   }
 }
@@ -234,6 +266,9 @@ const fakeDoc = {
   head: new FakeEl('head'),
   createElement(tag) { return new FakeEl(tag) },
   createElementNS(_ns, tag) { return new FakeEl(tag) },
+  // document 级查询委托给 body（documentElement 不承载业务节点）。
+  querySelector(sel) { return body.querySelector(sel) },
+  querySelectorAll(sel) { return body.querySelectorAll(sel) },
   _handlers: {},
   addEventListener(type, fn) { this._handlers[type] = fn },
   removeEventListener(type) { delete this._handlers[type] },
@@ -366,6 +401,7 @@ const sessionsService = {
   refresh() { return Promise.resolve() },
 }
 let bindingIds = []
+const archiveSessionCalls = []
 let renameCalls = []
 let forkCalls = []
 let wsSnapshot = {
@@ -377,6 +413,11 @@ const workspacesService = {
   list: {
     getSnapshot() { return wsSnapshot },
     subscribe() { return function () {} },
+  },
+  archiveSession(id) {
+    archiveSessionCalls.push(id)
+    wsSnapshot = { ...wsSnapshot, archivedSessionIds: [...wsSnapshot.archivedSessionIds, id] }
+    return Promise.resolve()
   },
   refresh() { return Promise.resolve() },
 }
@@ -808,6 +849,156 @@ check(panelOf() !== null, true, '重新开启 归档视图可用')
 archiveBtnRe.click('click')
 check(panelOf(), null, '重新开启 归档视图可退出')
 
+// 11d) 会话批量操作：行首空图标位复选框 + 多选 + 批量菜单项 + 批量删除/归档。
+// 全量扫描走 bundle 导出的确定性 pass（archive-view 内部还有多个 observer，
+// 按索引定位不可靠）。
+check(typeof pluginExports.sessionBatch === 'object' && typeof pluginExports.sessionBatch.pass === 'function', true, '批量操作模块已安装并暴露测试入口')
+const batchList = new FakeEl('div')
+body.appendChild(batchList)
+function makeBatchRow(id, opts) {
+  const row = new FakeEl('div', { role: 'treeitem', class: 'Rows_sessionRow__x' })
+  if (!opts.noSlot) {
+    const slot = new FakeEl('span', { class: 'Rows_slot__y' })
+    if (opts.icon === 'ongoing') {
+      slot.appendChild(new FakeEl('svg', { 'data-state': 'ongoing' }))
+    } else if (opts.icon === 'done') {
+      slot.appendChild(new FakeEl('span', { 'data-state': 'done' }))
+    }
+    row.appendChild(slot)
+  }
+  const title = new FakeEl('span', { class: 'Rows_title__z' })
+  title.textContent = opts.title
+  row.appendChild(title)
+  if (id !== null) row['__reactFiber$batch'] = { memoizedProps: { node: { id: id } }, return: null }
+  batchList.appendChild(row)
+  return row
+}
+const r1 = makeBatchRow('a1', { title: '会话1' })
+const r2 = makeBatchRow('a2', { title: '会话2', icon: 'ongoing' })
+const r3 = makeBatchRow('a3', { title: '会话3', icon: 'done' })
+const r4 = makeBatchRow('blank1', { title: '' })
+const r5 = makeBatchRow('a4', { title: '会话4', noSlot: true })
+const projRow = new FakeEl('div', { role: 'treeitem', class: 'Rows_projectRow__x' })
+batchList.appendChild(projRow)
+const batchChecksOf = function () { return batchList.querySelectorAll('input[data-dsh-zh-batch-check]') }
+pluginExports.sessionBatch.pass()
+let batchChecks = batchChecksOf()
+check(batchChecks.length, 1, '批量 只有空闲会话行注入复选框')
+check(batchChecks[0].parentNode === r1.children[0], true, '批量 复选框位于行首 slot')
+check(batchChecks[0].checked, false, '批量 初始未勾选')
+
+// 勾选 → 多选非空 → 三点菜单追加批量项（portal 菜单节点直接交给菜单 observer）。
+r1.children[0].children[0].checked = true
+r1.children[0].children[0].click('change')
+function makeOfficialMenu() {
+  const menu = new FakeEl('div', { role: 'menu' })
+  function addItem(label) {
+    const itemWrap = new FakeEl('div')
+    const btn = new FakeEl('button', { role: 'menuitem' })
+    const icon = new FakeEl('span')
+    const lbl = new FakeEl('span')
+    // FakeEl 的 textContent 不从子节点派生：锚点匹配按按钮整段文本，
+    // 这里显式设置（等价真实 DOM 的派生结果）。
+    lbl.textContent = label
+    btn.textContent = label
+    btn.appendChild(icon)
+    btn.appendChild(lbl)
+    itemWrap.appendChild(btn)
+    menu.appendChild(itemWrap)
+    return itemWrap
+  }
+  addItem('重命名')
+  addItem('分叉会话')
+  addItem('归档会话')
+  return menu
+}
+// 菜单 observer 按行为探测：各模块 observer 的数量与顺序脆弱，
+// 用「注入后给菜单打 data-dsh-zh-delete-session 标记」这一确定事实定位。
+let menuObs = null
+for (const obs of fakeObs) {
+  const probe = makeOfficialMenu()
+  obs.cb([{ addedNodes: [probe], target: body }])
+  if (probe.getAttribute('data-dsh-zh-delete-session') !== null) { menuObs = obs; break }
+}
+check(menuObs !== null, true, '定位会话菜单 observer')
+const officialMenu = makeOfficialMenu()
+menuObs.cb([{ addedNodes: [officialMenu], target: body }])
+const batchItems = officialMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]')
+check(batchItems.length, 2, '批量 多选后菜单注入两个批量项')
+check(batchItems[0].querySelector('span:last-child').textContent, '批量删除（1）', '批量删除文案带计数')
+check(batchItems[1].querySelector('span:last-child').textContent, '批量归档（1）', '批量归档文案带计数')
+// 官方三项原样保留，批量项排在「归档会话」之后。
+check(officialMenu.querySelectorAll('[role="menuitem"]').length, 5, '批量 官方菜单项不被替换')
+
+// 批量删除：确认框 → 确认 → 逐个调用主机删除路由 → 清空多选。
+const deleteCallsBefore = fetchCalls.filter(f => f.url === '/dsh-zh/api/session.delete').length
+batchItems[0].click('click')
+const confirmOverlaysOf = function () {
+  return body.children.filter(c => c.tagName === 'DIV' && c.style && String(c.style.cssText).indexOf('z-index:1200') !== -1)
+}
+check(confirmOverlaysOf().length, 1, '批量删除 弹确认框')
+const confirmButtons = confirmOverlaysOf()[0].querySelectorAll('button')
+confirmButtons[confirmButtons.length - 1].click('click')
+await flushMicrotasks()
+const deleteCallsAfter = fetchCalls.filter(f => f.url === '/dsh-zh/api/session.delete')
+check(deleteCallsAfter.length, deleteCallsBefore + 1, '批量删除 发出删除请求')
+check(JSON.parse(deleteCallsAfter[deleteCallsAfter.length - 1].opts.body).sessionId, 'a1', '批量删除 会话 id 正确')
+check(batchChecksOf().length === 1 && batchChecksOf()[0].checked, false, '批量删除完成后清空多选（勾选态还原）')
+check(confirmOverlaysOf().length, 0, '批量删除 确认框已关闭')
+
+// 批量归档：确认框 → 确认 → 调官方 archiveSession → 清空多选。
+r1.children[0].children[0].checked = true
+r1.children[0].children[0].click('change')
+const archiveMenu = makeOfficialMenu()
+menuObs.cb([{ addedNodes: [archiveMenu], target: body }])
+const archiveBatchItems = archiveMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]')
+check(archiveBatchItems.length, 2, '批量 重新打开菜单仍注入批量项')
+archiveBatchItems[1].click('click')
+check(confirmOverlaysOf().length, 1, '批量归档 弹确认框')
+const archiveConfirmButtons = confirmOverlaysOf()[0].querySelectorAll('button')
+archiveConfirmButtons[archiveConfirmButtons.length - 1].click('click')
+await flushMicrotasks()
+check(archiveSessionCalls.indexOf('a1') !== -1, true, '批量归档 调用官方 archiveSession')
+check(batchChecksOf()[0].checked, false, '批量归档完成后清空多选')
+check(confirmOverlaysOf().length, 0, '批量归档 确认框已关闭')
+
+// 行首出现官方图标（如会话开始运行）→ 复选框被移除，选择一并丢弃。
+r1.children[0].children[0].checked = true
+r1.children[0].children[0].click('change')
+const runningSvg = new FakeEl('svg', { 'data-state': 'ongoing' })
+r1.children[0].appendChild(runningSvg)
+pluginExports.sessionBatch.pass()
+check(batchChecksOf().length, 0, '批量 slot 出现官方图标后复选框被移除')
+
+// 回归保护：observer 回调的行内变化路径（target=slot、addedNodes=图标）。
+// 全量 pass 走不到这条路径——回调必须 target.closest(BATCH_ROW_SELECTOR)
+// 向上找行扫描，否则真实页面里「图标出现 → 摘除复选框」永远不触发
+// （2026-08-29 真实 GUI 验收发现并修复）。
+// 先移除 r1 图标让其回到空闲（复选框恢复），勾选后再经回调路径注入图标。
+r1.children[0].removeChild(runningSvg)
+pluginExports.sessionBatch.pass()
+check(batchChecksOf().length, 1, '批量 图标移除后空闲行复选框恢复')
+r1.children[0].children[0].checked = true
+r1.children[0].children[0].click('change')
+const iconSvg = new FakeEl('svg', { 'data-state': 'ongoing' })
+r1.children[0].appendChild(iconSvg)
+// 快照后遍历：archive-view 的保活回调会在 cb 内创建新 observer，直接
+// for...of 活数组会无限循环。
+for (const obs of fakeObs.slice()) {
+  obs.cb([{ type: 'childList', addedNodes: [iconSvg], target: r1.children[0] }])
+}
+check(batchChecksOf().length, 0, '批量 回调行内路径同样摘除复选框（回归保护）')
+
+// 开关关闭：移除全部复选框并清空选择；重新开启：重新注入。
+const r7 = makeBatchRow('a5', { title: '会话5' })
+settingsStoreUnderTest.set('batchOpsEnabled', false)
+check(batchChecksOf().length, 0, '关闭批量开关后移除全部复选框')
+settingsStoreUnderTest.set('batchOpsEnabled', true)
+pluginExports.sessionBatch.pass()
+batchChecks = batchChecksOf()
+check(batchChecks.length, 1, '重新开启批量开关后空闲行恢复复选框')
+check(batchChecks[0].closest('div[class*="sessionRow"][role="treeitem"]') === r7, true, '批量 复选框位于新空闲行')
+
 // 12) 卸载清理
 for (const d of disposers) d()
 check(registeredDicts['dsh-zh-archive'], undefined, '卸载后词典注销')
@@ -815,6 +1006,7 @@ check(panelOf(), null, '卸载后归档行容器移除')
 check(sessionSpans.every(s => s.getAttribute('data-dsh-zh-archive-hides-row') === null), true, '卸载后无残留隐藏标记')
 check(wsActions.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !== null), undefined, '卸载后工作区行归档按钮移除')
 check(ungroupedRow.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !== null), undefined, '卸载后未分组行归档按钮移除')
+check(body.querySelectorAll('input[data-dsh-zh-batch-check]').length, 0, '卸载后批量复选框全部移除')
 check(intervals.filter(i => i !== null).length, intervalsBefore, '卸载后无残留定时器')
 // 卸载后两个样式标签都移除（mock 的 querySelector 不支持逗号选择器，直接查 head 子元素）。
 const remainingStyles = fakeDoc.head.children.filter(c => c.tagName === 'STYLE')

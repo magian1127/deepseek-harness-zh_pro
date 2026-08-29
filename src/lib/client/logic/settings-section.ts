@@ -452,6 +452,10 @@ const ZhSettingsSection = function (props) {
           toggle(snapshot.deleteSessionEnabled, function () {
             settingsStore.set('deleteSessionEnabled', !snapshot.deleteSessionEnabled)
           }, false, t('deleteSession')), true)),
+        row('batchOps', t('batchOps'), t('batchOpsDesc'),
+          toggle(snapshot.batchOpsEnabled, function () {
+            settingsStore.set('batchOpsEnabled', !snapshot.batchOpsEnabled)
+          }, false, t('batchOps')), true),
       // ---- 「服务监控」卡片（复刻官方插件设置卡的收缩样式，位于设置页最下方） ----
         React.createElement('div', {
           key: 'serviceMonitorCard',

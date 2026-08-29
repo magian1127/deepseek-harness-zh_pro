@@ -29,6 +29,9 @@ const DELETE_ITEM_HINTS = {
   zh: '删除会话（日志移入系统回收站，不保留恢复位）',
   en: 'Delete session (log moves to the system recycle bin; no restore position)',
 }
+// 批量操作项（多选非空时注入；N = 当前多选数）。
+const BATCH_DELETE_ITEM_LABELS = { zh: '批量删除（{n}）', en: 'Delete selected ({n})' }
+const BATCH_ARCHIVE_ITEM_LABELS = { zh: '批量归档（{n}）', en: 'Archive selected ({n})' }
 
 // 确认框与提示条文案（按界面语言）。
 const CONFIRM_TEXTS = {
@@ -40,6 +43,16 @@ const CONFIRM_TEXTS = {
     deleted: '会话已删除（日志已移入系统回收站）',
     failed: '删除失败：{message}',
     deleting: '正在删除会话…',
+    batchDeleteTitle: '批量删除会话',
+    batchDeleteDesc: '将把选中的 {n} 个会话删除：日志移入系统回收站、并从工作区账本移除（不保留恢复位）；运行中的会话会被跳过。确定继续吗？',
+    batchDeleting: '正在批量删除 {n} 个会话…',
+    batchDeleted: '已删除 {n} 个会话（日志已移入系统回收站）',
+    batchArchiveTitle: '批量归档会话',
+    batchArchiveDesc: '将把选中的 {n} 个会话加入归档（从列表隐藏，日志原地保留，可随时在归档视图中恢复）。确定继续吗？',
+    batchArchiving: '正在批量归档 {n} 个会话…',
+    batchArchived: '已归档 {n} 个会话',
+    batchPartial: '完成 {ok} 个，失败 {failed} 个：{message}',
+    batchUnavailable: '批量归档不可用（工作区服务未就绪）',
   },
   en: {
     title: 'Delete session',
@@ -49,6 +62,16 @@ const CONFIRM_TEXTS = {
     deleted: 'Session deleted (log moved to the system recycle bin)',
     failed: 'Delete failed: {message}',
     deleting: 'Deleting session…',
+    batchDeleteTitle: 'Delete selected sessions',
+    batchDeleteDesc: 'The {n} selected sessions will be deleted: logs move to the system recycle bin and workspace ledger slots are removed (no restore position); running sessions are skipped. Continue?',
+    batchDeleting: 'Deleting {n} selected sessions…',
+    batchDeleted: 'Deleted {n} sessions (logs moved to the system recycle bin)',
+    batchArchiveTitle: 'Archive selected sessions',
+    batchArchiveDesc: 'The {n} selected sessions will be archived (hidden from the list, logs kept in place; restore anytime from the archive view). Continue?',
+    batchArchiving: 'Archiving {n} selected sessions…',
+    batchArchived: 'Archived {n} sessions',
+    batchPartial: '{ok} done, {failed} failed: {message}',
+    batchUnavailable: 'Bulk archive unavailable (workspace service not ready)',
   },
 }
 // 当前界面语言的文案（随语言切换重算）。
@@ -163,6 +186,8 @@ function installSessionMenu(ctx) {
         zh: zh,
         deleteLabel: DELETE_ITEM_LABELS[zh ? 'zh' : 'en'],
         deleteHint: DELETE_ITEM_HINTS[zh ? 'zh' : 'en'],
+        batchDeleteLabel: BATCH_DELETE_ITEM_LABELS[zh ? 'zh' : 'en'],
+        batchArchiveLabel: BATCH_ARCHIVE_ITEM_LABELS[zh ? 'zh' : 'en'],
         title: copy.title,
         desc: copy.desc,
         ok: copy.ok,
@@ -170,6 +195,16 @@ function installSessionMenu(ctx) {
         deleted: copy.deleted,
         failed: copy.failed,
         deleting: copy.deleting,
+        batchDeleteTitle: copy.batchDeleteTitle,
+        batchDeleteDesc: copy.batchDeleteDesc,
+        batchDeleting: copy.batchDeleting,
+        batchDeleted: copy.batchDeleted,
+        batchArchiveTitle: copy.batchArchiveTitle,
+        batchArchiveDesc: copy.batchArchiveDesc,
+        batchArchiving: copy.batchArchiving,
+        batchArchived: copy.batchArchived,
+        batchPartial: copy.batchPartial,
+        batchUnavailable: copy.batchUnavailable,
       }
       return currentCopy
     }
@@ -277,16 +312,16 @@ function installSessionMenu(ctx) {
     // ------- 注入「删除会话」菜单项 -------
     // 已注入标记：防止同一次打开重复注入。
     const INJECTED_MARK = 'data-dsh-zh-delete-session'
+    // 批量项标记（批量删除/批量归档两个按钮共用，孤儿清扫用）。
+    const BATCH_ITEM_MARK = 'data-dsh-zh-batch-menuitem'
     const injectIntoMenu = function (menu, sessionsList) {
-      // 「会话删除按钮」开关关闭时不在菜单注入删除项（全语言生效）。
-      if (settingsStore.getSnapshot().deleteSessionEnabled !== true) return
+      // 同一次打开只注入一次（全量重放时跳过已注入的菜单）。
       if (menu.getAttribute(INJECTED_MARK) !== null) return
       // 清理残留副本：官方菜单关闭/重开时，之前注入的克隆节点可能成为
       // body 下的孤儿（无 click handler，点击会失效），这里只保留当前
-      // 菜单内的注入按钮，防止孤儿累积。（标记同时存在于菜单容器上，
-      // 因此只匹配 button[data-dsh-zh-delete-session]。）
+      // 菜单内的注入按钮，防止孤儿累积。
       try {
-        const orphans = document.querySelectorAll('button[' + INJECTED_MARK + ']')
+        const orphans = document.querySelectorAll('button[' + INJECTED_MARK + '],button[' + BATCH_ITEM_MARK + ']')
         for (let i = 0; i < orphans.length; i += 1) {
           const orphan = orphans[i]
           if (orphan !== null && orphan.parentNode !== null && !menu.contains(orphan)) {
@@ -310,46 +345,85 @@ function installSessionMenu(ctx) {
       // 从 anchor 所在菜单定位行：菜单是 portal，没有 DOM 父子关系。
       // 改用「打开菜单的三点按钮」——记录最近一次点击的三点按钮。
       const row = lastEllipsisRow
-      if (row === null) return
-      let sessionId = readSessionIdFromRow(row)
-      const title = titleOf(row)
-      if (sessionId === null) sessionId = matchSessionIdByTitle(title, sessionsList)
-      if (sessionId === null) return
+      let sessionId = row !== null ? readSessionIdFromRow(row) : null
+      const title = row !== null ? titleOf(row) : ''
+      if (sessionId === null && row !== null) sessionId = matchSessionIdByTitle(title, sessionsList)
 
       const copy = resolveCopy()
-      // 复制官方菜单项结构（itemWrap > button > icon + label），替换为删除项。
+      // 复制官方菜单项结构（itemWrap > button > icon + label），批量项与
+      // 删除项都插在「归档会话」之后，按注入顺序排布。
       const wrap = anchor.parentElement
       if (wrap === null) return
-      const clone = wrap.cloneNode(true)
-      const button = clone.querySelector('[role="menuitem"]')
-      if (button === null) return
-      button.setAttribute(INJECTED_MARK, '')
-      // 替换图标为垃圾桶占位（无官方图标库访问权，用文本「🗑」）。
-      const icon = button.querySelector('span:first-child')
-      if (icon !== null) {
-        icon.textContent = '🗑'
-        icon.style.fontSize = '14px'
+      let insertAfter = wrap
+      const buildMenuItem = function (mark, iconText, labelText, hintText, danger) {
+        const itemWrap = wrap.cloneNode(true)
+        const itemButton = itemWrap.querySelector('[role="menuitem"]')
+        if (itemButton === null) return null
+        itemButton.setAttribute(mark, '')
+        const itemIcon = itemButton.querySelector('span:first-child')
+        if (itemIcon !== null) {
+          itemIcon.textContent = iconText
+          itemIcon.style.fontSize = '14px'
+        }
+        const itemLabel = itemButton.querySelector('span:last-child')
+        if (itemLabel !== null) {
+          itemLabel.textContent = labelText
+          if (hintText !== null && hintText !== undefined && hintText !== '') itemLabel.title = hintText
+        } else {
+          itemButton.textContent = labelText
+        }
+        if (danger === true) itemButton.style.color = 'var(--dsw-alias-danger-strong, #d93026)'
+        return { wrap: itemWrap, button: itemButton }
       }
-      const label = button.querySelector('span:last-child')
-      if (label !== null) {
-        label.textContent = copy.deleteLabel
-        label.title = copy.deleteHint
-      } else {
-        button.textContent = copy.deleteLabel
+      const insertMenuItem = function (item) {
+        if (insertAfter.nextSibling !== null) insertAfter.parentNode.insertBefore(item.wrap, insertAfter.nextSibling)
+        else insertAfter.parentNode.appendChild(item.wrap)
+        insertAfter = item.wrap
       }
-      // 危险样式：红色文字。
-      button.style.color = 'var(--dsw-alias-danger-strong, #d93026)'
-      button.addEventListener('click', function (event) {
-        event.preventDefault()
-        event.stopPropagation()
-        closeOfficialMenu(menu)
-        showConfirm(copy.title, copy.desc, function () {
-          void performDelete(sessionId, title)
-        })
-      }, false)
-      // 插到「归档会话」之后。
-      if (wrap.nextSibling !== null) wrap.parentNode.insertBefore(clone, wrap.nextSibling)
-      else wrap.parentNode.appendChild(clone)
+      // 「删除会话」（开关 deleteSessionEnabled；需要能解析到行的会话 id）。
+      if (settingsStore.getSnapshot().deleteSessionEnabled === true && sessionId !== null) {
+        const del = buildMenuItem(INJECTED_MARK, '🗑', copy.deleteLabel, copy.deleteHint, true)
+        if (del !== null) {
+          del.button.addEventListener('click', function (event) {
+            event.preventDefault()
+            event.stopPropagation()
+            closeOfficialMenu(menu)
+            showConfirm(copy.title, copy.desc, function () {
+              void performDelete(sessionId, title)
+            })
+          }, false)
+          insertMenuItem(del)
+        }
+      }
+      // 批量项（开关 batchOpsEnabled；多选非空时注入，不依赖当前行的会话 id）。
+      if (settingsStore.getSnapshot().batchOpsEnabled === true && batchSelectionSize() > 0) {
+        const ids = batchSelectionIds()
+        const count = String(ids.length)
+        const batchDelete = buildMenuItem(BATCH_ITEM_MARK, '🗑', copy.batchDeleteLabel.replace('{n}', count), null, true)
+        if (batchDelete !== null) {
+          batchDelete.button.addEventListener('click', function (event) {
+            event.preventDefault()
+            event.stopPropagation()
+            closeOfficialMenu(menu)
+            showConfirm(copy.batchDeleteTitle, copy.batchDeleteDesc.replace('{n}', count), function () {
+              void performBatchDelete(ids.slice())
+            })
+          }, false)
+          insertMenuItem(batchDelete)
+        }
+        const batchArchive = buildMenuItem(BATCH_ITEM_MARK, '📦', copy.batchArchiveLabel.replace('{n}', count), null, false)
+        if (batchArchive !== null) {
+          batchArchive.button.addEventListener('click', function (event) {
+            event.preventDefault()
+            event.stopPropagation()
+            closeOfficialMenu(menu)
+            showConfirm(copy.batchArchiveTitle, copy.batchArchiveDesc.replace('{n}', count), function () {
+              void performBatchArchive(ids.slice())
+            })
+          }, false)
+          insertMenuItem(batchArchive)
+        }
+      }
       menu.setAttribute(INJECTED_MARK, '')
     }
 
@@ -448,6 +522,163 @@ function installSessionMenu(ctx) {
       }).catch(function (error) {
         showToast(copy.failed.replace('{message}', error instanceof Error ? error.message : String(error)), 5000)
       })
+    }
+
+    // 批量删除：逐个串行调用主机删除路由（避免并发压主机），收集逐项结果。
+    const performBatchDelete = function (ids) {
+      const copy = resolveCopy()
+      const n = ids.length
+      if (n === 0) return Promise.resolve()
+      showToast(copy.batchDeleting.replace('{n}', String(n)), 2500)
+      let currentSessionId = null
+      try {
+        const sessionsService = ctx.get('sessions')
+        if (sessionsService !== undefined && sessionsService !== null
+          && sessionsService.list !== undefined && sessionsService.list !== null
+          && typeof sessionsService.list.getSnapshot === 'function') {
+          const snapshot = sessionsService.list.getSnapshot()
+          if (snapshot !== null && typeof snapshot === 'object' && typeof snapshot.current === 'string') {
+            currentSessionId = snapshot.current
+          }
+        }
+      } catch { /* 忽略 */ }
+      let listSnapshot = null
+      try {
+        const sessionsService = ctx.get('sessions')
+        if (sessionsService !== undefined && sessionsService !== null
+          && sessionsService.list !== undefined && sessionsService.list !== null
+          && typeof sessionsService.list.getSnapshot === 'function') {
+          listSnapshot = sessionsService.list.getSnapshot()
+        }
+      } catch { /* 忽略 */ }
+      const deleteOne = function (id) {
+        const summary = listSnapshot !== null && listSnapshot.byId !== null && typeof listSnapshot.byId === 'object'
+          ? listSnapshot.byId[id] : undefined
+        const title = summary !== undefined && summary !== null && typeof summary.displayTitle === 'string'
+          ? summary.displayTitle : ''
+        return fetch('/dsh-zh/api/session.delete', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId: id, title: title, currentSessionId: currentSessionId }),
+        }).then(function (response) {
+          return response.json().catch(function () { return null })
+        }).then(function (parsed) {
+          if (parsed === null || parsed.ok !== true) {
+            const message = parsed !== null && parsed.error !== null && parsed.error !== undefined
+              ? parsed.error.message : 'HTTP ?'
+            return { id: id, ok: false, message: String(message) }
+          }
+          return { id: id, ok: true }
+        }).catch(function (error) {
+          return { id: id, ok: false, message: error instanceof Error ? error.message : String(error) }
+        })
+      }
+      // 串行执行：上一条完成再发下一条。
+      let chain = Promise.resolve()
+      const results = []
+      for (const id of ids) {
+        chain = chain.then(function () {
+          return deleteOne(id).then(function (result) { results.push(result) })
+        })
+      }
+      return chain.then(function () {
+        const okResults = results.filter(function (r) { return r.ok === true })
+        const failures = results.filter(function (r) { return r.ok !== true })
+        if (failures.length === 0) {
+          showToast(copy.batchDeleted.replace('{n}', String(okResults.length)), 4000)
+        } else {
+          showToast(copy.batchPartial
+            .replace('{ok}', String(okResults.length))
+            .replace('{failed}', String(failures.length))
+            .replace('{message}', failures[0].message), 6000)
+        }
+        // 当前查看的会话被删除 → 跳转到新会话页面。
+        if (currentSessionId !== null && okResults.some(function (r) { return r.id === currentSessionId })) {
+          try {
+            const sessionsService = ctx.get('sessions')
+            if (sessionsService !== undefined && sessionsService !== null && typeof sessionsService.clear === 'function') {
+              sessionsService.clear()
+            }
+          } catch { /* 忽略 */ }
+        }
+        refreshSessionLists()
+        clearBatchSelection()
+      })
+    }
+
+    // 批量归档：逐个调用官方 workspaces.archiveSession（与手动/自动归档同一
+    // 归档集合）；running/blank 快照过滤，完成后刷新列表并清空多选。
+    const performBatchArchive = function (ids) {
+      const copy = resolveCopy()
+      const n = ids.length
+      if (n === 0) return Promise.resolve()
+      const workspaces = ctx.get('workspaces')
+      if (workspaces === undefined || workspaces === null
+        || typeof workspaces.archiveSession !== 'function') {
+        showToast(copy.batchUnavailable, 5000)
+        return Promise.resolve()
+      }
+      let listSnapshot = null
+      try {
+        const sessionsService = ctx.get('sessions')
+        if (sessionsService !== undefined && sessionsService !== null
+          && sessionsService.list !== undefined && sessionsService.list !== null
+          && typeof sessionsService.list.getSnapshot === 'function') {
+          listSnapshot = sessionsService.list.getSnapshot()
+        }
+      } catch { /* 忽略 */ }
+      showToast(copy.batchArchiving.replace('{n}', String(n)), 2500)
+      let chain = Promise.resolve()
+      let archivedCount = 0
+      let failedCount = 0
+      let firstFailure = ''
+      for (const id of ids) {
+        const summary = listSnapshot !== null && listSnapshot.byId !== null && typeof listSnapshot.byId === 'object'
+          ? listSnapshot.byId[id] : undefined
+        if (summary === undefined || summary === null || summary.running === true || summary.blank === true) {
+          failedCount += 1
+          if (firstFailure === '') firstFailure = 'skipped'
+          continue
+        }
+        chain = chain.then(function () {
+          return workspaces.archiveSession(id).then(function () {
+            archivedCount += 1
+          }, function (error) {
+            failedCount += 1
+            if (firstFailure === '') {
+              firstFailure = error instanceof Error ? error.message : String(error)
+            }
+          })
+        })
+      }
+      return chain.then(function () {
+        if (failedCount === 0) {
+          showToast(copy.batchArchived.replace('{n}', String(archivedCount)), 4000)
+        } else {
+          showToast(copy.batchPartial
+            .replace('{ok}', String(archivedCount))
+            .replace('{failed}', String(failedCount))
+            .replace('{message}', firstFailure), 6000)
+        }
+        refreshSessionLists()
+        clearBatchSelection()
+      })
+    }
+
+    // 刷新会话与工作区列表（批量操作后行立即消失/沉入归档）。
+    const refreshSessionLists = function () {
+      try {
+        const workspaces = ctx.get('workspaces')
+        if (workspaces !== undefined && workspaces !== null && typeof workspaces.refresh === 'function') {
+          void workspaces.refresh()
+        }
+      } catch { /* 忽略 */ }
+      try {
+        const sessions = ctx.get('sessions')
+        if (sessions !== undefined && sessions !== null && typeof sessions.refresh === 'function') {
+          void sessions.refresh()
+        }
+      } catch { /* 忽略 */ }
     }
 
     // ------- MutationObserver：监听 portal 菜单出现 -------
