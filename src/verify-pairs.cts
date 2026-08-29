@@ -397,6 +397,11 @@ const commandText = makeText('Compact older conversation history')
 const thinkText = makeText('Think')
 const toolText = makeText('Tool call')
 const deepThinkText = makeText('Deep diving...')
+// 斜杠菜单技能描述（shipped SKILL.md frontmatter 原文，与 dom-labels.ts 逐字一致）
+const skillCompDescEn = 'Use when creating, changing, or validating a Cordis composition for this harness — writing or editing an agent preset, adding or removing a plugin row, deciding whether something belongs to the host composition or to one session, checking whether a preset you authored actually mounts, or diagnosing a row that mounted but contributed nothing.'
+const skillDevDescEn = 'Create, modify, debug, or extend dynamic Cordis Plugins, including Host Services and Events, Client Slot and theme UI, Package-private Client-to-Host calls, dynamic Tools, version updates, approval failures, and runtime diagnostics. Use this Skill to route a user request to the correct platform and Inspect Provider, then define, run, repair, or roll back the Plugin.'
+const skillCompText = makeText(skillCompDescEn)
+const skillDevText = makeText(skillDevDescEn)
 const statsText = makeText('9 轮 · 203 步')
 const statsAttrs = {}
 const statsRow = {
@@ -431,7 +436,9 @@ permissionText.nextSibling = commandText
 commandText.nextSibling = thinkText
 thinkText.nextSibling = toolText
 toolText.nextSibling = deepThinkText
-deepThinkText.nextSibling = statsRow
+deepThinkText.nextSibling = skillCompText
+skillCompText.nextSibling = skillDevText
+skillDevText.nextSibling = statsRow
 // 思考块 DOM 夹具：最小化的元素对象，支撑「默认展开行数」折叠逻辑的查询/读写。
 let injectedThinkRoots = []
 function makeFakeEl(attrs) {
@@ -541,7 +548,7 @@ const fakeBody = {
   },
 }
 statsRow.parentElement = fakeBody
-for (const node of [permissionText, commandText, thinkText, toolText, deepThinkText]) node.parentElement = fakeBody
+for (const node of [permissionText, commandText, thinkText, toolText, deepThinkText, skillCompText, skillDevText]) node.parentElement = fakeBody
 window.innerWidth = 1280
 window.getComputedStyle = function () { return { textOverflow: 'clip', lineHeight: '24px', fontSize: '14px' } }
 window.addEventListener = function () {}
@@ -575,6 +582,9 @@ check(fakeBody.firstChild.nextSibling.data, '压缩较早的对话历史', 'DOM 
 check(fakeBody.firstChild.nextSibling.nextSibling.data, '思考', 'DOM 文本层 Think 改写')
 check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.data, '工具调用', 'DOM 文本层 Tool call 改写')
 check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.nextSibling.data, '深度思考中…', 'DOM 文本层 Deep diving 改写')
+check(skillCompText.data.indexOf('Cordis 组合时使用') > 0, true, 'DOM 文本层 技能描述（组合编辑）改写')
+check(skillCompText.data.indexOf('Use when creating') < 0, true, 'DOM 文本层 技能描述（组合编辑）无英文残留')
+check(skillDevText.data.indexOf('动态 Cordis 插件') >= 0, true, 'DOM 文本层 技能描述（插件开发）改写')
 const incrementalText = makeText('Bash')
 incrementalText.parentElement = fakeBody
 permissionText.data = 'Workspace Write'
@@ -949,6 +959,8 @@ check(fakeBody.firstChild.nextSibling.data, 'Compact older conversation history'
 check(fakeBody.firstChild.nextSibling.nextSibling.data, 'Think', 'DOM 文本层 Think 还原')
 check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.data, 'Tool call', 'DOM 文本层 Tool call 还原')
 check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.nextSibling.data, 'Deep diving...', 'DOM 文本层 Deep diving 还原')
+check(skillCompText.data, skillCompDescEn, 'DOM 文本层 技能描述（组合编辑）还原')
+check(skillDevText.data, skillDevDescEn, 'DOM 文本层 技能描述（插件开发）还原')
 
 // ---- 新行为：除「中文补全」外的功能在英文界面下同样生效 ----
 active = 'en'

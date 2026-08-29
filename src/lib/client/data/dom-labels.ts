@@ -21,6 +21,14 @@ const COMMAND_DESCRIPTIONS = {
   'Switch the permission preset (sandbox mode + approval policy)': '切换权限预设（沙箱模式 + 审批策略）',
   'Download this Session log as a ZIP archive': '将会话日志下载为 ZIP 压缩包',
 }
+// 斜杠菜单「技能来源」（ui-skill / 菜单候选）里的技能描述：来自 shipped
+// SKILL.md frontmatter 的英文 description（skills/list 下发）。技能名是
+// 标识符、保持英文；只映射 DSH 官方随预设/部署分发的技能描述原文，
+// 用户自建技能（.agent-presets、skills 根）不收录、原样保留。
+const SKILL_DESCRIPTIONS = {
+  'Use when creating, changing, or validating a Cordis composition for this harness — writing or editing an agent preset, adding or removing a plugin row, deciding whether something belongs to the host composition or to one session, checking whether a preset you authored actually mounts, or diagnosing a row that mounted but contributed nothing.': '当创建、修改或校验本 harness 的 Cordis 组合时使用——编写或编辑 agent preset、增删插件行、判断内容属于 host 组合还是单个会话、检查你创作的 preset 能否真正挂载，或诊断已挂载却没有贡献任何内容的行。',
+  'Create, modify, debug, or extend dynamic Cordis Plugins, including Host Services and Events, Client Slot and theme UI, Package-private Client-to-Host calls, dynamic Tools, version updates, approval failures, and runtime diagnostics. Use this Skill to route a user request to the correct platform and Inspect Provider, then define, run, repair, or roll back the Plugin.': '创建、修改、调试或扩展动态 Cordis 插件，包括 Host 服务与事件、Client Slot 与主题 UI、Package 私有的 Client→Host 调用、动态工具、版本更新、审批失败与运行时诊断。用本 Skill 把用户请求路由到正确的平台与 Inspect Provider，然后定义、运行、修复或回滚插件。',
+}
 // 聊天区的状态/行标题 + 轨迹视图（时间线/账本/详情面板）的静态标签：
 // 组件里写死的设计字面量（Think、工具行标题、轨迹列表头、KIND_LABEL、
 // 详情面板标签、状态文本等）。以上四张表合并后按「整段精确匹配」改写，

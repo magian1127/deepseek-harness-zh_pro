@@ -81,6 +81,9 @@ locale 补丁处理。保留 Cordis、DeepSeek、TypeScript、命令名、文件
 
 - 权限预设标签和说明；
 - `/compact`、`/goal`、`/feedback`、`/plan`、`/permission`、`/export` 的菜单说明；
+- 斜杠菜单「技能来源」里 DSH 官方 shipped 技能的描述（`editing-cordis-compositions`、
+  `cordis-plugin-development`，来自随部署分发的 SKILL.md frontmatter；用户自建技能
+  不收录、原样保留）；
 - 聊天区状态、工具行标题和轨迹视图标签；
 - Models 设置页由提示词 settings 暴露产生的内部提供方目录行。
 
@@ -150,15 +153,29 @@ locale 补丁处理。保留 Cordis、DeepSeek、TypeScript、命令名、文件
 默认关闭，存于 `settings.yaml` 命名空间 `dsh-zh`，与界面语言无关（同「提示词注入」）。
 开启后只改写**发往模型的请求内容**，不写会话历史、不注册模型工具：
 
-- `zhAgentPrompt`：四个默认代理（standard / code / minimal / cordis，即设置页的
-  标准模式 / 编码模式 / 极简模式 / 创作模式）的 `deployment:persona` 系统提示词在
-  组装完成后换成中文版本（精确匹配内置原文，`{{model}}` / `{{cwd}}` 占位符保留，
-  自定义 persona 不匹配、原样保留）。
+- `zhAgentPrompt`：四个默认代理（standard / ptc / minimal / cordis，即设置页的
+  标准模式 / PTC 模式 / 极简模式 / 创作模式；`ptc` 与 `standard` 人设原文相同）的
+  `deployment:persona` 系统提示词在组装完成后换成中文版本（精确匹配内置原文，
+  `{{model}}` / `{{cwd}}` 占位符保留，自定义 persona 不匹配、原样保留）。
+  同时替换系统级官方段落：`harness:identity`（身份）、`harness:source`（检出
+  路径）、`app:web-surface`（Web GUI 地址）、`context:file-reference`、
+  `ui:deliverable-file-references`——检出路径与 GUI 地址等动态值取自原文。
 - `zhToolDesc`：注入模型请求的工具说明按工具名替换为**DSH 官方工具**的中文版本，同时把
-  system prompt 里的官方工具指引段落（`tool:*` sections，如 `tool:read` / `tool:edit` /
-  `tool:goal` 等）替换为中文。工具名与参数名保持不变。**只覆盖 DSH 系统自己的工具**：
+  system prompt 里的官方工具指引段落（`tool:*` sections）替换为中文。覆盖：
+  `tool:read` / `tool:write` / `tool:edit` / `tool:glob` / `tool:grep` / `tool:pwsh` /
+  `tool:jobs` / `tool:web_search` / `tool:web_fetch` / `tool:goal` / `tool:ralph` /
+  `tool:subagent` / `tool:subagent_fork` / `tool:workflow` / `tool:cordis`
+  （创作模式的「Dynamic Cordis Plugins」整段指南）、`plan:policy`（计划模式
+  策略；该文本来自 preset 配置，仅与 shipped 原文逐字一致才替换，复制后改写过
+  的自定义 preset 不受影响；非计划模式下该 section 为空、原样保留不注入）和
+  `tools:ptc-only`（PTC 模式的执行器收敛声明，非 PTC 会话为空段、不注入）。
+  工具名与参数名保持不变。**只覆盖 DSH 系统自己的工具**：
   第三方插件（如 hashline、vision-router、agent-teams 等）注册的工具与段落不匹配、
   保持英文原样，避免越界改动其它插件的内容。
+  各预设实测覆盖：standard / ptc / minimal / cordis 四个默认代理的 persona 与
+  上述段落均换中文；minimal（complete persona）整个 system prompt 只含中文
+  persona；PTC 模式的 `tools:sdk` 生成式 TS 工具目录（上游渲染器产物、模型的
+  唯一工具声明）保留英文，见「已知限制」。
 
 **新会话生效、老会话不重新注入**：以会话是否产生过模型输出（`assistant/message`）
 判定新旧。会话首次模型请求时按当前开关状态锁定语言（中文或英文），锁定后开关翻转
@@ -298,4 +315,8 @@ DOM。运行时翻转开关立即生效：关闭即卸载全部副作用（已�
 ## 已知限制
 
 硬编码英文只覆盖内置清单。未收录文本和第三方插件内容保持原样，以避免误改用户正文。
+PTC 模式的 `tools:sdk` 生成式 TypeScript 工具目录（由上游 `dsh-tools` 渲染器生成，
+PTC 会话中模型的唯一工具声明）为生成代码块：工具级 JSDoc 描述与参数文档会随每个
+版本与每个工具变化，整段追译成本高且极易失配，按设计保留英文（`tools:ptc-only`
+的叙述性收敛声明仍翻译）。
 后续方向是补充确认过的硬编码文本，并允许用户配置部分术语叫法。

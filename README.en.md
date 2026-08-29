@@ -21,8 +21,8 @@ explicit toggles, all off by default.
 | Feature | Default | Description |
 | --- | --- | --- |
 | Chinese completion | On | Chinese UI only: fixes leftover English and normalizes tokens, API keys, model IDs, durations, and count formats |
-| Agent-role prompt localization | Off | Uses Chinese system prompts for the four built-in agent roles on new sessions only; existing sessions are not reinjected |
-| Tool-description localization | Off | Uses Chinese descriptions for confirmed built-in DSH tools in new-session model requests; tool and parameter names remain unchanged |
+| Agent-role prompt localization | Off | Uses Chinese system prompts and built-in system sections (identity, checkout path, Web GUI note) for the four built-in agent roles on new sessions only; existing sessions are not reinjected |
+| Tool-description localization | Off | Uses Chinese for confirmed built-in DSH tool descriptions and their first-party guidance sections in the system prompt (including the Cordis plugin-development guide of the cordis preset and the plan-mode policy) in new-session model requests; tool and parameter names remain unchanged |
 | Full stats line | On | Keeps the chat stats line on one fully visible row, auto-shrinks the font, and scrolls horizontally when extremely long |
 | Auto-expand latest thinking | On | Expands the newest thinking output as it streams in and collapses the previous auto-expanded one when a new one appears |
 | Default expanded lines | 20 lines | Limits an expanded thinking block to N visible lines; 0 disables the limit |

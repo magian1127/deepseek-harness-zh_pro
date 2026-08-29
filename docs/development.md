@@ -91,7 +91,10 @@ window.__ModuleLoader__.load({
 
 主机半边同样已拆分：`src/lib/index.ts` 只做装配（自迁移、提示词注册、热重载、监督器），
 子系统在 `src/lib/constants.ts`、`src/lib/util.ts`、`src/lib/schemastery.ts`、`src/lib/hot-reload.ts`、
-`src/lib/chinese-prompt.ts`、`src/lib/hot-mount.ts`、`src/lib/trash.ts`（跨平台回收站）、
+`src/lib/chinese-prompt.ts`、`src/lib/assemble-patch.ts`（systemPrompt.assemble 的唯一
+包装管线，chinese-prompt 与 model-locale 都以改写器形式注册）、`src/lib/model-locale.ts`
+（模型请求中文化：persona/系统段落/工具说明/指引段落改写；`cordis-section-zh.ts` 存放
+`tool:cordis` 大段的中文版）、`src/lib/hot-mount.ts`、`src/lib/trash.ts`（跨平台回收站）、
 `src/lib/session-delete.ts`（会话删除编排与 `/dsh-zh/api` 路由）、`src/lib/service-monitor.ts`
 （服务监控：本机监听端口扫描 + 基线 diff + 进程归属解析 + 快照与目录打开）；CLI 实现拆在 `src/bin/cli/`，`src/bin/dsh-zh.mts`
 是转发导出并保留入口守卫的聚合入口。编译后对应的 `.js`/`.mjs` 文件供 DSH 和 npm 消费。
@@ -240,11 +243,25 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
 - **开关1（zhAgentPrompt）**：`deployment:persona` 精确文本匹配换中文（`PERSONA_ZH`，
   占位符 `{{model}}`/`{{cwd}}` 保留），加系统级官方段落（`SYSTEM_SECTION_ZH`：
   `harness:identity` / `harness:source` / `app:web-surface` / `context:file-reference` /
-  `ui:deliverable-file-references`；含动态值的段落用 `keep()` 从原文提取路径/URL 拼入）。
+  `ui:deliverable-file-references`；含动态值的段落用 `keep()` 从原文提取路径/URL 拼入，
+  提取结果须去掉句末英文句点与路径尾分隔符，避免「.。」/「\。」混入中文）。
+  persona 匹配键不得带尾部换行（shipped yml 块标量会剥掉末尾换行，曾因键多一个
+  `\n` 使 cordis persona 整段失配保持英文）；运行时文本先按原样查、失败再按
+  trim 后查。
 - **开关2（zhToolDesc）**：工具说明（`TOOL_DESC_ZH`）+ 官方工具指引段落（`SECTION_ZH`，
-  `tool:*` sections）。**只翻译 DSH 官方工具**：`TOOL_MATCH` 表存官方描述特征片段，
+  `tool:*` sections 与 `plan:policy`）。**只翻译 DSH 官方工具**：`TOOL_MATCH` 表存官方描述特征片段，
   运行时 `description.includes(特征)` 才替换，被第三方插件（如 hashline 替换的 edit）
-  的实现保持英文。
+  的实现保持英文。`plan:policy` 的文本来自 preset 配置（`{ zh, en }` 条目），仅原文
+  逐字一致才替换；section 文本为空（非计划模式）时跳过，绝不凭空注入。
+- **唯一包装管线（assemble-patch.ts）**：chinese-prompt 与 model-locale 都通过
+  `registerAssembleRewriter` 注册改写器，由 `ensureAssemblePatch` 保证
+  `systemPrompt.assemble` 只包一层。**禁止再直接对 `systemPrompt.assemble` 赋值**：
+  两个模块各自包装时，快速连续热重载的竞态会把旧包装器留在链上（旧 dispose 因
+  链头易主而永远无法还原），段落被改写两次——实测 `harness:source` 的 keep 在
+  已翻译的中文上二次匹配失败、动态值被清空。ensure 安装时先沿
+  `__dshZhAssembleWrapped`/`__dshZhAssembleInner` 标记解链，再把 assemble 重置为
+  原型方法（`Object.getPrototypeOf` 的 `assemble` 不受任何包装污染；本插件是部署
+  中唯一包装 assemble 的插件，普通对象 stub 无原型方法时退回标记链终点）。
 - **不越界**：第三方插件的段落（`tool:hashline`、`team:policy` 等）与工具（`vision_*`、
   `agent_teams_*`、`codex_*`）不在表中，原样保留；工具名与参数名永不翻译。
 - 实现位置：包装 `systemPrompt.assemble`，在官方组装返回后、agent-loop 使用前原地
@@ -253,7 +270,10 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
 
 修改此模块后，`lib/model-locale.js` 与 `lib/chinese-prompt.js` 都要在运行进程里生效：
 HMR 失效时按 [`troubleshooting.md`](troubleshooting.md) 的强制重载通道加载新代码，
-并在会话日志（`request/header`）验证实际效果。
+并在会话日志（`request/header`）验证实际效果。自监视热重载只盯 5 个文件
+（`lib/index.js`、`lib/session-delete.js`、`lib/trash.js`、`lib/model-locale.js`、
+`bin/dsh-zh.mjs`）：单独修改 `cordis-section-zh.ts`、`assemble-patch.ts` 等被依赖
+模块不会触发重载，需同时改动任一被监视文件（或走强制重载通道）。
 
 ## CLI 规则
 

@@ -135,6 +135,24 @@ profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢
 - 本插件 `modelState` 由 `chinese-prompt.ts`（`dsh-zh` 命名空间唯一注册者）维护，
   重载后必须保证旧实例的 watch 随 Fiber 释放、新实例重新注册并同步当前值。
 
+## 热重载后提示词被改写两次（动态值清空）
+
+**症状**：开启中文化后，`request/header` 里 `harness:source` 变成「检出目录位于 。」
+（动态路径丢失）、`app:web-surface` 变成「位于  的」（URL 丢失），或出现「.。」；
+而 persona 与 `tool:cordis` 等段落已正常中文。
+
+**原因**：对 `systemPrompt.assemble` 的包装被改写了两次。历史上 chinese-prompt 与
+model-locale 各自包装 assemble，快速连续热重载（一次构建改写多个 lib 文件）时，
+旧包装器的 dispose 因链头易主而无法还原，又被新一代包装再包一层；段落在第一次
+改写中已变中文，第二次改写的 `keep()` 在中文上匹配失败，`{keep}` 被清空。
+
+**处理**：0.8.0 起两个模块统一走 `assemble-patch.ts` 单一包装管线
+（`registerAssembleRewriter` 注册改写器，`ensureAssemblePatch` 安装），安装时沿
+`__dshZhAssembleWrapped` 标记解链并把 assemble 重置为原型方法（原型方法不受任何
+包装污染，本插件是部署中唯一包装 assemble 的插件），残留的旧包装层会在升级后
+第一次重载时被自动清除，无需重启。验证方式同上：新会话的 `request/header` 中
+检出路径与 GUI 地址应重新出现。
+
 ## 工具说明翻译张冠李戴（第三方工具被翻译）
 
 **症状**：`vision_*`、`agent_teams_*`、`codex_*` 等第三方插件的工具说明被翻成中文，

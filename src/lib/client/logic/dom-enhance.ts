@@ -79,7 +79,7 @@ function installChineseEnhance(ctx) {
     // 与本插件按百分比覆盖 --dsh-chat-content-width 的做法冲突，让位给上游。
     let autoThinkTarget = null
     if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined') {
-      const forward = Object.assign({}, PERMISSION_NAMES, PERMISSION_DESCRIPTIONS, COMMAND_DESCRIPTIONS, CHAT_LABELS)
+      const forward = Object.assign({}, PERMISSION_NAMES, PERMISSION_DESCRIPTIONS, COMMAND_DESCRIPTIONS, SKILL_DESCRIPTIONS, CHAT_LABELS)
       const reverse = {}
       // 译文重复时首个定义者生效（还原到更常见的英文写法，如 Tool call/TOOL/USER）
       for (const k of Object.keys(forward)) {

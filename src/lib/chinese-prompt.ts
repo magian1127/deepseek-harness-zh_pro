@@ -17,6 +17,7 @@ import {
   ZH_PROVIDER_KEY, ZH_SETTINGS_NS,
 } from './constants.js'
 import { loadSchemastery } from './schemastery.js'
+import { ensureAssemblePatch, registerAssembleRewriter } from './assemble-patch.js'
 import { log, warn } from './util.js'
 import type { HostContext } from './types.js'
 
@@ -125,15 +126,13 @@ export function installChinesePrompt(ctx: HostContext): void {
       else assembly.sections.push(section)
     }
     // 官方 complete persona 会在 SystemPrompt.assemble 返回前把其它 section
-    // 全部丢弃。这里包一层 assemble：在它返回之后、agent-loop 使用之前，
-    // 把提示同步进最终 assembly —— 首次模型调用就会带上，且任何 preset 都
-    // 无法在后续 waterfall 中把它移除。
+    // 全部丢弃。这里在共享 assemble 管线上注册改写器：在官方组装返回之后、
+    // agent-loop 使用之前，把提示同步进最终 assembly —— 首次模型调用就会带上，
+    // 且任何 preset 都无法在后续 waterfall 中把它移除。
     const systemPrompt = ctx.get('systemPrompt')
-    if (systemPrompt !== null && typeof systemPrompt?.assemble === 'function') {
-      const originalAssemble = systemPrompt.assemble
-      let assemblyWarningShown = false
-      const patchedAssemble = async function (this: unknown, ...args: any[]) {
-        const assembly = await Reflect.apply(originalAssemble, this, args)
+    let assemblyWarningShown = false
+    ctx.effect(function () {
+      return registerAssembleRewriter(function (assembly) {
         try {
           syncAssemblySection(assembly)
         } catch (error) {
@@ -142,21 +141,9 @@ export function installChinesePrompt(ctx: HostContext): void {
             warn(`同步初始系统提示失败，本次请求将沿用原 system prompt: ${error instanceof Error ? error.message : String(error)}`)
           }
         }
-        return assembly
-      }
-      try {
-        systemPrompt.assemble = patchedAssemble
-        ctx.effect(function () {
-          return function () {
-            try {
-              if (systemPrompt.assemble === patchedAssemble) systemPrompt.assemble = originalAssemble
-            } catch {}
-          }
-        }, 'dsh-zh: systemPrompt.assemble wrapper')
-      } catch {
-        warn('systemPrompt.assemble 包装失败：初始系统提示目标不可用，首用户提示词目标仍可用')
-      }
-    } else {
+      })
+    }, 'dsh-zh: chinese-prompt rewriter')
+    if (!ensureAssemblePatch(ctx, systemPrompt)) {
       warn('systemPrompt 服务不可用：初始系统提示目标不可用，首用户提示词目标仍可用')
     }
 
