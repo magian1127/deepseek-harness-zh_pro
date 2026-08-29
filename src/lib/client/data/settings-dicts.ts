@@ -54,7 +54,7 @@ const SETTINGS_ZH = {
   serviceTargetRemove: '删除',
   serviceTargetInvalid: '地址无效；支持 127.0.0.1:81 / localhost:3000 / [::1]:8080',
   deleteSession: '会话删除按钮',
-  deleteSessionDesc: '会话列表三点菜单显示「删除会话」项（日志移入系统回收站，不保留恢复位）',
+  deleteSessionDesc: '会话列表三点菜单显示「删除会话」项（日志移入系统回收站，不保留恢复位）；关闭时多选菜单的「批量删除」同样隐藏',
   batchOps: '会话批量操作',
   batchOpsDesc: '悬停空闲会话行首的空图标位出现复选框，可多选后通过任意会话三点菜单「批量删除 / 批量归档」（运行中、待交互与完成未读的行不可选）',
 }
@@ -112,7 +112,7 @@ const SETTINGS_EN = {
   serviceTargetRemove: 'Remove',
   serviceTargetInvalid: 'Invalid address; use 127.0.0.1:81 / localhost:3000 / [::1]:8080',
   deleteSession: 'Session delete button',
-  deleteSessionDesc: 'Show "Delete session" in the session row menu (log moves to system recycle bin; no restore position)',
+  deleteSessionDesc: 'Show "Delete session" in the session row menu (log moves to system recycle bin; no restore position); when off, "Delete selected" is hidden from the batch menu too',
   batchOps: 'Batch session operations',
   batchOpsDesc: 'Hover the empty leading icon slot of an idle session row to check it; with sessions selected, any row menu offers "Delete selected / Archive selected" (running, pending-interaction and unread-completion rows are not selectable)',
 }

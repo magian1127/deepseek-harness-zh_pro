@@ -396,20 +396,24 @@ function installSessionMenu(ctx) {
         }
       }
       // 批量项（开关 batchOpsEnabled；多选非空时注入，不依赖当前行的会话 id）。
+      // 「批量删除」跟随「会话删除按钮」开关：删除入口整体隐藏时，多选菜单
+      // 只保留「批量归档」，不单独出现删除入口。
       if (settingsStore.getSnapshot().batchOpsEnabled === true && batchSelectionSize() > 0) {
         const ids = batchSelectionIds()
         const count = String(ids.length)
-        const batchDelete = buildMenuItem(BATCH_ITEM_MARK, '🗑', copy.batchDeleteLabel.replace('{n}', count), null, true)
-        if (batchDelete !== null) {
-          batchDelete.button.addEventListener('click', function (event) {
-            event.preventDefault()
-            event.stopPropagation()
-            closeOfficialMenu(menu)
-            showConfirm(copy.batchDeleteTitle, copy.batchDeleteDesc.replace('{n}', count), function () {
-              void performBatchDelete(ids.slice())
-            })
-          }, false)
-          insertMenuItem(batchDelete)
+        if (settingsStore.getSnapshot().deleteSessionEnabled === true) {
+          const batchDelete = buildMenuItem(BATCH_ITEM_MARK, '🗑', copy.batchDeleteLabel.replace('{n}', count), null, true)
+          if (batchDelete !== null) {
+            batchDelete.button.addEventListener('click', function (event) {
+              event.preventDefault()
+              event.stopPropagation()
+              closeOfficialMenu(menu)
+              showConfirm(copy.batchDeleteTitle, copy.batchDeleteDesc.replace('{n}', count), function () {
+                void performBatchDelete(ids.slice())
+              })
+            }, false)
+            insertMenuItem(batchDelete)
+          }
         }
         const batchArchive = buildMenuItem(BATCH_ITEM_MARK, '📦', copy.batchArchiveLabel.replace('{n}', count), null, false)
         if (batchArchive !== null) {

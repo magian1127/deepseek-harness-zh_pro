@@ -999,6 +999,28 @@ batchChecks = batchChecksOf()
 check(batchChecks.length, 1, '重新开启批量开关后空闲行恢复复选框')
 check(batchChecks[0].closest('div[class*="sessionRow"][role="treeitem"]') === r7, true, '批量 复选框位于新空闲行')
 
+// 「批量删除」跟随「会话删除按钮」开关：删除入口整体隐藏时，多选菜单
+// 只保留「批量归档」，不单独出现删除入口。
+r7.children[0].children[0].checked = true
+r7.children[0].children[0].click('change')
+settingsStoreUnderTest.set('deleteSessionEnabled', false)
+const deleteOffMenu = makeOfficialMenu()
+for (const obs of fakeObs.slice()) {
+  obs.cb([{ type: 'childList', addedNodes: [deleteOffMenu], target: body }])
+}
+const deleteOffBatch = deleteOffMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]')
+check(deleteOffBatch.length, 1, '关闭删除开关后多选菜单只剩批量归档')
+check((deleteOffBatch[0].querySelector('span:last-child') || {}).textContent, '批量归档（1）', '关闭删除开关后批量归档仍在')
+check(deleteOffMenu.querySelector('button[data-dsh-zh-delete-session]'), null, '关闭删除开关后单项删除也不注入')
+settingsStoreUnderTest.set('deleteSessionEnabled', true)
+const deleteOnMenu = makeOfficialMenu()
+for (const obs of fakeObs.slice()) {
+  obs.cb([{ type: 'childList', addedNodes: [deleteOnMenu], target: body }])
+}
+check(deleteOnMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]').length, 2, '重新开启删除开关后批量删除恢复')
+// 单项「删除会话」依赖 lastEllipsisRow 解析 sessionId（mock 无 fiber 链），
+// 该项注入在真实 GUI 验收覆盖，这里不断言。
+
 // 12) 卸载清理
 for (const d of disposers) d()
 check(registeredDicts['dsh-zh-archive'], undefined, '卸载后词典注销')

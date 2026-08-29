@@ -30,7 +30,7 @@
 | `zhPromptTarget` 注入目标 | `system` | `settings.yaml` | `system` 或 `user` |
 | `zhAutoArchiveDays` 自动归档天数 | 7，范围 0–365 | `settings.yaml` | 新建会话界面打开时 |
 | `archiveViewEnabled` 查看已归档 | 开 | localStorage | 中文/英文界面（与「自动归档旧会话」同组） |
-| `deleteSessionEnabled` 会话删除按钮 | 开 | localStorage | 中文/英文界面（「其他功能」分区在设置页最下方，分区标题 + 扁平行） |
+| `deleteSessionEnabled` 会话删除按钮 | 开 | localStorage | 中文/英文界面（「其他功能」分区在设置页最下方，分区标题 + 扁平行）；关闭时多选菜单的「批量删除」一并隐藏 |
 | `batchOpsEnabled` 会话批量操作 | 开 | localStorage | 中文/英文界面；悬停复选框 + 三点菜单批量项 |
 | `serviceMonitorEnabled` 服务监控 | 关 | localStorage | 中文/英文界面（独立折叠分组） |
 | `serviceMonitorIntervalSec` 服务监控刷新间隔 | 10 秒，范围 2–300 | localStorage | 服务监控折叠分组 |
@@ -270,7 +270,8 @@ DOM。运行时翻转开关立即生效：关闭即卸载全部副作用（已�
   可悬停，因此不出现复选框（分组视图不受影响）。
 - **批量菜单**：多选非空时，点击任意会话行三点按钮，菜单在「归档会话」之后追加
   两项——「批量删除（N）」（危险样式）与「批量归档（N）」（N 为当前多选数）。
-  官方菜单项原样保留。
+  官方菜单项原样保留。「批量删除」跟随「会话删除按钮」开关：该开关关闭时删除
+  入口整体隐藏，多选菜单只保留「批量归档」。
 - **批量删除**：先弹确认框（说明日志移入系统回收站、不保留恢复位、运行中的会话
   会被跳过），确认后逐个串行调用主机 `/dsh-zh/api/session.delete`；全部成功提示
   「已删除 N 个会话」，部分失败提示「完成 X 个，失败 Y 个」及首个原因；若删除了
