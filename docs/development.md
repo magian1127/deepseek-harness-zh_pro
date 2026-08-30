@@ -229,6 +229,47 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
 - `sessions.list` / `workspaces.list` 的订阅建立后要立即按当前快照刷新一次归档视图，否则插件加载时已存在的会话不会进入首次计算。
 - `ZH_AUTO_ARCHIVE_DAYS_DEFAULT` 等跨端默认值必须在 Client 构建输入中显式维护并由测试校对；误引用 Host 常量会使整个经典 bundle apply 失败。
 
+## 会话列表多选与归档视图（注入行交互与全选的实现要点）
+
+归档视图把归档行以纯 DOM 容器注入官方列表，而会话多选（`session-batch.ts`）的扫描器
+只认官方行选择器 `div[class*="sessionRow"][role="treeitem"]`，**不会覆盖自建的归档行**
+（归档行是 `[data-dsh-zh-archive-row]`）。让归档行接入多选/批量/全选时几个实测模式：
+
+- **注入行各自负责自己的复选框**：归档行在 `renderSectionContent` 渲染时按与官方行
+  相同的 `data-dsh-zh-batch-check` 标记注入 `input[type=checkbox]`，勾选直接读写
+  `session-batch.ts` 的模块级多选状态（`batchSelection` / `toggleBatchSelection` 等；
+  客户端片段拼接进同一 factory 作用域，跨文件直调属既定模式），正常列表与归档视图
+  共享同一份多选。
+- **复选框显示规则必须独立锚点**：batch 样式只覆盖官方 `span[class*="slot"]` 的 hover
+  （`span[class*="slot"]:hover > input[...]`）；归档行的 slot 是
+  `[data-dsh-zh-archive-slot]`，要补自己的 `:hover > input[...]` 与 `:checked` 常显规则。
+- **批量语义随上下文翻转**：同一份多选，正常列表菜单是「批量删除 / 批量归档」，
+  归档行菜单则是「批量删除 / **批量取消归档**」（已归档会话再归档无意义，恢复才有
+  意义）；两种删除入口都跟随「会话删除按钮」开关，文案与顺序以行菜单为基础追加。
+- **全选按钮的可勾选集合以「行内存在复选框」为判据**（与展示一致：运行中/待交互/
+  完成未读/blank 等行没有复选框即排除），并**按当前视图取行**：归档视图开着只扫
+  `[data-dsh-zh-archive-row]`，否则只扫官方 sessionRow；点击一次全选、再点一次取消
+  （全部已勾选→全部取消），按钮 active 高亮 = 该工作区全部可勾选均已选中。工作区
+  行的按钮顺序是全选 → 查看归档 → 新建会话（全选插在归档之前）。
+- **settingsStore 同步通知 + listener 抛错会中断后续**：`settingsStore.set` 同步遍历
+  全部 listener，前面一个抛错、后面的重建就不跑，表现为「开关变了但归档行没重建」。
+  归档视图的设置订阅把按钮注入包在 try/catch 里，再清 `sectionRenderKey` 强制重建
+  ——按钮注入失败不阻断行重建。
+
+回归（`verify-archive.cts`）注意：
+
+- **FakeEl 的 matchSel 不支持 CSS 后代选择器 `A B`**（按「目标→父→祖父」逐级匹配
+  parts，`[data-dsh-zh-archive-row] input[...]` 永远查不到）。跨结构的计数断言要逐行
+  `r.querySelector('input[...]')` 累加，不要写后代选择器——否则查询恒为 0，会被误判成
+  「功能缺失」，实际 DOM 里复选框是存在的。
+- **开关重启会让旧 DOM 按钮引用失效**：`archiveViewEnabled` 关→开会先 dispose 旧实例
+  再重新 `runArchiveView`，重启前拿到的按钮引用属于已卸载闭包——点它视图能打开
+  （闭包里的函数还能跑），但新实例的 settings 订阅不再响应，表现为「panel 在、
+  开关翻转却不重建」。真实用户点的是重启后重注入的新按钮，无此问题；测试必须在
+  重启后动态重新获取按钮（`liveWsArchiveBtn`）。
+- **归档行三点按钮是同行 toggle**：同一行第二次点击是关闭菜单（`menuRowId === row.id`
+  分支），测试里「重新打开菜单」要么换一行（跨行点击直接重开）、要么先点一次关掉。
+
 ## 主机提示词
 
 `src/lib/index.ts` 注册 settings schema 并用 `scope.watch` 更新内存状态；构建后的 `lib/index.js`
@@ -314,7 +355,8 @@ profile patch 只编辑带 `# dsh-zh:begin/end` 的受管块，同时兼容旧�
    ——快照后再遍历）；从 bundle 导出确定性入口调用（如 `exports.sessionBatch.pass`、
    `exports.settingsStore`）。Fake DOM 夹具要与被测代码能力同步补齐（`matches`、深克隆
    `cloneNode`、`:first/:last-child` 伪类、`*=` 属性选择器、document 级查询），否则断言
-   假绿或装置缺方法崩溃。
+   假绿或装置缺方法崩溃；查询断言还要避开后代选择器 `A B`——mock 的 matchSel 按
+   「目标→父→祖父」逐级匹配 parts，后代选择器恒查不到，跨结构计数改逐行查询。
 5. 客户端/主机改动验证实际运行副本、Fiber 与 GUI；不能以重启代替热路径。
 6. 用户可见行为同步双语 README 与 `behavior.md`；新的故障模式更新
    `troubleshooting.md`；发布要求只写入 `release.md`。

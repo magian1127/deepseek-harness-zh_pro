@@ -538,7 +538,10 @@ lastObs.cb(undefined)
 const archiveBtn = wsActions.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !== null)
 check(archiveBtn !== undefined, true, '工作区行注入了归档按钮')
 check(archiveBtn.getAttribute('aria-label'), '查看已归档会话', '归档按钮中文文案')
-check(wsActions.children[0] === archiveBtn, true, '归档按钮位于操作区最前')
+// 操作区顺序：全选按钮在最前，查看归档按钮第二位（全选在归档之前）。
+check(wsActions.children[0] !== undefined
+  && wsActions.children[0].getAttribute('data-dsh-zh-ws-selectall') !== null, true, '全选按钮位于操作区最前')
+check(wsActions.children[1] === archiveBtn, true, '归档按钮位于全选按钮之后')
 const ungroupedArchiveBtn = ungroupedRow.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !== null)
 check(ungroupedArchiveBtn !== undefined, true, '未分组行注入了归档按钮')
 check(ungroupedRow.getAttribute('data-dsh-zh-ws-row-standalone'), '', '未分组行标记 standalone')
@@ -1020,6 +1023,204 @@ for (const obs of fakeObs.slice()) {
 check(deleteOnMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]').length, 2, '重新开启删除开关后批量删除恢复')
 // 单项「删除会话」依赖 lastEllipsisRow 解析 sessionId（mock 无 fiber 链），
 // 该项注入在真实 GUI 验收覆盖，这里不断言。
+
+// 11e) 归档视图多选：归档行出现复选框（与官方行多选共用 data-dsh-zh-batch-check
+// 标记与多选状态），勾选不触发「取消归档 + 打开」；三点菜单追加「批量取消
+// 归档 / 批量删除」，执行后批量路由正确、多选清空、行消失。
+// （归档集合在 10d 后为空：先为 ws-1 补充归档会话；并清掉 11d 段残留的
+// 官方行勾选，从干净的多选状态开始。）
+settingsStoreUnderTest.set('batchOpsEnabled', false)
+settingsStoreUnderTest.set('batchOpsEnabled', true)
+pluginExports.sessionBatch.pass()
+check(pluginExports.sessionBatch.selectionSize(), 0, '归档多选 初始多选为空')
+wsSnapshot = {
+  items: [{ workspaceId: 'ws-1', title: '项目A', path: '/proj/a', sessionIds: ['a1', 'a2', 'a3'] }],
+  archivedSessionIds: ['a1', 'a2', 'a3'],
+  phase: 'ready',
+}
+// 11a/11c 开关重启会移除并重新注入归档按钮：必须动态获取当前活动按钮
+// （旧按钮属于已卸载的实例，其 settings 订阅已注销）。
+const liveWsArchiveBtn = function () {
+  return wsActions.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !== null)
+}
+liveWsArchiveBtn().click('click')
+check(panelOf() !== null, true, '归档多选 进入归档视图')
+check(panelRowsOf().length, 3, '归档多选 渲染 3 行')
+const archiveSlotChecks = function () {
+  const out = []
+  for (const r of panelRowsOf()) out.push(r.querySelector('input[data-dsh-zh-batch-check]'))
+  return out
+}
+check(archiveSlotChecks().every(b => b !== null), true, '归档多选 每行槽位都有复选框')
+const checkOfArchived = function (id) {
+  const row = panelRowsOf().find(r => r.getAttribute('data-dsh-zh-archive-id') === id)
+  return row !== undefined && row !== null ? row.querySelector('input[data-dsh-zh-batch-check]') : null
+}
+// 归档行多选复选框计数（panelRowsOf 逐行查；FakeEl 的 matchSel 不支持
+// `[..] input[..]` 后代选择器，不能在 body 上一次查）。
+const archiveCheckCount = function () {
+  let n = 0
+  for (const r of panelRowsOf()) {
+    if (r.querySelector('input[data-dsh-zh-batch-check]') !== null) n += 1
+  }
+  return n
+}
+// 勾选第一行（a1）：多选生效且不打开会话（点击阻止冒泡）。
+const openCountBefore = openedSessions.length
+const a1Check = checkOfArchived('a1')
+a1Check.checked = true
+a1Check.click('change')
+check(pluginExports.sessionBatch.selectionSize(), 1, '归档多选 勾选进入多选状态')
+check(openedSessions.length, openCountBefore, '归档多选 勾选不打开会话')
+// 三点菜单在多选非空时追加「批量取消归档（1）/ 批量删除（1）」（排在
+// 现有 4 项之后）。同一行三点按钮的习惯是 toggle：再点一次是关闭菜单。
+const a1Actions = panelRowsOf().find(r => r.getAttribute('data-dsh-zh-archive-id') === 'a1')
+  .querySelector('[data-dsh-zh-archive-actions-button]')
+a1Actions.click('click')
+check(menuOf() !== null, true, '归档多选 打开三点菜单')
+check(menuLabelsOf(menuOf()),
+  ['重命名', '分叉会话', '取消归档', '删除会话', '批量取消归档（1）', '批量删除（1）'],
+  '归档多选 批量项文案与顺序')
+a1Actions.click('click')
+check(menuOf() === null, true, '归档多选 再点三点关闭菜单')
+// 取消勾选 → 多选为空 → 打开 a2 的菜单不再出现批量项（每行第一次点击
+// 打开，不依赖同行 toggle 的菜单关闭）。
+a1Check.checked = false
+a1Check.click('change')
+check(pluginExports.sessionBatch.selectionSize(), 0, '归档多选 取消勾选清空多选')
+const a2MenuRow = panelRowsOf().find(r => r.getAttribute('data-dsh-zh-archive-id') === 'a2')
+a2MenuRow.querySelector('[data-dsh-zh-archive-actions-button]').click('click')
+check(menuLabelsOf(menuOf()), ['重命名', '分叉会话', '取消归档', '删除会话'],
+  '归档多选 多选为空时无批量项')
+// 恢复勾选 a1 → 打开 a1 的菜单（a1 行已关闭过，点击即重开），批量项恢复。
+const a1CheckAgain = checkOfArchived('a1')
+a1CheckAgain.checked = true
+a1CheckAgain.click('change')
+check(pluginExports.sessionBatch.selectionSize(), 1, '归档多选 重新勾选')
+const a1Actions3 = panelRowsOf().find(r => r.getAttribute('data-dsh-zh-archive-id') === 'a1')
+  .querySelector('[data-dsh-zh-archive-actions-button]')
+a1Actions3.click('click')
+check(menuLabelsOf(menuOf()),
+  ['重命名', '分叉会话', '取消归档', '删除会话', '批量取消归档（1）', '批量删除（1）'],
+  '归档多选 重新勾选后批量项恢复')
+// 批量取消归档：确认框 → 确认 → 主机 unarchive 路由 → 行消失 → 清空多选。
+const unarchiveCallsBeforeBatch = fetchCalls.filter(c => c.url === '/dsh-zh/api/session.unarchive').length
+const archiveBatchItem = menuOf().querySelectorAll('[data-dsh-zh-archive-menu-item]')[4]
+archiveBatchItem.click('click')
+const batchUnarchiveMask = body.querySelector('[data-dsh-zh-archive-dialog-mask]')
+check(batchUnarchiveMask !== null, true, '归档 批量取消归档弹确认框')
+batchUnarchiveMask.querySelectorAll('button')[1].click('click')
+await flushMicrotasks()
+check(fetchCalls.filter(c => c.url === '/dsh-zh/api/session.unarchive').length,
+  unarchiveCallsBeforeBatch + 1, '归档 批量取消归档调用 unarchive 路由')
+check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a1'), false,
+  '归档 批量取消归档后 a1 行消失')
+check(pluginExports.sessionBatch.selectionSize(), 0, '归档 批量取消归档后清空多选')
+// 批量删除：勾选 a2 → 打开 a2 菜单（跨行切换不关闭旧菜单）→「批量删除（1）」
+// 确认框 → 主机删除路由（回收站）→ 行消失 → 清空多选。
+const a2Check = checkOfArchived('a2')
+a2Check.checked = true
+a2Check.click('change')
+check(pluginExports.sessionBatch.selectionSize(), 1, '归档 批量删除前勾选 a2')
+const deleteCallsBeforeBatch = fetchCalls.filter(c => c.url === '/dsh-zh/api/session.delete'
+  && JSON.parse(c.opts.body).sessionId === 'a2').length
+const a2Actions = panelRowsOf().find(r => r.getAttribute('data-dsh-zh-archive-id') === 'a2')
+  .querySelector('[data-dsh-zh-archive-actions-button]')
+a2Actions.click('click')
+check(menuLabelsOf(menuOf()),
+  ['重命名', '分叉会话', '取消归档', '删除会话', '批量取消归档（1）', '批量删除（1）'],
+  '归档 批量删除 批量项文案与顺序')
+const batchDeleteItem = menuOf().querySelectorAll('[data-dsh-zh-archive-menu-item]')[5]
+batchDeleteItem.click('click')
+const batchDeleteMask = body.querySelector('[data-dsh-zh-archive-dialog-mask]')
+check(batchDeleteMask !== null, true, '归档 批量删除弹确认框')
+batchDeleteMask.querySelectorAll('button')[1].click('click')
+await flushMicrotasks()
+check(fetchCalls.filter(c => c.url === '/dsh-zh/api/session.delete'
+  && JSON.parse(c.opts.body).sessionId === 'a2').length, deleteCallsBeforeBatch + 1,
+  '归档 批量删除调用删除路由（a2）')
+check(pluginExports.sessionBatch.selectionSize(), 0, '归档 批量删除后清空多选')
+check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a2'), false,
+  '归档 批量删除后 a2 行消失')
+// 「批量删除」跟随「会话删除按钮」开关：关闭后只留「批量取消归档」。
+// 开关关闭时单项「删除会话」同样隐藏（与官方行菜单一致）。
+// （settings 订阅会重建归档行；勾选态从多选状态同步，重建后仍保留。）
+const a3Check = checkOfArchived('a3')
+a3Check.checked = true
+a3Check.click('change')
+settingsStoreUnderTest.set('deleteSessionEnabled', false)
+const a3Actions = panelRowsOf().find(r => r.getAttribute('data-dsh-zh-archive-id') === 'a3')
+  .querySelector('[data-dsh-zh-archive-actions-button]')
+a3Actions.click('click')
+check(menuLabelsOf(menuOf()),
+  ['重命名', '分叉会话', '取消归档', '批量取消归档（1）'],
+  '归档多选 关闭删除开关后只留批量取消归档')
+settingsStoreUnderTest.set('deleteSessionEnabled', true)
+// 开关关闭 batchOpsEnabled：复选框移除、多选清空；重新开启：复选框恢复。
+settingsStoreUnderTest.set('batchOpsEnabled', false)
+check(pluginExports.sessionBatch.selectionSize(), 0, '归档多选 关闭批量开关清空多选')
+check(archiveCheckCount(), 0, '归档多选 关闭批量开关移除全部复选框')
+settingsStoreUnderTest.set('batchOpsEnabled', true)
+flushRaf()
+check(archiveCheckCount(), 1, '归档多选 重新开启批量开关后复选框恢复')
+liveWsArchiveBtn().click('click')
+check(panelOf(), null, '归档多选 退出归档视图')
+
+// 11f) 工作区行「全选」按钮：点击勾选该工作区当前视图下所有可勾选的会话，
+// 再点取消勾选（toggle）；会话多选开关关闭时按钮移除、开启时恢复。
+wsSnapshot = {
+  items: [{ workspaceId: 'ws-1', title: '项目A', path: '/proj/a', sessionIds: ['a1', 'a2', 'a3'] }],
+  archivedSessionIds: ['a1', 'a2', 'a3'],
+  phase: 'ready',
+}
+pluginExports.sessionBatch.pass()
+const selectAllBtnOf = function (row) {
+  try { return row.querySelector('button[data-dsh-zh-ws-selectall]') } catch { return null }
+}
+let selAllBtn = selectAllBtnOf(wsRow)
+check(selAllBtn !== null, true, '全选 工作区行注入了全选按钮')
+check(wsActions.children[0] === selAllBtn, true, '全选 按钮位于操作区最前（查看归档之前）')
+check(selAllBtn.getAttribute('aria-label'), '全选', '全选 中文文案')
+// 归档视图：全选 → 3 个归档行全部勾选 + 按钮高亮；再点 → 全部取消。
+liveWsArchiveBtn().click('click')
+check(panelOf() !== null, true, '全选 进入归档视图')
+check(archiveSlotChecks().length, 3, '全选 归档视图 3 行可勾选')
+selAllBtn.click('click')
+check(pluginExports.sessionBatch.selectionSize(), 3, '全选 点击后勾选 3 个会话')
+check(archiveSlotChecks().every(c => c.checked), true, '全选 归档行复选框全部勾选')
+check(selAllBtn.getAttribute('data-dsh-zh-selectall-active'), 'true', '全选 已全选时按钮高亮')
+selAllBtn.click('click')
+check(pluginExports.sessionBatch.selectionSize(), 0, '全选 再点取消勾选全部')
+check(archiveSlotChecks().every(c => c.checked === false), true, '全选 归档行复选框全部取消')
+check(selAllBtn.getAttribute('data-dsh-zh-selectall-active'), 'false', '全选 取消后按钮不高亮')
+liveWsArchiveBtn().click('click')
+check(panelOf(), null, '全选 退出归档视图')
+// 正常列表：给 ws-1 分组注入一个带 fiber 的空闲行，全选应勾选它。
+const n1Row = new FakeEl('div', { role: 'treeitem', class: 'Rows_sessionRow__x' })
+const n1Slot = new FakeEl('span', { class: 'Rows_slot__y' })
+n1Row.appendChild(n1Slot)
+const n1Title = new FakeEl('span', { class: 'Rows_title__z' })
+n1Title.textContent = '可勾选会话'
+n1Row.appendChild(n1Title)
+n1Row['__reactFiber$sel'] = { memoizedProps: { node: { id: 'n1' } }, return: null }
+group.appendChild(n1Row)
+pluginExports.sessionBatch.pass()
+check(n1Row.querySelector('input[data-dsh-zh-batch-check]') !== null, true, '全选 正常列表 n1 行注入了复选框')
+let selAllBtn2 = selectAllBtnOf(wsRow)
+selAllBtn2.click('click')
+check(pluginExports.sessionBatch.selectionSize(), 1, '全选 正常列表点击后勾选 n1')
+check(n1Row.querySelector('input[data-dsh-zh-batch-check]').checked, true, '全选 n1 复选框勾选')
+selAllBtn2.click('click')
+check(pluginExports.sessionBatch.selectionSize(), 0, '全选 正常列表再点取消')
+selAllBtn2 = selectAllBtnOf(wsRow)
+check(selAllBtn2.getAttribute('data-dsh-zh-selectall-active'), 'false', '全选 正常列表取消后不高亮')
+// 会话多选开关关闭：全选按钮移除（没有复选框可勾选）；重新开启恢复。
+settingsStoreUnderTest.set('batchOpsEnabled', false)
+pluginExports.sessionBatch.pass()
+check(selectAllBtnOf(wsRow), null, '全选 关闭批量开关后移除全选按钮')
+settingsStoreUnderTest.set('batchOpsEnabled', true)
+pluginExports.sessionBatch.pass()
+check(selectAllBtnOf(wsRow) !== null, true, '全选 重新开启批量开关后恢复全选按钮')
 
 // 12) 卸载清理
 for (const d of disposers) d()

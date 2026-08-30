@@ -55,6 +55,14 @@ const ARCHIVE_VIEW_CSS = [
   '[data-dsh-zh-archive-row][data-dsh-zh-archive-selected="true"]{background:var(--dsw-alias-interactive-bg-hover)}',
   '[data-dsh-zh-archive-slot]{flex:none;width:16px;height:20px;display:inline-flex;',
   'align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary)}',
+  // 归档行多选复选框（与会话多选共用 data-dsh-zh-batch-check 标记与状态）：
+  // 默认透明，悬停 slot 或聚焦/勾选时显示，勾选后常显（规则独立于官方行
+  // 的 span[class*="slot"]，归档行 slot 是 data-dsh-zh-archive-slot）。
+  '[data-dsh-zh-archive-slot]>input[data-dsh-zh-batch-check]{opacity:0;flex:none;width:13px;height:13px;',
+  'margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-strong,#4b7bff)}',
+  '[data-dsh-zh-archive-slot]:hover>input[data-dsh-zh-batch-check],',
+  '[data-dsh-zh-archive-slot]:focus-within>input[data-dsh-zh-batch-check],',
+  '[data-dsh-zh-archive-slot]>input[data-dsh-zh-batch-check]:checked{opacity:1}',
   '[data-dsh-zh-archive-title]{flex:1;min-width:0;margin:0 6px 0 4px;overflow:hidden;',
   'text-overflow:ellipsis;white-space:nowrap;font-size:14px;line-height:20px}',
   '[data-dsh-zh-archive-time]{flex:none;font-size:12px;line-height:20px;',
@@ -123,16 +131,33 @@ const ARCHIVE_BTN_CSS = [
   'button[data-dsh-zh-ws-archive]:hover{color:var(--dsw-alias-label-primary)}',
   'button[data-dsh-zh-ws-archive][data-dsh-zh-archive-active="true"]{color:var(--dsw-alias-state-business-primary)}',
   'button[data-dsh-zh-ws-archive][data-dsh-zh-archive-active="true"]:hover{color:var(--dsw-alias-state-business-primary)}',
+  // 全选按钮（位于查看归档按钮之前）：同一几何；全部可勾选会话都为选中
+  // 态时高亮（data-dsh-zh-selectall-active），提示再点一次是取消。
+  'button[data-dsh-zh-ws-selectall]{flex:none;display:inline-flex;align-items:center;justify-content:center;',
+  'width:16px;height:16px;border:none;border-radius:4px;padding:0;background:transparent;',
+  'cursor:pointer;color:var(--dsw-alias-label-tertiary)}',
+  'button[data-dsh-zh-ws-selectall]:hover{color:var(--dsw-alias-label-primary)}',
+  'button[data-dsh-zh-ws-selectall][data-dsh-zh-selectall-active="true"]{color:var(--dsw-alias-state-business-primary)}',
+  'button[data-dsh-zh-ws-selectall][data-dsh-zh-selectall-active="true"]:hover{color:var(--dsw-alias-state-business-primary)}',
   // 未分组行没有官方 rowActions 容器，按钮直接挂在行尾：右对齐，跟随
   // 官方行 hover 行为显示/隐藏。
   '[data-dsh-zh-ws-row-standalone] button[data-dsh-zh-ws-archive]{margin-left:auto;margin-right:8px;display:none}',
   '[data-dsh-zh-ws-row-standalone]:hover button[data-dsh-zh-ws-archive]{display:inline-flex}',
+  '[data-dsh-zh-ws-row-standalone] button[data-dsh-zh-ws-selectall]{margin-left:auto;margin-right:6px;display:none}',
+  '[data-dsh-zh-ws-row-standalone]:hover button[data-dsh-zh-ws-selectall]{display:inline-flex}',
 ].join('')
 
 // 官方图标（path 数据静态复制自 @deepseek-ai/dsh-client-ui-primitives
 // icons/index.tsx，fill 均为 currentColor）。渲染为静态 SVG 元素，不做
 // DOM 克隆；fill-rule/transform/opacity 属性随 path 保留。
 const ARCHIVE_ICONS = {
+  // 全选（四宫格 = 全部条目被选中）。
+  selectall: {
+    viewBox: '0 0 16 16',
+    paths: [
+      { d: 'M2.5 2.5h4.5v4.5h-4.5zM9 2.5h4.5v4.5H9zM2.5 9h4.5v4.5h-4.5zM9 9h4.5v4.5H9z' },
+    ],
+  },
   archive: {
     viewBox: '0 0 20 20',
     paths: [
@@ -247,6 +272,8 @@ function runArchiveView(ctx) {
       zh: {
         buttonLabel: '查看已归档会话',
         buttonTitle: '查看该工作区已归档的会话',
+        'ws.selectall': '全选',
+        'ws.selectallTitle': '勾选该工作区当前所有可勾选的会话；已全选时点击取消勾选',
         'group.ungrouped': '未分组',
         empty: '暂无归档会话',
         expand: '再展开 {n} 个归档',
@@ -256,6 +283,16 @@ function runArchiveView(ctx) {
         'menu.fork': '分叉会话',
         'menu.unarchive': '取消归档',
         'menu.delete': '删除会话',
+        'menu.batchUnarchive': '批量取消归档（{n}）',
+        'menu.batchDelete': '批量删除（{n}）',
+        'batchUnarchive.title': '批量取消归档会话',
+        'batchUnarchive.desc': '将把选中的 {n} 个已归档会话恢复回正常会话列表（取消归档），可继续正常使用。确定继续吗？',
+        'batchUnarchive.done': '已取消归档 {n} 个会话',
+        'batchUnarchive.partial': '完成 {ok} 个，失败 {failed} 个：{message}',
+        'batchDelete.title': '批量删除会话',
+        'batchDelete.desc': '将把选中的 {n} 个会话删除：日志移入系统回收站、并从工作区账本移除（不保留恢复位）；运行中的会话会被跳过。确定继续吗？',
+        'batchDelete.deleting': '正在批量删除 {n} 个会话…',
+        'batchDelete.done': '已删除 {n} 个会话（日志已移入系统回收站）',
         'rename.title': '重命名会话',
         'rename.ok': '保存',
         'rename.cancel': '取消',
@@ -277,6 +314,8 @@ function runArchiveView(ctx) {
       en: {
         buttonLabel: 'Archived sessions',
         buttonTitle: 'View archived sessions of this workspace',
+        'ws.selectall': 'Select all',
+        'ws.selectallTitle': 'Check every selectable session in this workspace; click again to clear',
         'group.ungrouped': 'Ungrouped',
         empty: 'No archived sessions',
         expand: 'Show {n} more archived sessions',
@@ -286,6 +325,16 @@ function runArchiveView(ctx) {
         'menu.fork': 'Fork session',
         'menu.unarchive': 'Unarchive',
         'menu.delete': 'Delete session',
+        'menu.batchUnarchive': 'Unarchive selected ({n})',
+        'menu.batchDelete': 'Delete selected ({n})',
+        'batchUnarchive.title': 'Unarchive selected sessions',
+        'batchUnarchive.desc': 'The {n} selected archived sessions will be restored to the normal session list (unarchived) and usable as usual. Continue?',
+        'batchUnarchive.done': 'Unarchived {n} sessions',
+        'batchUnarchive.partial': '{ok} done, {failed} failed: {message}',
+        'batchDelete.title': 'Delete selected sessions',
+        'batchDelete.desc': 'The {n} selected sessions will be deleted: logs move to the system recycle bin and workspace ledger slots are removed (no restore position); running sessions are skipped. Continue?',
+        'batchDelete.deleting': 'Deleting {n} selected sessions…',
+        'batchDelete.done': 'Deleted {n} sessions (logs moved to the system recycle bin)',
         'rename.title': 'Rename session',
         'rename.ok': 'Save',
         'rename.cancel': 'Cancel',
@@ -816,8 +865,12 @@ function runArchiveView(ctx) {
         card.appendChild(actions)
       })
     }
-    const performDelete = function (row) {
-      showToast(archiveT('delete.deleting'), 2500)
+    // 删除会话（回收站）：与会话行菜单同一主机路由与语义。第二个参数
+    // silent=true 用于批量删除（单项不提示，避免批量期间逐项刷提示条），
+    // 返回 Promise<boolean>：成功 resolve true、失败 resolve false，供批量
+    // 串行收集结果。单项调用（void performDelete(row)）行为不变。
+    const performDelete = function (row, silent = false) {
+      if (silent !== true) showToast(archiveT('delete.deleting'), 2500)
       let currentSessionId = null
       try {
         const sessionsService = ctx.get('sessions')
@@ -829,7 +882,7 @@ function runArchiveView(ctx) {
           }
         }
       } catch { /* 忽略 */ }
-      void fetch('/dsh-zh/api/session.delete', {
+      return fetch('/dsh-zh/api/session.delete', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sessionId: row.id, title: row.title, currentSessionId: currentSessionId }),
@@ -840,9 +893,9 @@ function runArchiveView(ctx) {
           const message = parsed !== null && parsed.error !== null && parsed.error !== undefined
             ? parsed.error.message : 'HTTP'
           showToast(archiveT('delete.failed', { message: String(message) }), 5000)
-          return
+          return false
         }
-        showToast(archiveT('delete.done'), 4000)
+        if (silent !== true) showToast(archiveT('delete.done'), 4000)
         dropRow(row.id)
         if (currentSessionId !== null && currentSessionId === row.id) {
           try {
@@ -865,8 +918,168 @@ function runArchiveView(ctx) {
             void sessions.refresh()
           }
         } catch { /* 忽略 */ }
+        return true
       }).catch(function (error) {
         showToast(archiveT('delete.failed', { message: error instanceof Error ? error.message : String(error) }), 5000)
+        return false
+      })
+    }
+    // ------- 批量操作（会话多选，与官方行多选共享同一份多选状态） -------
+    // 归档视图里只有归档会话行，因此批量是「批量取消归档」与「批量删除」；
+    // 多选状态来自 session-batch 的 batchSelection，跨正常列表/归档视图生效。
+    // 批量行对象：从快照 byId 取标题（选中会话可能跨工作区、可能已不在
+    // 当前归档视图列表）。
+    const batchRowOf = function (id) {
+      const snap = readSnapshots()
+      const byId = snap.sessions !== null && snap.sessions !== undefined && snap.sessions.byId !== null
+        && typeof snap.sessions.byId === 'object' ? snap.sessions.byId : {}
+      const summary = byId[String(id)]
+      return {
+        id: String(id),
+        title: summary !== null && summary !== undefined && typeof summary.displayTitle === 'string'
+          ? summary.displayTitle : '',
+      }
+    }
+    // 批量取消归档：逐个调用主机 unarchive 路由，成功后行从归档列表消失，
+    // 完成后刷新列表、清空多选并显示汇总提示。
+    const confirmBatchUnarchive = function (ids) {
+      const n = String(ids.length)
+      showDialog(function (card, close) {
+        const titleEl = document.createElement('div')
+        titleEl.setAttribute('data-dsh-zh-archive-dialog-title', '')
+        titleEl.textContent = archiveT('batchUnarchive.title')
+        const descEl = document.createElement('div')
+        descEl.setAttribute('data-dsh-zh-archive-dialog-desc', '')
+        descEl.textContent = archiveT('batchUnarchive.desc', { n: n })
+        const actions = document.createElement('div')
+        actions.setAttribute('data-dsh-zh-archive-dialog-actions', '')
+        const cancel = document.createElement('button')
+        cancel.type = 'button'
+        cancel.textContent = archiveT('rename.cancel')
+        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:1px solid rgba(127,127,127,0.35);background:transparent;cursor:pointer;font:inherit;font-size:14px'
+        const ok = document.createElement('button')
+        ok.type = 'button'
+        ok.textContent = archiveT('rename.ok')
+        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-business-primary,#4f6ef7);color:#fff;cursor:pointer;font:inherit;font-size:14px'
+        cancel.addEventListener('click', close, false)
+        ok.addEventListener('click', function () { close(); runBatchUnarchive(ids.slice(), n) }, false)
+        actions.appendChild(cancel)
+        actions.appendChild(ok)
+        card.appendChild(titleEl)
+        card.appendChild(descEl)
+        card.appendChild(actions)
+      })
+    }
+    const runBatchUnarchive = function (ids, n) {
+      let chain = Promise.resolve()
+      let okCount = 0
+      let failedCount = 0
+      let firstMessage = ''
+      for (const id of ids) {
+        chain = chain.then(function () {
+          return fetch('/dsh-zh/api/session.unarchive', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ sessionId: id }),
+          }).then(function (response) {
+            return response.json().catch(function () { return null })
+          }).then(function (parsed) {
+            if (parsed === null || parsed.ok !== true) {
+              failedCount += 1
+              if (firstMessage === '') firstMessage = 'rpc'
+              return
+            }
+            okCount += 1
+            dropRow(id)
+          }).catch(function (error) {
+            failedCount += 1
+            if (firstMessage === '') firstMessage = error instanceof Error ? error.message : String(error)
+          })
+        })
+      }
+      chain.then(function () {
+        try {
+          const workspaces = ctx.get('workspaces')
+          if (workspaces !== undefined && workspaces !== null && typeof workspaces.refresh === 'function') {
+            void workspaces.refresh()
+          }
+        } catch { /* 忽略 */ }
+        try {
+          const sessions = ctx.get('sessions')
+          if (sessions !== undefined && sessions !== null && typeof sessions.refresh === 'function') {
+            void sessions.refresh()
+          }
+        } catch { /* 忽略 */ }
+        clearBatchSelection()
+        sectionRenderKey = null
+        renderSectionContent()
+        if (failedCount === 0) {
+          showToast(archiveT('batchUnarchive.done', { n: String(okCount) }), 4000)
+        } else {
+          showToast(archiveT('batchUnarchive.partial', {
+            ok: String(okCount), failed: String(failedCount), message: firstMessage,
+          }), 6000)
+        }
+      })
+    }
+    // 批量删除：逐个串行调用主机删除路由（单项静默，避免刷屏），完成后
+    // 刷新列表、清空多选并显示汇总提示。
+    const confirmBatchDelete = function (ids) {
+      const n = String(ids.length)
+      showDialog(function (card, close) {
+        const titleEl = document.createElement('div')
+        titleEl.setAttribute('data-dsh-zh-archive-dialog-title', '')
+        titleEl.textContent = archiveT('batchDelete.title')
+        const descEl = document.createElement('div')
+        descEl.setAttribute('data-dsh-zh-archive-dialog-desc', '')
+        descEl.textContent = archiveT('batchDelete.desc', { n: n })
+        const actions = document.createElement('div')
+        actions.setAttribute('data-dsh-zh-archive-dialog-actions', '')
+        const cancel = document.createElement('button')
+        cancel.type = 'button'
+        cancel.textContent = archiveT('delete.cancel')
+        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:1px solid rgba(127,127,127,0.35);background:transparent;cursor:pointer;font:inherit;font-size:14px'
+        const ok = document.createElement('button')
+        ok.type = 'button'
+        ok.textContent = archiveT('delete.ok')
+        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:#d93026;color:#fff;cursor:pointer;font:inherit;font-size:14px'
+        cancel.addEventListener('click', close, false)
+        ok.addEventListener('click', function () {
+          close()
+          showToast(archiveT('batchDelete.deleting', { n: n }), 2500)
+          runBatchDelete(ids.slice(), n)
+        }, false)
+        actions.appendChild(cancel)
+        actions.appendChild(ok)
+        card.appendChild(titleEl)
+        card.appendChild(descEl)
+        card.appendChild(actions)
+      })
+    }
+    const runBatchDelete = function (ids, n) {
+      let chain = Promise.resolve()
+      let okCount = 0
+      let failedCount = 0
+      for (const id of ids) {
+        const row = batchRowOf(id)
+        chain = chain.then(function () {
+          return performDelete(row, true).then(function (ok) {
+            if (ok === true) okCount += 1
+            else failedCount += 1
+          })
+        })
+      }
+      chain.then(function () {
+        clearBatchSelection()
+        sectionRenderKey = null
+        renderSectionContent()
+        if (failedCount === 0) {
+          showToast(archiveT('batchDelete.done', { n: String(okCount) }), 4000)
+        } else {
+          showToast(archiveT('batchUnarchive.partial', {
+            ok: String(okCount), failed: String(failedCount), message: 'skipped',
+          }), 6000)
+        }
       })
     }
     const openMenu = function (anchorBtn, row, rowEl) {
@@ -874,7 +1087,7 @@ function runArchiveView(ctx) {
       menuEl = document.createElement('div')
       menuEl.setAttribute('role', 'menu')
       menuEl.setAttribute('data-dsh-zh-archive-menu', '')
-      const appendItem = function (labelKey, iconName, danger, onClick) {
+      const appendItem = function (labelKey, iconName, danger, onClick, params = undefined) {
         const item = document.createElement('button')
         item.type = 'button'
         item.setAttribute('role', 'menuitem')
@@ -891,7 +1104,7 @@ function runArchiveView(ctx) {
         }
         const labelEl = document.createElement('span')
         labelEl.setAttribute('data-dsh-zh-archive-menu-label', '')
-        labelEl.textContent = archiveT(labelKey)
+        labelEl.textContent = archiveT(labelKey, params)
         item.appendChild(icon)
         item.appendChild(labelEl)
         item.addEventListener('click', function (event) {
@@ -911,6 +1124,27 @@ function runArchiveView(ctx) {
           appendItem('menu.delete', null, true, function () { confirmDelete(row) })
         }
       } catch { /* 设置读取失败时不提供删除项 */ }
+      // 会话多选（batchOpsEnabled）：多选非空时追加「批量取消归档 / 批量
+      // 删除」。已归档会话本来就在归档集合里，「批量归档」无意义，因此
+      // 对归档行是「批量取消归档」（恢复回正常列表）；「批量删除」跟随
+      // 「会话删除按钮」开关，多选会话与官方行多选是同一份状态，跨视图
+      // 生效。「批量删除」项始终在危险区（红色），排在单项删除之后。
+      try {
+        if (typeof settingsStore !== 'undefined' && settingsStore !== null
+          && settingsStore.getSnapshot().batchOpsEnabled === true
+          && batchSelectionSize() > 0) {
+          const batchIds = batchSelectionIds()
+          const batchCount = String(batchIds.length)
+          appendItem('menu.batchUnarchive', 'archive', false, function () {
+            confirmBatchUnarchive(batchIds.slice())
+          }, { n: batchCount })
+          if (settingsStore.getSnapshot().deleteSessionEnabled === true) {
+            appendItem('menu.batchDelete', null, true, function () {
+              confirmBatchDelete(batchIds.slice())
+            }, { n: batchCount })
+          }
+        }
+      } catch { /* 设置读取失败时不提供批量项 */ }
       document.body.appendChild(menuEl)
       // 定位：按钮下方、右缘对齐；下方空间不足时改到上方。
       try {
@@ -1061,10 +1295,45 @@ function runArchiveView(ctx) {
         rowEl.setAttribute('data-dsh-zh-archive-id', row.id)
         rowEl.setAttribute('data-dsh-zh-archive-selected', row.id === currentId ? 'true' : 'false')
         rowEl.setAttribute('aria-selected', row.id === currentId ? 'true' : 'false')
-        // slot 占位（16px，标题缩进与官方会话行对齐）。
+        // slot 占位（16px，标题缩进与官方会话行对齐）。会话多选开启时在
+        // 空 slot 注入复选框（data-dsh-zh-batch-check，与官方行多选同一
+        // 标记与同一份多选状态 batchSelection）：无非空闲行可勾选。
         const slotEl = document.createElement('span')
         slotEl.setAttribute('data-dsh-zh-archive-slot', '')
         rowEl.appendChild(slotEl)
+        // 运行中的归档会话不出现复选框（与官方行多选规则一致）；blank/
+        // 子代理已被 mergedRowsOf 排除，不在此列。
+        const rowSummary = byId[String(row.id)]
+        if (rowSummary === undefined || rowSummary === null || rowSummary.running !== true) {
+          try {
+            if (typeof settingsStore !== 'undefined' && settingsStore !== null
+              && settingsStore.getSnapshot().batchOpsEnabled === true) {
+              const checkEl = document.createElement('input')
+              checkEl.type = 'checkbox'
+              checkEl.setAttribute('data-dsh-zh-batch-check', '')
+              checkEl.checked = batchSelection.has(row.id)
+              try {
+                const locale = ctx.get('locale')
+                const zh = locale !== undefined && locale !== null && typeof locale.getLocale === 'function'
+                  && locale.getLocale().active === 'zh'
+                checkEl.setAttribute('aria-label', (zh ? '选择会话' : 'Select session') + ' ' + row.title)
+              } catch { /* aria 失败忽略 */ }
+              // 阻止冒泡：勾选不触发行点击（取消归档 + 打开）、不启动拖拽。
+              const stopProp = function (event) {
+                if (typeof event.stopPropagation === 'function') event.stopPropagation()
+              }
+              checkEl.addEventListener('pointerdown', stopProp, false)
+              checkEl.addEventListener('mousedown', stopProp, false)
+              checkEl.addEventListener('click', stopProp, false)
+              checkEl.addEventListener('change', function () {
+                toggleBatchSelection(row.id, checkEl.checked === true)
+              }, false)
+              slotEl.appendChild(checkEl)
+            }
+          } catch (error) {
+            console.warn('[dsh-zh] 归档行复选框注入失败：' + (error instanceof Error ? error.message : String(error)))
+          }
+        }
         const titleEl = document.createElement('span')
         titleEl.setAttribute('data-dsh-zh-archive-title', '')
         titleEl.textContent = row.title
@@ -1177,6 +1446,10 @@ function runArchiveView(ctx) {
     const ARCHIVE_WS_NEW_SESSION = ['在“', 'New session in ']
     const ARCHIVE_BTN_MARK = 'data-dsh-zh-ws-archive'
     const ARCHIVE_ROW_MARK = 'data-dsh-zh-ws-archive-row'
+    // 全选按钮（工作区行，位于查看归档按钮之前）：点一下勾选该工作区当前
+    // 视图下所有可勾选的会话，再点一下取消勾选。
+    const SELECT_ALL_MARK = 'data-dsh-zh-ws-selectall'
+    const SELECT_ALL_ACTIVE = 'data-dsh-zh-selectall-active'
     // 从行内 fiber 读 group（与 session-menu 读 node.id 同法）。
     const readGroupFromRow = function (row) {
       try {
@@ -1284,6 +1557,147 @@ function runArchiveView(ctx) {
         }
       } catch { /* 忽略 */ }
     }
+    // ------- 工作区行「全选」按钮（勾选/取消该工作区当前视图的可勾选会话） -------
+    // 可勾选判定与展示一致：行内存在会话多选复选框（session-batch 为官方
+    // 行、本模块为归档行按同一规则注入/摘除）。范围 = 该工作区**当前视图**：
+    //   - 归档视图开着（activeTarget 匹配该工作区）时只取归档行；
+    //   - 否则只取正常列表的官方会话行。
+    // 保证「全选 = 勾选当前可见且可勾选的会话」，视图外的行不掺和。
+    const selectableIdsOf = function (workspaceId, row) {
+      const ids = []
+      const host = groupHostOf(row)
+      if (host === null) return ids
+      const inArchive = activeTarget !== null && String(activeTarget.workspaceId) === String(workspaceId)
+      if (inArchive && sectionEl !== null && sectionEl.parentNode === host) {
+        try {
+          const archRows = sectionEl.querySelectorAll('[data-dsh-zh-archive-row]')
+          for (let i = 0; i < archRows.length; i += 1) {
+            const archRow = archRows[i]
+            if (archRow.querySelector('input[data-dsh-zh-batch-check]') === null) continue
+            const id = archRow.getAttribute('data-dsh-zh-archive-id')
+            if (id !== null && id !== '') ids.push(id)
+          }
+        } catch { /* 忽略 */ }
+        return ids
+      }
+      try {
+        const normalRows = host.querySelectorAll('div[class*="sessionRow"][role="treeitem"]')
+        for (let i = 0; i < normalRows.length; i += 1) {
+          const normalRow = normalRows[i]
+          if (normalRow.querySelector('input[data-dsh-zh-batch-check]') === null) continue
+          const id = readSessionIdFromRow(normalRow)
+          if (id !== null) ids.push(id)
+        }
+      } catch { /* 忽略 */ }
+      return ids
+    }
+    // 把操作涉及的行复选框同步到目标勾选态（只动本次 toggle 影响的 id 对应
+    // 的行，避免把视图外/未涉及的行误改为一致状态）。
+    const setChecksForIds = function (row, ids, checked) {
+      const host = groupHostOf(row)
+      if (host === null) return
+      const idSet = new Set(ids)
+      const candidates = []
+      try {
+        const normalRows = host.querySelectorAll('div[class*="sessionRow"][role="treeitem"]')
+        for (let i = 0; i < normalRows.length; i += 1) candidates.push(normalRows[i])
+      } catch { /* 忽略 */ }
+      if (sectionEl !== null && sectionEl.parentNode === host) {
+        try {
+          const archRows = sectionEl.querySelectorAll('[data-dsh-zh-archive-row]')
+          for (let i = 0; i < archRows.length; i += 1) candidates.push(archRows[i])
+        } catch { /* 忽略 */ }
+      }
+      for (let i = 0; i < candidates.length; i += 1) {
+        const target = candidates[i]
+        let box = null
+        try { box = target.querySelector('input[data-dsh-zh-batch-check]') } catch { box = null }
+        if (box === null) continue
+        const id = target.getAttribute('data-dsh-zh-archive-id') !== null
+          ? target.getAttribute('data-dsh-zh-archive-id')
+          : readSessionIdFromRow(target)
+        if (id !== null && idSet.has(id)) box.checked = checked
+      }
+    }
+    // 全选/取消切换：当前视图可勾选会话若已全部选中则全部取消，否则全部选中。
+    // 多选状态 source 是 session-batch 的 batchSelection（官方行/归档行共用）。
+    const toggleSelectAll = function (workspaceId, row) {
+      const ids = selectableIdsOf(workspaceId, row)
+      if (ids.length === 0) return
+      const allChecked = ids.every(function (id) { return batchSelection.has(id) })
+      const target = !allChecked
+      for (const id of ids) toggleBatchSelection(id, target)
+      setChecksForIds(row, ids, target)
+      syncSelectAllActiveMarks()
+    }
+    // 全选按钮激活标记：该工作区当前所有可勾选会话都已选中时高亮
+    // （提示再点一次是取消勾选）。
+    const syncSelectAllActiveMarks = function () {
+      try {
+        const buttons = document.body.querySelectorAll('button[' + SELECT_ALL_MARK + ']')
+        for (let i = 0; i < buttons.length; i += 1) {
+          const button = buttons[i]
+          let active = false
+          let el = button
+          while (el !== null && el !== document.body) {
+            if (isWorkspaceRow(el)) {
+              const info = workspaceInfoOfRow(el)
+              if (info !== null) {
+                const ids = selectableIdsOf(info.workspaceId, el)
+                active = ids.length > 0 && ids.every(function (id) { return batchSelection.has(id) })
+              }
+              break
+            }
+            el = el.parentElement
+          }
+          button.setAttribute(SELECT_ALL_ACTIVE, active ? 'true' : 'false')
+        }
+      } catch { /* 忽略 */ }
+    }
+    // 全选按钮同步：会话多选开关（batchOpsEnabled）关闭时移除（此时没有
+    // 复选框可勾选，按钮点了也无意义），开启时注入到「查看归档」按钮之前。
+    const syncSelectAllButton = function (row) {
+      let batchOn = false
+      try {
+        batchOn = typeof settingsStore !== 'undefined' && settingsStore !== null
+          && settingsStore.getSnapshot().batchOpsEnabled === true
+      } catch { batchOn = false }
+      const existing = (() => {
+        try { return row.querySelector('button[' + SELECT_ALL_MARK + ']') } catch { return null }
+      })()
+      if (!batchOn) {
+        try {
+          if (existing !== null && existing.parentNode !== null) existing.parentNode.removeChild(existing)
+        } catch { /* 忽略 */ }
+        return
+      }
+      if (existing !== null) return
+      const archiveBtn = (() => {
+        try { return row.querySelector('button[' + ARCHIVE_BTN_MARK + ']') } catch { return null }
+      })()
+      const selectAllBtn = document.createElement('button')
+      selectAllBtn.type = 'button'
+      selectAllBtn.setAttribute('aria-label', archiveT('ws.selectall'))
+      selectAllBtn.title = archiveT('ws.selectallTitle')
+      selectAllBtn.setAttribute(SELECT_ALL_MARK, '')
+      const svg = makeOfficialIcon('selectall', 16)
+      if (svg !== null) selectAllBtn.appendChild(svg)
+      selectAllBtn.addEventListener('click', function (event) {
+        event.preventDefault()
+        event.stopPropagation()
+        const rowInfo = workspaceInfoOfRow(row)
+        if (rowInfo !== null) toggleSelectAll(rowInfo.workspaceId, row)
+      }, false)
+      try {
+        if (archiveBtn !== null && archiveBtn.parentNode !== null) {
+          archiveBtn.parentNode.insertBefore(selectAllBtn, archiveBtn)
+        } else if (row.firstElementChild !== null) {
+          row.insertBefore(selectAllBtn, row.firstElementChild)
+        } else {
+          row.appendChild(selectAllBtn)
+        }
+      } catch { /* 注入失败不影响查看归档 */ }
+    }
     const removeInjectedButtons = function (row) {
       try {
         const existing = row.querySelectorAll('button[' + ARCHIVE_BTN_MARK + ']')
@@ -1293,12 +1707,23 @@ function runArchiveView(ctx) {
         }
       } catch { /* 忽略 */ }
       try {
+        const sel = row.querySelectorAll('button[' + SELECT_ALL_MARK + ']')
+        for (let i = 0; i < sel.length; i += 1) {
+          const button = sel[i]
+          if (button.parentNode !== null) button.parentNode.removeChild(button)
+        }
+      } catch { /* 忽略 */ }
+      try {
         row.removeAttribute(ARCHIVE_ROW_MARK)
         row.removeAttribute('data-dsh-zh-ws-row-standalone')
       } catch { /* 忽略 */ }
     }
     const injectButton = function (row) {
-      if (row.getAttribute(ARCHIVE_ROW_MARK) !== null) return
+      if (row.getAttribute(ARCHIVE_ROW_MARK) !== null) {
+        // 已注入：仍要同步全选按钮（会话多选开关翻转时移除/恢复）。
+        syncSelectAllButton(row)
+        return
+      }
       const info = workspaceInfoOfRow(row)
       if (info === null) return
       removeInjectedButtons(row)
@@ -1339,12 +1764,14 @@ function runArchiveView(ctx) {
         row.setAttribute('data-dsh-zh-ws-row-standalone', '')
       }
       row.setAttribute(ARCHIVE_ROW_MARK, '')
+      syncSelectAllButton(row)
     }
     const runButtonPass = function () {
       if (document.body === null || document.body === undefined) return
       const rows = findWorkspaceRows(document.body)
       for (const row of rows) injectButton(row)
       syncButtonActiveMarks()
+      syncSelectAllActiveMarks()
       // 官方列表变化时同步归档行注入（容器挂载点/内容）。内容有缓存、
       // 同步走 rAF 节流，避免 observer 递归。
       if (activeTarget !== null) scheduleSectionSync()
@@ -1437,7 +1864,18 @@ function runArchiveView(ctx) {
       if (typeof settingsStore !== 'undefined' && settingsStore !== null
         && typeof settingsStore.subscribe === 'function') {
         dataUnsubs.push(settingsStore.subscribe(function () {
-          runButtonPass()
+          // batchOpsEnabled 等开关变化后，归档行有无复选框会变化：绕开
+          // 渲染缓存强制重建行（session-batch 的重扫只覆盖官方会话行，
+          // 归档行必须在这里自行重建）。按钮注入失败不阻断重建。
+          try {
+            runButtonPass()
+          } catch (error) {
+            console.warn('[dsh-zh] 归档按钮注入失败：' + (error instanceof Error ? error.message : String(error)))
+          }
+          if (activeTarget !== null) {
+            sectionRenderKey = null
+            syncArchivedSection()
+          }
         }))
       }
     } catch { /* 忽略 */ }
@@ -1452,6 +1890,14 @@ function runArchiveView(ctx) {
             const btn = buttons[i] as HTMLButtonElement
             btn.setAttribute('aria-label', archiveT('buttonLabel'))
             btn.title = archiveT('buttonTitle')
+          }
+        } catch { /* 忽略 */ }
+        try {
+          const selButtons = document.body.querySelectorAll('button[' + SELECT_ALL_MARK + ']')
+          for (let i = 0; i < selButtons.length; i += 1) {
+            const btn = selButtons[i] as HTMLButtonElement
+            btn.setAttribute('aria-label', archiveT('ws.selectall'))
+            btn.title = archiveT('ws.selectallTitle')
           }
         } catch { /* 忽略 */ }
         if (activeTarget !== null) {
