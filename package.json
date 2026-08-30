@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-zh_pro",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
   "description": "综合性增强插件：界面优化、布局调整与提示词注入等更多功能。A comprehensive enhancement plugin with UI polish, layout tweaks, prompt injection, and more.",
   "main": "lib/index.js",

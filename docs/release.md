@@ -77,7 +77,11 @@ node bin/dsh-zh.mjs status --profile web
 1. 提交 `src/`、配置、锁文件和必要的项目元数据，不提交根目录 `bin/`、`lib/`、`scripts/` 或生成验证脚本。
 2. 用 `git check-ignore bin/dsh-zh.mjs lib/index.js scripts/build-client.mjs` 确认构建产物仍被忽略。
 3. commit message 必须全中文且以中文开头；英文术语只放在中文后的括号内。
-4. 创建与 `package.json` 一致的版本标签。
+4. 创建与 `package.json` 一致的版本标签。**标签必须为 annotated tag（`git tag -a`），且标签消息
+   必须列出本版本相对上一版本更新了什么**（新功能、行为变化、修复；不写内部重构细节）。
+   标签消息同时作为 GitHub Release 的说明底稿：推送到 GitHub 后用
+   `gh release create <tag> --title "<中文标题>" --notes "<更新说明>"` 发布 Release，
+   说明内容与标签消息保持一致。无更新说明的标签视为无效发布。
 5. 推送分支和标签。
 
 推送前再次核对远端、分支和标签，禁止覆盖历史或使用破坏性 reset。
@@ -114,7 +118,7 @@ node bin/dsh-zh.mjs status --profile web
 
 # 打包产物：确认 npm 包导出和 CLI 都可用
 npm pack
-npm install --prefix .tmp-install .\\deepseek-harness-zh_pro-0.8.0.tgz
+npm install --prefix .tmp-install .\\deepseek-harness-zh_pro-0.9.0.tgz
 node .tmp-install/node_modules/deepseek-harness-zh_pro/bin/dsh-zh.mjs status --profile web
 ```
 

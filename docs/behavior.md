@@ -5,7 +5,7 @@
 
 ## 适用范围
 
-- 支持 DeepSeek Harness Web GUI ≥ 0.1.2-alpha.1，默认 profile 为 `web`；本版本（0.8.0）词典与
+- 支持 DeepSeek Harness Web GUI ≥ 0.1.2-alpha.1，默认 profile 为 `web`；本版本（0.9.0）词典与
   locale 契约按该版本对齐，更旧的 DSH 上中文补全部分条目会失配。
 - Node.js 要求：`^22.19.0 || >=24.0.0`。
 - 中文补全只在界面语言为中文时生效。统计样式、思考展开、默认展开行数、自动归档、
