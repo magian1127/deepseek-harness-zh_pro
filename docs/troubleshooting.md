@@ -79,7 +79,8 @@ profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢
 
 1. 动态插件对 dsh-zh 的 include 条目执行 `update({ config: { ...patches } })`，
    先 `{ id: 'dsh-zh', disabled: true }` 卸载（卸载会自动清理该包模块缓存）；
-2. 再清 `loader.internal.loadCache` 中本包路径（`/dsh-zh/lib/`、`/dsh-zh/bin/`）的键；
+2. 再清 `loader.internal.loadCache` 中本包 realpath（当前目录名为
+   `/deepseek-harness-zh_pro/lib/`、`/deepseek-harness-zh_pro/bin/`）的键；
 3. 最后 `{ id: 'dsh-zh', disabled: false }` 从磁盘重新加载新代码。
 
 注意：对已活动的条目直接 `disabled: false` 是 no-op，**必须先禁用再恢复**。

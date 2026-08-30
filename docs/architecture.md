@@ -76,8 +76,8 @@ CLI 和官方 remove 都会删除依赖声明。主机监督器发现本包被�
 
 | 设置 | 数据流 |
 | --- | --- |
-| 中文补全、统计、思考展开 | 设置页 → 浏览器 store → localStorage → DOM/locale 效果 |
-| 提示词开关、文本、目标 | 设置页 → `settingsScope` → `settings.yaml` → 主机 `scope.watch` |
+| 中文补全、思考显示、统计、归档视图、会话删除/多选、服务监控、卡片展开态 | 设置页 → 浏览器 store → localStorage → DOM/locale/轮询效果 |
+| 代理角色/工具说明中文化、提示词开关/文本/目标、自动归档天数 | 设置页 → `settingsScope` → `settings.yaml` → 主机 `scope.watch` |
 | `system` 注入 | 主机包装 `systemPrompt.assemble`，修改最终 assembly sections |
 | `user` 注入 | 主机在 `agent/pre-step` 插入一条 notice `user/message` |
 

@@ -64,7 +64,7 @@ npm test
   `zh-dict.ts` 整句覆盖/部分翻译、`dom-labels.ts` DOM 精确映射、`traj-patterns.ts` 轨迹正则）；
 - `src/lib/client/logic/`：状态与逻辑（`settings-store.ts`、`prompt-store.ts`、`format-utils.ts`、
   `settings-section.ts` 设置页组件、`auto-archive.ts`、`register.ts`、`dom-enhance.ts`、
-  `session-menu.ts` 会话删除菜单（含批量项注入与批量执行）、`session-batch.ts` 会话批量操作
+  `session-menu.ts` 会话删除菜单（含批量项注入与批量执行）、`session-batch.ts` 会话多选与批量操作
   （行首复选框 + 多选状态）、`archive-view.ts` 归档视图、`service-monitor.ts` 服务监控面板、
   `apply.ts`）；
 - `src/lib/client/entry.ts`：客户端行为说明；`scripts/build-client.mjs` 负责生成包壳与导出，
@@ -169,7 +169,7 @@ client-modules 会缓存某个包名是否为有效客户端包。结构错误�
   滚动位置，否则用户一滚就被拉回。用正文状态里的 `from` 与当前方向比较来判断是否重置。
 - **observer 回调处理行内变化必须向上定位宿主**：回调里只扫 `record.target` 的**子树**时，
   发生在注入容器内部的变化（如会话行 slot 里出现/移除状态图标）永远扫不到宿主行——启动
-  全量 pass 能注入、动态变化全部失效（2026-08-29 会话批量操作真实 GUI 验收发现）。回调
+  全量 pass 能注入、动态变化全部失效（2026-08-29 会话多选真实 GUI 验收发现）。回调
   必须对 target 做 `closest(宿主选择器)` 向上找行再扫描；同时 pass 要处理「扫描根自身匹配
   选择器」的情况（`matches` 检查），新增单节点直接传入时才不漏。
 
@@ -178,7 +178,7 @@ client-modules 会缓存某个包名是否为有效客户端包。结构错误�
 外，其余 DOM 效果与界面语言无关：中文/英文界面都按各自开关生效；只有中文补全的文本
 改写和提示词提供方隐藏随 `activeIsZh()` 门控，切换英文时按反向表还原文本改写。
 
-## 设置页卡片与表单列对齐（服务监控实践）
+## 设置页可收缩卡片与表单列对齐
 
 - **复刻官方插件卡**：设置 → 插件的收缩卡片在 `packages/client/ui-settings-plugins` 的
   `PluginCard.tsx/.module.css`（本仓库无法 import 它，按样式复刻）：12px 圆角 +
@@ -205,7 +205,7 @@ client-modules 会缓存某个包名是否为有效客户端包。结构错误�
   改「刷新间隔」即时生效，无需重建 Fiber/定时器。
 - **在既有 createElement 参数列表里插入兄弟行，先核对括号层级**：分组容器里最后一行的
   末尾往往同时闭合了行与容器（`... true))`），把新行插到这之后就成了容器的**兄弟**——
-  typecheck 与 build 都不报错，渲染位置却错（2026-08-29 批量操作开关渲染成设置卡片上的
+  typecheck 与 build 都不报错，渲染位置却错（2026-08-29 会话多选开关渲染成设置卡片上的
   裸行、分组里看不到）。插入后必须以真实渲染层级验收（打开设置页查 DOM 祖先链），
   不能以编译通过代替。
 

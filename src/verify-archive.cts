@@ -849,7 +849,7 @@ check(panelOf() !== null, true, '重新开启 归档视图可用')
 archiveBtnRe.click('click')
 check(panelOf(), null, '重新开启 归档视图可退出')
 
-// 11d) 会话批量操作：行首空图标位复选框 + 多选 + 批量菜单项 + 批量删除/归档。
+// 11d) 会话多选：行首空图标位复选框 + 多选 + 批量菜单项 + 批量删除/归档。
 // 全量扫描走 bundle 导出的确定性 pass（archive-view 内部还有多个 observer，
 // 按索引定位不可靠）。
 check(typeof pluginExports.sessionBatch === 'object' && typeof pluginExports.sessionBatch.pass === 'function', true, '批量操作模块已安装并暴露测试入口')

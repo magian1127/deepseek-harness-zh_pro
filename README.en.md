@@ -10,40 +10,42 @@
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
 
-A comprehensive enhancement plugin with UI polish, layout tweaks, prompt injection, and
-more. "Chinese completion" applies only to the Chinese interface, making it more complete
-and readable; the other UI and session enhancements work in both Chinese and English.
-Prompt injection, agent-role localization, and tool-description localization are separate
-explicit toggles, all off by default.
+A comprehensive enhancement plugin for Chinese UI completion, thinking display, session-list
+controls, service monitoring, and optional model-request localization. Chinese completion applies
+only to the Chinese interface; all other UI and session enhancements work in both interface
+languages. Every feature that modifies model requests is an independent explicit toggle and is
+off by default.
 
 ## Features
 
-| Feature | Default | Description |
-| --- | --- | --- |
-| Chinese completion | On | Chinese UI only: fixes leftover English and normalizes tokens, API keys, model IDs, durations, and count formats |
-| Agent-role prompt localization | Off | Uses Chinese system prompts and built-in system sections (identity, checkout path, Web GUI note) for the four built-in agent roles on new sessions only; existing sessions are not reinjected |
-| Tool-description localization | Off | Uses Chinese for confirmed built-in DSH tool descriptions and their first-party guidance sections in the system prompt (including the Cordis plugin-development guide of the cordis preset and the plan-mode policy) in new-session model requests; tool and parameter names remain unchanged |
-| Full stats line | On | Keeps the chat stats line on one fully visible row, auto-shrinks the font, and scrolls horizontally when extremely long |
-| Auto-expand latest thinking | On | Expands the newest thinking output as it streams in and collapses the previous auto-expanded one when a new one appears |
-| Default expanded lines | 20 lines | Limits an expanded thinking block to N visible lines; 0 disables the limit |
-| Expand mode | Button mode | Button mode reveals more lines in batches; scroll mode keeps an independent scrolling viewport, with the configured earliest/latest direction controlling its initial position |
-| Prompt injection | Off | Injects an editable prompt into subsequent model requests, targeting either the initial system prompt or the first user prompt |
-| Auto-archive old sessions | 7 days | When the New Session screen opens, auto-archives sessions inactive beyond the configured days (hidden from the list only, log kept; 0 disables it) |
-| Archived sessions view | On | Adds an "Archive" button to every workspace row: clicking it hides that group's normal sessions and shows archived sessions directly in the official list flow (sorted by most recent activity, 5 by default, +5 per expand); the row overflow menu has rename / fork / unarchive / delete; clicking a row restores and opens the session |
-| Service monitor | Off | Shows locally started services between the session list and Settings in the sidebar: a green dot plus the address (e.g. 127.0.0.1:81) and its uptime; hovering resolves the owning process on demand (first hover shows "resolving…", then swaps in name/PID, path and command line in place; later hovers are instant, and the cache clears when the service stops), click reveals the process folder in the file manager. Its collapsible card at the bottom of the settings page (official plugin-card style) adds custom watch entries (name + address text boxes, editable anytime after adding, always shown: green dot online / gray dot offline) and a refresh interval (default 10s, 2-300). Port scanning and probes work on all three platforms; process attribution and folder reveal are best-effort per platform (Linux needs `ss`/`xdg-open`), so it is off by default |
-| Session delete button | On | Adds a "Delete session" item to a session row's overflow menu in both UI languages; moves the session log directory into the OS recycle bin (Windows Recycle Bin / macOS Trash / XDG Trash) and removes its workspace slot (no restore position); when off, "Delete selected" is hidden from the batch menu too |
-| Batch session operations | On | Hover the empty leading icon slot of an idle session row to check it (running, pending-interaction and unread-completion rows are not selectable); with sessions checked, any row menu offers "Delete selected (N) / Archive selected (N)", executed one by one after confirmation with a result toast |
-| Other features · Session delete button | On | A flat row in the final Other features settings section controls whether the overflow-menu delete item is shown |
+The rows below follow **DSH Settings → Enhancements** from top to bottom:
 
-Chinese completion only applies to the Chinese interface; the other interface enhancements
-work in both Chinese and English. All features are configured under **DSH Settings →
-Enhancements**. See the
+| Settings location | Feature | Default | Description |
+| --- | --- | --- | --- |
+| Flat row | Chinese completion | On | Chinese UI only: fixes confirmed leftover English and normalizes tokens, API keys, model IDs, durations, and count formats |
+| Flat row | Agent-role prompt localization | Off | Uses Chinese for the four built-in agent roles and confirmed first-party system sections; locked on the first request of a new session and never reinjected into existing sessions |
+| Flat row | Tool-description localization | Off | Localizes confirmed built-in DSH tool descriptions and guidance; tool names, parameter names, and third-party tools remain unchanged; new sessions only |
+| Flat row | Prompt injection | Off | Injects editable text into subsequent requests; the default text asks for Chinese reasoning and replies, and the default target is the initial system prompt |
+| Chat display | Auto-expand latest thinking | On | Expands the newest streaming thinking block and collapses the previous block that the plugin auto-expanded |
+| Chat display | Default expanded lines | 20 lines, latest N | Limits the initial visible region to 0–200 lines; 0 disables the limit, and the direction can be changed to earliest N |
+| Chat display | Expand mode | Button mode | Button mode reveals lines in batches; scroll mode uses a fixed-height scrolling viewport |
+| Chat display | Full stats line | On | Keeps the chat stats on one line, shrinking or scrolling horizontally when needed |
+| Session list | Auto-archive old sessions | 7 days | Archives inactive sessions when the New Session view opens; range 0–365, with 0 disabling it |
+| Session list | Archived-session view | On | Adds a workspace archive view whose rows can be restored, renamed, forked, or deleted |
+| Session list | Session delete button | On | Shows “Delete session” in row menus; the log moves to the OS recycle bin and no list restore slot is retained |
+| Session list | Session multi-select | On | Lets idle rows be selected for batch deletion or archiving; running, pending-interaction, and unread-completion rows are not selectable |
+| Service monitor | Service monitor | Off | Shows local listening services started during the conversation; hover resolves the process on demand and click reveals its location |
+| Service monitor | Refresh interval | 10 seconds | Range 2–300 seconds; polling pauses while the page is hidden |
+| Service monitor | Custom watch entries | Empty | Entries can be added or edited and remain visible as online/offline; maximum 100 |
+
+Chat display, Session list, and Service monitor use the same collapsible plugin-card style. They
+start collapsed and remember their open state independently. See the
 [behavior contract](https://github.com/magian1127/deepseek-harness-zh_pro/blob/main/docs/behavior.md)
-for the full defaults and boundaries.
+for full interaction, data, and safety boundaries.
 
 ## Requirements
 
-- DeepSeek Harness Web GUI, default profile `web`
+- DeepSeek Harness Web GUI ≥ 0.1.2-alpha.1, default profile `web`
 - Node.js `^22.19.0 || >=24.0.0`
 
 ## Installation
@@ -104,9 +106,8 @@ after reinstalling.
 
 | Data | Storage |
 | --- | --- |
-| Chinese completion, stats, thinking expansion/mode/direction, default expanded lines, chat width, archived-session view, service monitor, session-delete button | Browser localStorage: `deepseek-harness-zh_pro:enhancements` |
-| Prompt toggle, text, injection target, auto-archive days | DSH `settings.yaml`, namespace `dsh-zh` |
-| Agent-role and tool-description localization | DSH `settings.yaml`, namespace `dsh-zh` |
+| Chinese completion, thinking display, stats, archived-session view, session deletion, session multi-select, service monitor, and the three cards' open state | Browser localStorage: `deepseek-harness-zh_pro:enhancements` |
+| Agent-role localization, tool-description localization, prompt toggle/text/target, and auto-archive days | DSH `settings.yaml`, namespace `dsh-zh` |
 
 The plugin registers no model tools and uploads no data. Except for explicitly enabled
 prompt injection, agent-role localization, and tool-description localization, no feature

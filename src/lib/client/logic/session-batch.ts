@@ -1,4 +1,4 @@
-// 会话批量操作：行首空图标位的悬停复选框 + 多选状态 + 批量执行。
+// 会话多选：行首空图标位的悬停复选框 + 多选状态 + 批量执行。
 //
 // 官方会话行（ui-workspace SessionNodeItem）行首有一个 16px 的状态 slot：
 // 运行中（ongoing 蓝点）、待交互（warning 黄点）、完成未读提醒（done 点）、
@@ -332,5 +332,5 @@ function installSessionBatch(ctx) {
       removeAllBatchChecks()
       removeBatchStyle()
     }
-  }, 'dsh-zh: 会话批量操作')
+  }, 'dsh-zh: 会话多选')
 }
