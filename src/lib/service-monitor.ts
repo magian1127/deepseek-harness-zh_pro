@@ -16,8 +16,9 @@
 // `Get-CimInstance Win32_Process`、darwin `ps`、linux /proc），PID 4 的内核
 // http.sys 端点用 `netsh http show servicestate view=requestq verbose=yes`
 // 按注册 URL 反查挂靠进程。缓存键 = 监听端点本身：服务停止监听（扫描
-// 不再见到的端口）缓存即清除，服务重现后下次悬停重新查询。轮询、快照、
-// 点击路径都不产生进程查询。归属只存进程内存，不落盘、不上传。
+// 不再见到的端口）缓存即清除，服务重现后下次悬停重新查询；解析失败的
+// 负缓存（30 秒限频）在同一清运时机删除——窗口过期或端点消失即失效。
+// 轮询、快照、点击路径都不产生进程查询。归属只存进程内存，不落盘、不上传。
 // POST /dsh-zh/api/service-monitor/open 按已缓存归属在文件管理器中定位
 // 进程文件目录——路径永远来自主机进程枚举，不接受请求传入路径。
 //
@@ -26,8 +27,9 @@
 //      `netstat -anv -p tcp`，linux 优先 `ss -tlnp`、失败回退 `netstat -tln`。
 //      输出解析（parseListeningEndpoints）、基线 diff（computeMonitoredEndpoints）、
 //      新鲜度判定（scanIsFresh）、http.sys 归属解析（parseHttpSysQueueOwner）、
-//      目标匹配（targetMatchesListen）、可归属主机判定（isAttributableHost）
-//      与目录打开命令（revealCommandFor）均为纯函数，可独立回归。
+//      目标匹配（targetMatchesListen）、可归属主机判定（isAttributableHost）、
+//      负缓存清运判定（staleNegativeCacheKeys）与目录打开命令（revealCommandFor）
+//      均为纯函数，可独立回归。
 //   2. 扫描失败（命令缺失/超时）只告警一次并保留上次快照，不闪断面板；
 //      并发拉取共享同一次进行中的扫描（in-flight 去重），不重复 spawn。
 //   3. 快照经既有 /dsh-zh/api 路由提供给网页，信任围栏与会话删除路由共用
@@ -438,7 +440,7 @@ function matchListenEndpoint(address: string, port: number): RawEndpoint | null 
 const ownerCache = new Map<string, MonitorOwner>()
 /** 进行中的解析请求（同端点并发悬停去重）。 */
 const pendingResolves = new Map<string, Promise<MonitorOwner | null>>()
-/** 解析命令失败后的负缓存（时间戳）：期间同端点不重复 spawn 命令。 */
+/** 解析命令失败后的负缓存（时间戳）：期间同端点不重复 spawn 命令；解析成功即删，其余由 sweepOwnerCache 清运。 */
 const failedUntil = new Map<string, number>()
 /** PowerShell 解析串行链：避免快速悬停多个条目时并发 spawn。 */
 let pidDumpChain: Promise<unknown> = Promise.resolve()
@@ -449,18 +451,42 @@ function cachedOwnerFor(address: string, port: number): MonitorOwner | null {
   return ownerCache.get(endpointKey(listen.address, listen.port)) ?? null
 }
 
-/** 服务停止监听后清掉对应缓存（重现后下次悬停重新查询）。 */
+/** 端点缓存键（address|port）是否仍被最近一次扫描覆盖；键格式非法视为已失效。 */
+function cacheKeyStillListens(key: string, listenEndpoints: readonly { address: string; port: number }[]): boolean {
+  const separator = key.lastIndexOf('|')
+  if (separator <= 0) return false
+  const address = key.slice(0, separator)
+  const port = Number.parseInt(key.slice(separator + 1), 10)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return false
+  return listenEndpoints.some(function (endpoint) {
+    return targetMatchesListen(address, port, endpoint.address, endpoint.port)
+  })
+}
+
+/**
+ * 负缓存清运判定（纯函数）：限频窗口已过（now ≥ until，与读取侧
+ * `Date.now() < failedAt` 同边界）或端点已不再监听（含键格式非法）的
+ * 条目应删除；窗口内的存活条目保留。
+ */
+export function staleNegativeCacheKeys(
+  failedEntries: ReadonlyMap<string, number>,
+  listenEndpoints: readonly { address: string; port: number }[],
+  now: number,
+): string[] {
+  const stale: string[] = []
+  for (const [key, until] of failedEntries) {
+    if (now >= until || !cacheKeyStillListens(key, listenEndpoints)) stale.push(key)
+  }
+  return stale
+}
+
+/** 服务停止监听后清掉对应缓存（重现后下次悬停重新查询）；负缓存一并清运。 */
 function sweepOwnerCache(): void {
   for (const key of [...ownerCache.keys()]) {
-    const separator = key.lastIndexOf('|')
-    if (separator <= 0) { ownerCache.delete(key); continue }
-    const address = key.slice(0, separator)
-    const port = Number.parseInt(key.slice(separator + 1), 10)
-    if (!Number.isInteger(port) || port < 1 || port > 65535) { ownerCache.delete(key); continue }
-    const alive = monitorState.lastRaw.some(function (endpoint) {
-      return targetMatchesListen(address, port, endpoint.address, endpoint.port)
-    })
-    if (!alive) ownerCache.delete(key)
+    if (!cacheKeyStillListens(key, monitorState.lastRaw)) ownerCache.delete(key)
+  }
+  for (const key of staleNegativeCacheKeys(failedUntil, monitorState.lastRaw, Date.now())) {
+    failedUntil.delete(key)
   }
 }
 
@@ -556,9 +582,9 @@ async function resolveHttpSysOwner(port: number): Promise<MonitorOwner | null> {
 
 /**
  * 按需解析一个端点的进程归属（悬停触发）：命中缓存立即返回；未命中
- * 则解析一次并缓存。命令异常不缓存（下次悬停重试，30 秒负缓存限频）；
- * 命令成功但查无此进程缓存负结果。目标不是本机监听（远程地址/域名）时
- * 返回 null 且不缓存。
+ * 则解析一次并缓存。命令异常不缓存结果，改记 30 秒负缓存限频（解析
+ * 成功即删，其余由扫描清运）；命令成功但查无此进程不缓存（下次悬停
+ * 重查）。目标不是本机监听（远程地址/域名）时返回 null 且不缓存。
  */
 export async function resolveServiceOwner(platform: NodeJS.Platform, rawAddress: unknown, rawPort: unknown): Promise<MonitorOwner | null> {
   const address = typeof rawAddress === 'string' ? rawAddress.trim() : ''
@@ -585,7 +611,10 @@ export async function resolveServiceOwner(platform: NodeJS.Platform, rawAddress:
           ? await resolveWin32Process(listen.pid)
           : await resolvePosixProcess(platform, listen.pid)
       }
-      if (owner !== null) ownerCache.set(cacheKey, owner)
+      if (owner !== null) {
+        ownerCache.set(cacheKey, owner)
+        failedUntil.delete(cacheKey)
+      }
       return owner
     } catch (error) {
       failedUntil.set(cacheKey, Date.now() + OWNER_FAILED_RETRY_MS)

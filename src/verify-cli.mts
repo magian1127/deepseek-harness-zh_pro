@@ -631,6 +631,27 @@ try {
     check(serviceMonitor.scanIsFresh(600, 1000, 500), true, '服务监控扫描缓存 年龄小于间隔复用')
     check(serviceMonitor.scanIsFresh(499, 1000, 500), false, '服务监控扫描缓存 年龄超过间隔重扫')
 
+    // 负缓存清运判定：限频窗口已过或端点不再监听（含键格式非法）的条目
+    // 应删除，窗口内存活条目保留；now = until 与读取侧同边界（视为过期）。
+    const smFailedMap = new Map<string, number>([
+      ['127.0.0.1|81', 2000],
+      ['127.0.0.1|82', 900],
+      ['127.0.0.1|83', 5000],
+      ['bad-key', 9999],
+      ['127.0.0.1|0', 9999],
+    ])
+    const smListen = [
+      { address: '127.0.0.1', port: 81 },
+      { address: '0.0.0.0', port: 82 },
+    ]
+    check(JSON.stringify(serviceMonitor.staleNegativeCacheKeys(smFailedMap, smListen, 1000)),
+      JSON.stringify(['127.0.0.1|82', '127.0.0.1|83', 'bad-key', '127.0.0.1|0']),
+      '服务监控负缓存清运 过期、端点消失或键非法的条目删除，窗口内存活条目保留')
+    check(JSON.stringify(serviceMonitor.staleNegativeCacheKeys(new Map([['127.0.0.1|81', 1000]]), smListen, 1000)),
+      JSON.stringify(['127.0.0.1|81']), '服务监控负缓存清运 now = until 视为已过期（与读取侧同边界）')
+    check(JSON.stringify(serviceMonitor.staleNegativeCacheKeys(new Map([['[::1]|81', 2000]]), [{ address: '[::]', port: 81 }], 1000)),
+      JSON.stringify([]), '服务监控负缓存清运 通配监听维持条目存活')
+
     // 目录打开命令：win32 explorer /select、darwin open -R、linux xdg-open 目录。
     check(JSON.stringify(serviceMonitor.revealCommandFor('win32', 'C:\\Apache24\\bin\\httpd.exe')),
       JSON.stringify({ file: 'explorer.exe', args: ['/select,C:\\Apache24\\bin\\httpd.exe'] }), '服务监控目录打开 win32 explorer /select')
