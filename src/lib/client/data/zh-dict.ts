@@ -43,28 +43,15 @@ const ZH_PARTIAL = {
     'message.compaction.completed': ['token'],
     'message.unknownSurface': ['surface'],
     'message.maxTokens': ['token'],
-    'message.ttft': ['token'],
+    // message.ttft 键已随上游 0.1.2-alpha.2 移除（TTFT 并入 turnTime.ttft），删除引用。
     'message.tokensPerSecond': ['tokPerSec'],
+    // 上游 0.1.2-alpha.2 新增的回答末尾用量/耗时统计（TurnUsagePanel）：
+    // 模板仍夹带英文单元（{count} tok / 首 token 用时）。
+    'message.turnUsage.count': ['tok'],
+    'message.turnTime.ttft': ['token'],
     // 上游新增的轮次过程摘要行：'{count} 个 subagent'。
     'message.turnProcess.subagents.one': ['subagent'],
     'message.turnProcess.subagents.other': ['subagent'],
-  },
-  conversation: {
-    'access.confirm.title': ['fullAccess'],
-    'access.confirm.description': ['fullAccess', 'agent'],
-    'access.confirm.enable': ['fullAccess'],
-  },
-  trajectory: {
-    // 该命名空间 zh 词典整体还是英文，按整条短语替换；上游补齐 zh 后这些术语自然不再命中。
-    'toolbar.duration': ['trajDuration'],
-    'toolbar.useActualDuration': ['trajUseActualDuration'],
-    'toolbar.useEqualWidth': ['trajUseEqualWidth'],
-    'toolbar.turns': ['trajTurns'],
-    'toolbar.expandTurns': ['trajExpandTurns'],
-    'toolbar.collapseTurns': ['trajCollapseTurns'],
-    'toolbar.calls': ['trajCalls'],
-    'toolbar.expandCalls': ['trajExpandCalls'],
-    'toolbar.collapseCalls': ['trajCollapseCalls'],
   },
   'settings.models': {
     intro: ['api'],
@@ -101,7 +88,8 @@ const ZH_PARTIAL = {
     webSearchApiKey: ['apiKey'],
   },
   'settings.agentPreset': {
-    title: ['agentLabel'],
+    // 上游 0.1.2-alpha.2 起 agentPreset 词典内置大量中文，但描述仍夹带
+    // 英文术语（Agent/Shell/Skills/bash/preset 等），按术语替换。
     error: ['agentLabel'],
     seatHint: ['agentLabel'],
     headerHint: ['agentLabel'],
@@ -112,16 +100,6 @@ const ZH_PARTIAL = {
     // 上游 0.1.2 已补全中文（「PTC 模式」/完整中文说明），不再需要本插件覆盖。
     presetMinimalDescription: ['bash', 'strReplaceEditor', 'agentLabel'],
     presetCordisDescription: ['agentLabel', 'preset'],
-  },
-  'settings.permission': {
-    'confirm.title': ['fullAccess'],
-    'confirm.description': ['fullAccess'],
-    'confirm.enable': ['fullAccess'],
-  },
-  'permission.access': {
-    'confirm.title': ['fullAccess'],
-    'confirm.description': ['fullAccess', 'agent'],
-    'confirm.enable': ['fullAccess'],
   },
   plan: {
     'chip.on.aria': ['planMode'],
@@ -136,9 +114,6 @@ const ZH_PARTIAL = {
   },
   model: {
     'effort.providerDefault': ['defaultLabel'],
-  },
-  'settings.pluginInventory': {
-    cordis: ['cordisStatus'],
   },
   'session-log-download': {
     // 上游 zh 词典里夹带英文 Session（导出会话 ZIP 的弹窗文案），键级修正。

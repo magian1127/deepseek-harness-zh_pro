@@ -5,7 +5,7 @@
 
 ## 适用范围
 
-- 支持 DeepSeek Harness Web GUI ≥ 0.1.2-alpha.1，默认 profile 为 `web`；本版本（0.9.0）词典与
+- 支持 DeepSeek Harness Web GUI ≥ 0.1.2-alpha.2，默认 profile 为 `web`；本版本词典与
   locale 契约按该版本对齐，更旧的 DSH 上中文补全部分条目会失配。
 - Node.js 要求：`^22.19.0 || >=24.0.0`。
 - 中文补全只在界面语言为中文时生效。统计样式、思考展开、默认展开行数、自动归档、
@@ -60,13 +60,13 @@ localStorage 中的界面增强仍可使用。
 | TTFT | 首词元时间 |
 | API Key / API key | 接口密钥 |
 | Model ID | 模型标识 |
-| Full access | 完全访问 |
 | agent / subagent | 代理 / 子代理 |
 | plan mode | 计划模式 |
-| Workspace Write / Read Only / Custom | 工作区写入 / 只读 / 自定义 |
 
-`subagent → 子代理` 直接沿用上游中文；权限预设名称由受限 DOM 精确映射处理，其余术语主要由
-locale 补丁处理。保留 Cordis、DeepSeek、TypeScript、命令名、文件名、快捷键和示例标识符。数量格式使用万和亿：
+`subagent → 子代理` 直接沿用上游中文；权限预设内置标签（仅可查看 / 可写入工作区 / 完全权限）与
+confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（跟随上游叫法），
+只保留 host 下发的权限描述与斜杠命令说明改写；其余术语主要由 locale 补丁处理。
+保留 Cordis、DeepSeek、TypeScript、命令名、文件名、快捷键和示例标识符。数量格式使用万和亿：
 `12.2K → 1.22万`、`46.7M → 4670万`、`123.4M → 1.234亿`。时长示例：
 `48m48s → 48分48秒`、`2.4s → 2.4秒`。
 
@@ -77,12 +77,16 @@ locale 补丁处理。保留 Cordis、DeepSeek、TypeScript、命令名、文件
 - 上游 0.1.2 已把 code 预设改名为 PTC 模式并补全中文（`presetPtcName`/`presetPtcDescription`），
   本插件不再覆盖这两个键。
 - plan 提示保留 `(/plan off)` 命令信息。
+- trajectory 工具栏词典自 0.1.2-alpha.2 起由上游完整本地化（时长 / 展开所有轮次 等），
+  本插件不再覆盖 trajectory 命名空间。
+- 回答末尾的用量/耗时统计（TurnUsagePanel）由上游词典提供中文，模板中残留的
+  `tok`/`token` 单元由本插件术语统一为「词元」。
 
 ## DOM 增强边界
 
 中文补全的 DOM 文本层仅中文界面处理以下已知区域：
 
-- 权限预设标签和说明；
+- 权限预设的 host 下发描述（内置标签自 0.1.2-alpha.2 起上游已本地化，不再改写）；
 - `/compact`、`/goal`、`/feedback`、`/plan`、`/permission`、`/export` 的菜单说明；
 - 斜杠菜单「技能来源」里 DSH 官方 shipped 技能的描述（`editing-cordis-compositions`、
   `cordis-plugin-development`，来自随部署分发的 SKILL.md frontmatter；用户自建技能

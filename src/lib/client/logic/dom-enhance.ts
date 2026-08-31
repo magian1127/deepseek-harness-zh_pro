@@ -63,7 +63,7 @@ function installChineseEnhance(ctx) {
       if (star !== undefined) return interpolateZh(star, nextParams)
       return originalTranslate.call(this, ns, key, nextParams)
     }
-    // 权限预设标签 / 斜杠命令说明 / 轨迹界面标签的 DOM 文本层（词典管不到的地方）：
+    // 权限预设描述 / 斜杠命令说明 / 轨迹界面标签的 DOM 文本层（词典管不到的地方）：
     // 仅中文界面，改写「整段文本恰好等于已知英文标签/描述」或「整段匹配
     // 轨迹动态文本正则」的文本节点与 title/aria-label 属性（详见 rewriteText）；
     // 英文界面时按反向表还原。改写前先断开观察器、写完再续，杜绝递归。
@@ -79,7 +79,7 @@ function installChineseEnhance(ctx) {
     // 与本插件按百分比覆盖 --dsh-chat-content-width 的做法冲突，让位给上游。
     let autoThinkTarget = null
     if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined') {
-      const forward = Object.assign({}, PERMISSION_NAMES, PERMISSION_DESCRIPTIONS, COMMAND_DESCRIPTIONS, SKILL_DESCRIPTIONS, CHAT_LABELS)
+      const forward = Object.assign({}, PERMISSION_DESCRIPTIONS, COMMAND_DESCRIPTIONS, SKILL_DESCRIPTIONS, CHAT_LABELS)
       const reverse = {}
       // 译文重复时首个定义者生效（还原到更常见的英文写法，如 Tool call/TOOL/USER）
       for (const k of Object.keys(forward)) {

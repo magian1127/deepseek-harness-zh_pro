@@ -42,7 +42,7 @@
 
 ## 环境要求
 
-- DeepSeek Harness Web GUI ≥ 0.1.2-alpha.1，默认 profile 为 `web`
+- DeepSeek Harness Web GUI ≥ 0.1.2-alpha.2，默认 profile 为 `web`
 - Node.js `^22.19.0 || >=24.0.0`
 
 ## 安装

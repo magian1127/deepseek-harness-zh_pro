@@ -6,9 +6,9 @@ const fs = require('fs')
 const UPSTREAM = {
   conversation: {
     'hint.goal.active': '当前目标进行中。可输入 edit 修改 / pause 暂停 / resume 继续 / clear 清除',
-    'access.confirm.title': '确认启用 Full access？',
-    'access.confirm.description': '启用 Full access 后，agent 将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
-    'access.confirm.enable': '启用 Full access',
+    'access.confirm.title': '确认启用完全权限？',
+    'access.confirm.description': '启用完全权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
+    'access.confirm.enable': '启用完全权限',
     'input.accessMode': '访问模式，当前：{name}',
   },
   // DSH 0.1.2：统计与消息键由 conversation 拆到 chat（ui-chat 包）。
@@ -23,24 +23,28 @@ const UPSTREAM = {
     'message.compaction.completed': '已压缩 {items} 条历史记录（约 {tokens} tokens）',
     'message.unknownSurface': '未知 surface 事件：{type}',
     'message.maxTokens': '已达到输出 token 上限',
-    'message.maxTokens.hint': '回答被截断，已有输出保留在对话中。发送“继续”可让模型接着输出。',
-    'message.ttft': '首 token {seconds}秒',
+    // message.ttft 键已随上游 0.1.2-alpha.2 移除（TTFT 并入 turnTime.ttft）。
     'message.tokensPerSecond': '{tps} tok/s',
+    // 上游 0.1.2-alpha.2 新增：回答末尾用量/耗时统计（TurnUsagePanel）。
+    'message.turnUsage.count': '{count} tok',
+    'message.turnTime.ttft': '首 token 用时（TTFT）',
     'message.retry.status': '{label}（{retry}/{maximum}） · {seconds}s',
     'message.turnProcess.subagents.one': '{count} 个 subagent',
     'message.turnProcess.subagents.other': '{count} 个 subagent',
   },
   trajectory: {
-    'toolbar.duration': 'Duration',
-    'toolbar.useActualDuration': 'Use actual duration',
-    'toolbar.useEqualWidth': 'Use equal-width operations',
+    // DSH 0.1.2-alpha.2 起上游 zh 词典已完整本地化（时长/展开所有轮次等），
+    // 本插件不再覆盖该命名空间（跟随上游）。
+    'toolbar.duration': '时长',
+    'toolbar.useActualDuration': '使用实际时长',
+    'toolbar.useEqualWidth': '使用等宽操作',
     'toolbar.actualTime': '实际时间',
-    'toolbar.turns': 'Turns',
-    'toolbar.expandTurns': 'Expand turns',
-    'toolbar.collapseTurns': 'Collapse turns',
-    'toolbar.calls': 'Calls',
-    'toolbar.expandCalls': 'Expand calls',
-    'toolbar.collapseCalls': 'Collapse calls',
+    'toolbar.turns': '轮次',
+    'toolbar.expandTurns': '展开所有轮次',
+    'toolbar.collapseTurns': '收起所有轮次',
+    'toolbar.calls': '调用',
+    'toolbar.expandCalls': '展开所有调用',
+    'toolbar.collapseCalls': '收起所有调用',
   },
   'settings.models': {
     intro: '填入各提供方的 API 密钥即可使用其模型。',
@@ -80,7 +84,7 @@ const UPSTREAM = {
     webSearchApiKey: 'API Key',
   },
   'settings.agentPreset': {
-    title: 'Agent 预设',
+    // title 键已随上游移除（改用 nav），不再收录。
     error: '无法加载 Agent 预设。',
     seatHint: '即将开始的这个会话所用的 Agent 预设',
     headerHint: '本会话运行的 Agent 预设，开始时即固定',
@@ -94,14 +98,15 @@ const UPSTREAM = {
     creatorDraft: '用「创造模式」创作自定义预设',
   },
   'settings.permission': {
-    'confirm.title': '确认启用 Full access？',
-    'confirm.description': '启用 Full access 后，新会话将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任后续任务时使用。',
-    'confirm.enable': '启用 Full access',
+    // 上游 0.1.2-alpha.2 已本地化为完全权限；保留字典供核对同一自本地化后的值。
+    'confirm.title': '确认启用完全权限？',
+    'confirm.description': '启用完全权限后，新会话将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任后续任务时使用。',
+    'confirm.enable': '启用完全权限',
   },
   'permission.access': {
-    'confirm.title': '确认启用 Full access？',
-    'confirm.description': '启用 Full access 后，agent 将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
-    'confirm.enable': '启用 Full access',
+    'confirm.title': '确认启用完全权限？',
+    'confirm.description': '启用完全权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
+    'confirm.enable': '启用完全权限',
   },
   plan: {
     'chip.on.aria': 'plan mode 已开启，按下关闭',
@@ -121,9 +126,8 @@ const UPSTREAM = {
     'status.subagentsRunning.one': '{n} 个子代理运行中',
     'status.subagentsRunning.other': '{n} 个子代理运行中',
   },
-  'settings.pluginInventory': {
-    cordis: 'Cordis 状态',
-  },
+  // settings.pluginInventory 上游 0.1.2-alpha.2 已重写（会话/全局分组），
+  // 原 cordis 状态键已移除，不再收录。
   cordis: {
     'panel.trigger': 'Cordis Plugin',
     'panel.runningCount': '{count} running',
@@ -143,9 +147,10 @@ const EXPECT = {
   conversation: {
     // goalActions 术语已删（用户接受）：该提示保留上游英文命令词
     'hint.goal.active': '当前目标进行中。可输入 edit 修改 / pause 暂停 / resume 继续 / clear 清除',
-    'access.confirm.title': '确认启用完全访问？',
-    'access.confirm.description': '启用完全访问后，代理将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
-    'access.confirm.enable': '启用完全访问',
+    // access.confirm.* 上游 0.1.2-alpha.2 已本地化为完全权限，本插件不再覆盖（跟随上游）。
+    'access.confirm.title': '确认启用完全权限？',
+    'access.confirm.description': '启用完全权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
+    'access.confirm.enable': '启用完全权限',
   },
   chat: {
     'stats.llm': '大模型 {duration}',
@@ -157,23 +162,27 @@ const EXPECT = {
     'message.compaction.completed': '已压缩 {items} 条历史记录（约 {tokens} 词元）',
     'message.unknownSurface': '未知界面事件：{type}',
     'message.maxTokens': '已达到输出词元上限',
-    'message.ttft': '首词元 {seconds}秒',
+    // message.ttft 键已随上游 0.1.2-alpha.2 移除（TTFT 并入 turnTime.ttft）。
     'message.tokensPerSecond': '{tps} 词元/秒',
     'message.retry.status': '{label}（{retry}/{maximum}） · {seconds}秒',
     'message.turnProcess.subagents.one': '{count} 个子代理',
     'message.turnProcess.subagents.other': '{count} 个子代理',
+    // 上游 0.1.2-alpha.2 新增回答末尾用量/耗时统计（TurnUsagePanel）译表单键。
+    'message.turnUsage.count': '{count} 词元',
+    'message.turnTime.ttft': '首词元用时（TTFT）',
   },
   trajectory: {
+    // 上游 0.1.2-alpha.2 已本地化 trajectory zh 词典，本插件不再覆盖（跟随上游）。
     'toolbar.duration': '时长',
     'toolbar.useActualDuration': '使用实际时长',
     'toolbar.useEqualWidth': '使用等宽操作',
     'toolbar.actualTime': '实际时间',
     'toolbar.turns': '轮次',
-    'toolbar.expandTurns': '展开轮次',
-    'toolbar.collapseTurns': '收起轮次',
+    'toolbar.expandTurns': '展开所有轮次',
+    'toolbar.collapseTurns': '收起所有轮次',
     'toolbar.calls': '调用',
-    'toolbar.expandCalls': '展开调用',
-    'toolbar.collapseCalls': '收起调用',
+    'toolbar.expandCalls': '展开所有调用',
+    'toolbar.collapseCalls': '收起所有调用',
   },
   'settings.models': {
     intro: '填入各提供方的接口密钥即可使用其模型。',
@@ -214,7 +223,7 @@ const EXPECT = {
     webSearchApiKey: '接口密钥',
   },
   'settings.agentPreset': {
-    title: '代理预设',
+    // title 键已随上游移除（改用 nav），不再覆盖。
     error: '无法加载代理预设。',
     seatHint: '即将开始的这个会话所用的代理预设',
     headerHint: '本会话运行的代理预设，开始时即固定',
@@ -226,16 +235,8 @@ const EXPECT = {
     presetCordisDescription: '用于创建自定义代理预设：具备标准模式的全部能力，并提供运行时检查、插件实验和预设创作指导。',
     creatorDraft: '用「创造模式」创作自定义预设',
   },
-  'settings.permission': {
-    'confirm.title': '确认启用完全访问？',
-    'confirm.description': '启用完全访问后，新会话将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任后续任务时使用。',
-    'confirm.enable': '启用完全访问',
-  },
-  'permission.access': {
-    'confirm.title': '确认启用完全访问？',
-    'confirm.description': '启用完全访问后，代理将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
-    'confirm.enable': '启用完全访问',
-  },
+  // settings.permission / permission.access 上游 0.1.2-alpha.2 已本地化为
+  // 「完全权限」，本插件不再覆盖（跟随上游），因此不从 EXPECT 断言。
   plan: {
     'chip.on.aria': '计划模式已开启，按下关闭',
     'chip.on.title': '计划模式已开启 — 点击关闭（/plan off）',
@@ -259,9 +260,8 @@ const EXPECT = {
     'status.subagentsRunning.one': '{n} 个子代理运行中',
     'status.subagentsRunning.other': '{n} 个子代理运行中',
   },
-  'settings.pluginInventory': {
-    cordis: '框架状态',
-  },
+  // settings.pluginInventory 上游 0.1.2-alpha.2 已整体重写（会话/全局分组），
+  // 原 cordis 状态键已移除，本插件不再覆盖，因此不从 EXPECT 断言。
   cordis: {
     'panel.trigger': 'Cordis 插件',
     'panel.runningCount': '{count} 个运行中',
@@ -392,7 +392,11 @@ function makeStyle() {
 function makeText(data) {
   return { nodeType: 3, data: data, parentElement: null, nextSibling: null }
 }
-const permissionText = makeText('Workspace Write')
+// 权限预设标签（Workspace Write 等）自 0.1.2-alpha.2 起由上游本地化，
+// 本插件只保留 host 下发的权限描述改写（见 PERMISSION_DESCRIPTIONS）。
+const permissionDescEn = 'Write inside the workspace and permitted temporary directories; wider retries require approval.'
+const permissionDescZh = '仅可写入工作区与允许的临时目录；更宽的权限需单独批准。'
+const permissionText = makeText(permissionDescEn)
 const commandText = makeText('Compact older conversation history')
 const thinkText = makeText('Think')
 const toolText = makeText('Tool call')
@@ -577,7 +581,7 @@ function check(actual, expected, label) {
 }
 
 pluginExports.apply(ctx)
-check(fakeBody.firstChild.data, '工作区写入', 'DOM 文本层 中文改写')
+check(fakeBody.firstChild.data, permissionDescZh, 'DOM 文本层 权限描述改写')
 check(fakeBody.firstChild.nextSibling.data, '压缩较早的对话历史', 'DOM 文本层 命令说明改写')
 check(fakeBody.firstChild.nextSibling.nextSibling.data, '思考', 'DOM 文本层 Think 改写')
 check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.data, '工具调用', 'DOM 文本层 Tool call 改写')
@@ -587,11 +591,11 @@ check(skillCompText.data.indexOf('Use when creating') < 0, true, 'DOM 文本层 
 check(skillDevText.data.indexOf('动态 Cordis 插件') >= 0, true, 'DOM 文本层 技能描述（插件开发）改写')
 const incrementalText = makeText('Bash')
 incrementalText.parentElement = fakeBody
-permissionText.data = 'Workspace Write'
+permissionText.data = permissionDescEn
 fakeObserverCbs[0].cb([{ type: 'childList', addedNodes: [incrementalText], target: fakeBody }])
 check(incrementalText.data, '命令行', 'DOM 增量扫描 改写新增子树')
-check(permissionText.data, 'Workspace Write', 'DOM 增量扫描 不重扫无关子树')
-permissionText.data = '工作区写入'
+check(permissionText.data, permissionDescEn, 'DOM 增量扫描 不重扫无关子树')
+permissionText.data = permissionDescZh
 const proseAttrs = {}
 const proseRow = {
   nodeType: 1,
@@ -944,7 +948,9 @@ for (const ns of Object.keys(EXPECT)) {
 
 // translate 路径（参数格式化 + 部分翻译联动）
 check(locale.translate('chat', 'message.retry.status', { label: '重试', retry: 2, maximum: 5, seconds: 3723 }), '重试（2/5） · 1小时2分3秒', 'translate message.retry.status')
-check(locale.translate('conversation', 'input.accessMode', { name: 'Workspace Write' }), '访问模式，当前：工作区写入', 'translate input.accessMode')
+// input.accessMode 的 name 参数自 0.1.2-alpha.2 起由上游直接传入本地化标签
+//（可写入工作区 等），本插件不再转换（PERMISSION_NAMES 已移除）。
+check(locale.translate('conversation', 'input.accessMode', { name: 'Workspace Write' }), '访问模式，当前：Workspace Write', 'translate input.accessMode 不转换')
 check(locale.translate('chat', 'stats.llm', { duration: '48m48s' }), '大模型 48分48秒', 'translate stats.llm')
 check(locale.translate('chat', 'stats.ttftAverage', { duration: '2.4s' }), '首词元平均 2.4秒', 'translate stats.ttftAverage')
 check(locale.translate('chat', 'stats.tokens', { input: '12.2K', output: '40.9M' }), '输入 1.22万 词元 · 输出 4090万 词元', 'translate stats.tokens')
@@ -957,7 +963,7 @@ active = 'en'
 check(locale.translate('chat', 'stats.llm'), 'LLM {duration}', 'en passthrough')
 // 英文界面下 DOM 文本层按反向表还原
 for (const o of fakeObserverCbs) o.cb()
-check(fakeBody.firstChild.data, 'Workspace Write', 'DOM 文本层 英文还原')
+check(fakeBody.firstChild.data, permissionDescEn, 'DOM 文本层 英文还原')
 check(fakeBody.firstChild.nextSibling.data, 'Compact older conversation history', 'DOM 文本层 命令说明还原')
 check(fakeBody.firstChild.nextSibling.nextSibling.data, 'Think', 'DOM 文本层 Think 还原')
 check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.data, 'Tool call', 'DOM 文本层 Tool call 还原')
@@ -999,7 +1005,7 @@ check(enThinkBody.__dshZhControl.textContent, 'Expand 20 more lines (25 left)', 
 injectedThinkRoots = []
 // 3) 中文补全：英文界面仍 passthrough（词典与标签改写都不生效）。
 check(locale.translate('chat', 'stats.llm'), 'LLM {duration}', '英文界面 中文补全 passthrough')
-check(fakeBody.firstChild.data, 'Workspace Write', '英文界面 中文补全 标签不改写')
+check(fakeBody.firstChild.data, permissionDescEn, '英文界面 中文补全 标签不改写')
 // 复位统计夹具，供后续卸载清理校验使用。
 statsText.data = '9 轮 · 203 步'
 statsRow.removeAttribute('data-dsh-zh-stats-full')

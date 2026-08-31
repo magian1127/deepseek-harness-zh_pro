@@ -45,7 +45,7 @@ for full interaction, data, and safety boundaries.
 
 ## Requirements
 
-- DeepSeek Harness Web GUI ≥ 0.1.2-alpha.1, default profile `web`
+- DeepSeek Harness Web GUI ≥ 0.1.2-alpha.2, default profile `web`
 - Node.js `^22.19.0 || >=24.0.0`
 
 ## Installation

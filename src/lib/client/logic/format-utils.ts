@@ -134,18 +134,13 @@ function interpolateZh(template, params) {
 
 /** 参数需要转换的键（ns -> key -> 参数名 -> 转换函数）。
  * DSH 0.1.2 起统计与消息键从 conversation 拆到 chat 命名空间
- * （ui-chat 包）；input.accessMode 仍留在 conversation（ui-conversation 包）。 */
+ * （ui-chat 包）；input.accessMode 的 name 参数自 0.1.2-alpha.2 起由上游
+ * 直接传入本地化标签，本插件不再转换（PERMISSION_NAMES 已移除）。 */
 const PARAM_TRANSFORMS = {
   chat: {
     'stats.llm': { duration: formatEnDurationToZh },
     'stats.toolCall': { duration: formatEnDurationToZh },
     'stats.ttftAverage': { duration: formatEnDurationToZh },
     'stats.tokens': { input: formatCompactNumberToZh, output: formatCompactNumberToZh },
-  },
-  conversation: {
-    'input.accessMode': { name: function (raw) {
-      const v = PERMISSION_NAMES[String(raw)]
-      return v !== undefined ? v : String(raw)
-    } },
   },
 }

@@ -1,12 +1,7 @@
-// 权限预设标签 / 斜杠命令说明 / 聊天区行标题（host 下发数据 + 组件硬编码，词典管不到）。
-// 可见标签与悬停描述由 DOM 文本层改写（见 dom-enhance.js）；aria-label 由
-// translate 参数转换改写（conversation.input.accessMode 的 name 参数）。
-const PERMISSION_NAMES = {
-  'Workspace Write': '工作区写入',
-  'Read Only': '只读',
-  'Full access': '完全访问',
-  'Custom': '自定义',
-}
+// 权限预设描述 / 斜杠命令说明 / 聊天区行标题（host 下发数据 + 组件硬编码，词典管不到）。
+// 权限预设内置标签（Workspace Write / Read Only / Full access）自 0.1.2-alpha.2 起
+// 由上游本地化（可写入工作区 / 仅可查看 / 完全权限），本插件不再覆盖；
+// host 下发的英文描述仍由 DOM 文本层改写（见 dom-enhance.js）。
 const PERMISSION_DESCRIPTIONS = {
   'Write inside the workspace and permitted temporary directories; wider retries require approval.': '仅可写入工作区与允许的临时目录；更宽的权限需单独批准。',
   'Full file access without approval prompts.': '完全文件访问，无需批准提示。',

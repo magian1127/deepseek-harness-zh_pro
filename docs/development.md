@@ -122,6 +122,27 @@ client-modules 会缓存某个包名是否为有效客户端包。结构错误�
 参数格式化在 `translate` 层修改特定参数后再执行模板插值，例如时长、tokens 和 tok/s；
 不要用字符串后处理猜测模板结果。
 
+### 升版 DSH 时的词典对齐与失效覆盖处理
+
+DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化，本插件的覆盖会随版本逐步被
+上游吸收，留下「不命中但无害」的死条目，或与上游新叫法冲突。升版后按以下步骤一次性对齐：
+
+1. **只认运行时真值**：以 active profile 实际加载的包（`$DSH_HOME\profiles\node_modules\@deepseek-ai\`，
+   每个包 `package.json` 的 version）为准，不凭 checkout 源码或旧 README 断言。diff 历史 tag
+   （`git diff dsh-vX..dsh-vY --stat`）找出改动面，再对每个 `sha` 读具体 diff。
+2. **核对本插件所有覆盖键**：对 `terms.ts`、`zh-dict.ts`、`dom-labels.ts`、`format-utils.ts`
+   引用的每个命名空间/键，从运行包生成 zh 词典真值逐项比对。优先怀疑上游已本地化的点：
+   权限预设标签与 confirm 文案、trajectory 工具栏、插件清单页、settings 系列、新 UI 组件
+   的残留单元。示例：0.1.2-alpha.2 起权限预设由上游本地化（仅可查看/可写入工作区/完全权限），
+   trajectory 整表中文，plugin-inventory 重写后 cordis 状态键消失。
+3. **处置**：被上游完全本地化且叫法一致的覆盖直接删除（`terms.ts` + `zh-dict.ts`/`dom-labels.ts`
+   的引用一起清，禁止只删一边留下悬空引用）；叫法不同时按用户决定「以上游为主」跟随上游并从
+   行为契约移除自定义叫法；host 仍下发英文的数据（如权限描述）保留 DOM 层覆盖；新增键（如
+   turnUsage/turnTime 的 `tok`/`token` 残留）补成术语引用。
+4. **同步回归**：`verify-pairs.cjs` 的 `UPSTREAM` 必须与部署版真实词典一致（不凭旧版本摘录），
+   `EXPECT` 相应更新；DOM 夹具若覆盖文本已删，改用仍有效的映射文本。跑 `npm test` 三组回归全绿
+   后才算完成。
+
 ## DOM 文本层
 
 词典无法覆盖主机下发名称和组件字面量，因此 `lib/client.js` 对有限清单执行 DOM 增强。
