@@ -24,7 +24,8 @@ import type { HostContext } from './types.js'
 // 「模型请求中文化」共享状态：由本文件（dsh-zh 命名空间的唯一注册者）维护，
 // model-locale.js 通过 getModelState() 读取。ready 表示 settings 注册成功；
 // settings 服务不可用时保持 false，model-locale 随之停用。
-const modelState = { ready: false, zhAgentPrompt: false, zhToolDesc: false }
+// zhContextInject（上下文注入中文化，context-locale.ts 消费）同样经由本状态读取。
+const modelState = { ready: false, zhAgentPrompt: false, zhToolDesc: false, zhContextInject: false }
 
 /**
  * 读取「模型请求中文化」的共享开关状态（只读）。该状态随本命名空间的
@@ -56,7 +57,8 @@ export function installChinesePrompt(ctx: HostContext): void {
       zhPromptTarget: z.string().default(ZH_PROMPT_TARGET_SYSTEM),
       zhAutoArchiveDays: z.number().default(ZH_AUTO_ARCHIVE_DAYS_DEFAULT),
       zhAgentPrompt: z.boolean().default(false),
-      zhToolDesc: z.boolean().default(false),
+        zhToolDesc: z.boolean().default(false),
+        zhContextInject: z.boolean().default(false),
     }), { applies: 'live' })
     const current = scope.get()
     state.enabled = current.zhPrompt === true
@@ -64,13 +66,15 @@ export function installChinesePrompt(ctx: HostContext): void {
     state.target = normalizeTarget(current.zhPromptTarget)
     modelState.ready = true
     modelState.zhAgentPrompt = current.zhAgentPrompt === true
-    modelState.zhToolDesc = current.zhToolDesc === true
+      modelState.zhToolDesc = current.zhToolDesc === true
+      modelState.zhContextInject = current.zhContextInject === true
     const unwatchSettings = scope.watch(function (next) {
       state.enabled = next.zhPrompt === true
       if (typeof next.zhPromptText === 'string') state.text = next.zhPromptText
       state.target = normalizeTarget(next.zhPromptTarget)
       modelState.zhAgentPrompt = next.zhAgentPrompt === true
-      modelState.zhToolDesc = next.zhToolDesc === true
+        modelState.zhToolDesc = next.zhToolDesc === true
+        modelState.zhContextInject = next.zhContextInject === true
     })
     ctx.effect(function () { return unwatchSettings }, 'dsh-zh: prompt settings watch')
 

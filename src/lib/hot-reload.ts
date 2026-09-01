@@ -17,6 +17,7 @@ const HOST_FILES = [
   new URL('./session-delete.js', import.meta.url),
   new URL('./trash.js', import.meta.url),
   new URL('./model-locale.js', import.meta.url),
+  new URL('./context-locale.js', import.meta.url),
   new URL('../bin/dsh-zh.mjs', import.meta.url),
 ]
 

@@ -11,8 +11,8 @@
 - 中文补全只在界面语言为中文时生效。统计样式、思考展开、默认展开行数、自动归档、
   会话删除、会话多选和服务监控在中文和英文界面都生效，只受各自开关控制，文案随界面语言切换。
 - 提示词注入只受自身开关控制，与界面语言无关，默认关闭。
-- 代理角色提示中文化与工具说明中文化只受各自开关控制，与界面语言无关，默认关闭，
-  只作用于新会话的模型请求（老会话不重新注入）。
+- 代理角色提示中文化、工具说明中文化与上下文注入中文化只受各自开关控制，与界面语言无关，
+  默认关闭，只作用于新会话（老会话不重新注入）。
 
 ## 设置页顺序、默认值与存储
 
@@ -24,6 +24,7 @@
 | 平铺 | 中文补全 `zhComplete` | 开 | localStorage | 仅中文界面 |
 | 平铺 | 代理角色提示中文化 `zhAgentPrompt` | 关 | `settings.yaml` | 新会话首次模型请求时锁定 |
 | 平铺 | 工具说明中文化 `zhToolDesc` | 关 | `settings.yaml` | 新会话首次模型请求时锁定 |
+| 平铺 | 上下文注入中文化 `zhContextInject` | 关 | `settings.yaml` | 新会话首次模型请求时锁定；替换注入会话历史的官方英文文本 |
 | 平铺 | 提示词注入 `zhPrompt` / `zhPromptText` / `zhPromptTarget` | 关；文本为“思考过程和回复始终使用中文输出”；目标为 `system` | `settings.yaml` | 后续模型请求；目标可改为 `user` |
 | 对话样式相关 | 自动展开最新思考 `thinkingAuto` | 开 | localStorage | 中文/英文界面 |
 | 对话样式相关 | 默认展开行数与方向 `thinkMaxLines` / `thinkMaxLinesFrom` | 20；`latest` | localStorage | 0–200；方向可选 `latest` / `earliest` |
@@ -38,7 +39,7 @@
 | 服务监控 | 自定义监控项 `serviceMonitorTargets` | 空 | localStorage | 每项 `{ name, host, port }`，最多 100 项 |
 
 localStorage 键为 `deepseek-harness-zh_pro:enhancements`；主机 settings 命名空间为
-`dsh-zh`。`settingsScope` 不可用时，三个模型请求中文化开关及自动归档字段不可写；
+`dsh-zh`。`settingsScope` 不可用时，四个模型请求中文化开关及自动归档字段不可写；
 localStorage 中的界面增强仍可使用。
 
 ## 中文补全
@@ -74,8 +75,9 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
 
 - `hint.goal.active` 中的 goal action 提示保持上游文本。
 - Models 中 K/M 输入提示保持上游单位。
-- 上游 0.1.2 已把 code 预设改名为 PTC 模式并补全中文（`presetPtcName`/`presetPtcDescription`），
-  本插件不再覆盖这两个键。
+- 上游 0.1.2 已把 code 预设改名为 PTC 模式并补全中文（`presetPtcName`/`presetPtcDescription`）；
+  按用户要求，本插件以整句覆盖把这两个键改为自定义叫法「程序模式」，描述中的
+  「PTC 模式 SDK」同步译作「程序模式开发包」，不随上游措辞变化。
 - plan 提示保留 `(/plan off)` 命令信息。
 - trajectory 工具栏词典自 0.1.2-alpha.2 起由上游完整本地化（时长 / 展开所有轮次 等），
   本插件不再覆盖 trajectory 命名空间。
@@ -114,21 +116,26 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
   路径）、`app:web-surface`（Web GUI 地址）、`context:file-reference`、
   `ui:deliverable-file-references`——检出路径与 GUI 地址等动态值取自原文。
 - `zhToolDesc`：注入模型请求的工具说明按工具名替换为**DSH 官方工具**的中文版本，同时把
-  system prompt 里的官方工具指引段落（`tool:*` sections）替换为中文。覆盖：
-  `tool:read` / `tool:write` / `tool:edit` / `tool:glob` / `tool:grep` / `tool:pwsh` /
-  `tool:jobs` / `tool:web_search` / `tool:web_fetch` / `tool:goal` / `tool:ralph` /
-  `tool:subagent` / `tool:subagent_fork` / `tool:workflow` / `tool:cordis`
-  （创作模式的「Dynamic Cordis Plugins」整段指南）、`plan:policy`（计划模式
-  策略；该文本来自 preset 配置，仅与 shipped 原文逐字一致才替换，复制后改写过
-  的自定义 preset 不受影响；非计划模式下该 section 为空、原样保留不注入）和
-  `tools:ptc-only`（PTC 模式的执行器收敛声明，非 PTC 会话为空段、不注入）。
-  工具名与参数名保持不变。**只覆盖 DSH 系统自己的工具**：
-  第三方插件（如 hashline、vision-router、agent-teams 等）注册的工具与段落不匹配、
-  保持英文原样，避免越界改动其它插件的内容。
-  各预设实测覆盖：standard / ptc / minimal / cordis 四个默认代理的 persona 与
-  上述段落均换中文；minimal（complete persona）整个 system prompt 只含中文
-  persona；PTC 模式的 `tools:sdk` 生成式 TS 工具目录（上游渲染器产物、模型的
-  唯一工具声明）保留英文，见「已知限制」。
+    system prompt 里的官方工具指引段落（`tool:*` sections）替换为中文。段落覆盖：
+    `tool:read` / `tool:write` / `tool:edit` / `tool:glob` / `tool:grep` / `tool:pwsh` /
+    `tool:jobs` / `tool:web_search` / `tool:web_fetch` / `tool:goal` / `tool:ralph` /
+    `tool:subagent` / `tool:subagent_fork` / `tool:workflow` / `tool:cordis`
+    （创作模式的「Dynamic Cordis Plugins」整段指南）、`plan:policy`（计划模式
+    策略；该文本来自 preset 配置，仅与 shipped 原文逐字一致才替换，复制后改写过
+    的自定义 preset 不受影响；非计划模式下该 section 为空、原样保留不注入）、
+    `tools:ptc-only`（PTC 模式的执行器收敛声明，非 PTC 会话为空段、不注入）与
+    `tools:sdk`（PTC 模式「Writing code for run_code」段落：TS/Python 两个渲染器的
+    固定说明模板分段替换为中文，生成的 SDK 代码声明保留英文，见「已知限制」）。
+    工具名与参数名保持不变。**只覆盖 DSH 系统自己的工具**：段落与工具描述都带官方
+    特征片段守卫（`TOOL_MATCH` / `TOOL_FLAVOR_DESC_ZH` / `match`）；第三方插件在
+    Agent 作用域注册的同名阴影——hashline 替换的 `tool:read`/`tool:edit`、智谱替换的
+    `tool:web_search`——描述的是另一套机制、不含官方特征片段，因此保持原样，
+    不会被按名盖回内置旧版。同一工具名的多种官方描述逐 flavor 翻译：极简模式的
+    persistent `pwsh`/`bash`（包默认与 preset 覆盖两套文本）、`str_replace_editor`
+    默认描述、PTC 模式 `run_code` 的 TypeScript/Python 两语言描述。
+    各预设实测覆盖：standard / ptc / minimal / cordis 四个默认代理的 persona 与
+    上述段落均换中文；minimal（complete persona）整个 system prompt 只含中文
+    persona。
 
 **新会话生效、老会话不重新注入**：以会话是否产生过模型输出（`assistant/message`）
 判定新旧。会话首次模型请求时按当前开关状态锁定语言（中文或英文），锁定后开关翻转
@@ -137,6 +144,52 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
 实现方式：在 `systemPrompt.assemble` 返回后原地改写最终 assembly 的 persona 与工具
 说明（complete persona 的 preset 同样生效）；开关全关或设置服务不可用时零改动。
 任何改写失败只告警一次并返回原内容，不阻断模型请求。
+
+## 上下文注入中文化
+开关 `zhContextInject`（默认关闭，`settings.yaml` 命名空间 `dsh-zh`，与界面语言无关）。
+与前两个中文化开关「只改写发往模型的请求内容」不同，本开关是**注入源头替换**：
+DSH 注入会话的官方英文上下文在 `agent/pre-step` 阶段、进入会话历史之前被换成中文，
+因此 GUI 上下文卡片、会话日志与模型请求三处一致显示中文。中文文本会持久化进
+会话日志；关闭开关后新注入恢复英文，已写入的部分按官方行为保留。
+
+覆盖范围（只处理 DSH 官方注入，用户消息与第三方插件消息绝不动；未匹配的模板行
+与整块未知文本原样保留英文）：
+
+- **工作区指令帧**（`<system-reminder>` 包裹的 AGENTS.md/CLAUDE.md 注入）：引入句、
+  基线替换句、空基线句、截断提示句、`Instructions from:` / `Additional instructions
+  from:` / `Instructions removed:` / `Updated instructions from:` 行及其说明句、
+  字节预算标记（含 omitted/truncated 明细）。指令文件正文是用户内容，保留原文。
+- **skill 目录帧**：首句、目录更新句、尾部两段说明、空目录与替换目录的全部说明句。
+  目录条目行（skill 名称与描述）是作者内容，保留原文。
+- **运行时上下文**（经 systemPrompt contexts 组装 + 头部行）：文件策略（read-only /
+    workspace-write / danger-full-access，动态工作区路径保留）、审批策略（ask / never）、
+    子代理委派声明，以及快照头部行与清空行（翻译代价见下）。未收录的未来 context 保持英文。
+- **审批策略切换通知**：`The approval policy changed from …`（策略名 ask/never 保留）。
+- **压缩检查点前言**（会话历史中的 replacement 消息）。`<compacted-summary>` 标签与
+    摘要正文保留。
+- **计划模式切换通知**：进入计划模式 / 切回默认模式两句。
+- **动态 Cordis 插件通知**：激活成功 / 被拒绝 / 失败、手动运行结果、Client UI / Host
+    handler / guard 失败通知的框架句（错误详情、`currentPackageId:` 等字段行保留原文）。
+- **@pluginId 引用注入**（创作模式）：引用可用与不可用两种模板的全部指导句
+    （`<cordis_dynamic_plugin_context>` 标签与内嵌 JSON 保留）。
+- **定时提醒注入**：两条不可信提醒内容说明句（`[SCHEDULE REMINDER]` 标记与
+    `*_json:` 字段行保留）。
+
+**已知限制与代价**：运行时上下文的头部行（`Current runtime context. This snapshot
+supersedes …` 及其清空变体）由 agent-loop 硬编码拼接，官方渲染侧永远是英文；本开关
+按行级规则翻译它，代价是快照投影的 retained 比较每步失配、DSH 每步注入一条替换
+快照（surface 替换语义，模型输入不膨胀，但会话日志每步多一条快照事件）。tmux
+终端上下文快照同理且有 per-turn 重注入代价，不在覆盖范围；`<available_skills>`
+目录条目（skill 名称与描述）、`<skill_content>` 正文、指令文件（AGENTS.md 等）
+正文、压缩摘要正文、标题生成等辅助调用的内部指令均为作者/用户/程序内容，
+按设计不翻译。
+
+**生效语义**：与前两个开关共用会话语言锁定（regime）——会话首次请求时按当前开关
+状态锁定，老会话永远保持英文，锁定后翻转开关不影响该会话；regime 表为进程内存，
+进程重启后重建（重启前已锁定的中文会话继续按官方行为携带历史中的中文注入，新注入
+回到当时的开关状态）。实现方式：pre-step 监听以 `prepend: true` 注册在监听链头部
+（先执行，`next()` 返回的 decision 已包含核心注入器的消息，翻译后返回）+ 共享
+assemble 管线改写 contexts 正文；任何改写失败只告警一次并沿用原文，不阻断模型请求。
 
 ## 提示词注入
 
@@ -363,7 +416,11 @@ DOM。运行时翻转开关立即生效：关闭即卸载全部副作用（已�
 ## 数据与信任边界
 
 - 不注册模型工具，不上传数据。
-- 除显式开启的提示词注入、代理角色提示中文化与工具说明中文化外，不修改模型请求；
+- 除显式开启的提示词注入、代理角色提示中文化、工具说明中文化与上下文注入中文化外，
+    不修改模型请求；前两者只改写发往模型的 system prompt 与工具说明，不写会话历史；
+    上下文注入中文化替换 DSH 注入会话历史的官方英文文本（仅注入框架文本，用户消息、
+    指令文件正文、skill 描述与第三方插件消息不动），关闭后新注入恢复英文，已写入会话的
+    部分按官方行为保留。
   后两者只改写发往模型的 system prompt 与工具说明，不写会话历史。
 - 本地界面设置只写浏览器 localStorage。
 - 提示词设置只经 DSH 官方 settings 服务写入 `settings.yaml`。
@@ -372,8 +429,9 @@ DOM。运行时翻转开关立即生效：关闭即卸载全部副作用（已�
 ## 已知限制
 
 硬编码英文只覆盖内置清单。未收录文本和第三方插件内容保持原样，以避免误改用户正文。
-PTC 模式的 `tools:sdk` 生成式 TypeScript 工具目录（由上游 `dsh-tools` 渲染器生成，
-PTC 会话中模型的唯一工具声明）为生成代码块：工具级 JSDoc 描述与参数文档会随每个
-版本与每个工具变化，整段追译成本高且极易失配，按设计保留英文（`tools:ptc-only`
+PTC 模式的 `tools:sdk` 生成式 TypeScript/Python 工具目录（由上游 `dsh-tools` 渲染器生成，
+PTC 会话中模型的唯一工具声明）中的**固定说明模板**（标题、首段、程序内说明、
+bash 尾句、要点列表）已分段翻译为中文；**生成的代码声明块**（工具级 JSDoc/参数文档，
+随每个版本与每个工具变化）按设计保留英文，整段追译成本高且极易失配（`tools:ptc-only`
 的叙述性收敛声明仍翻译）。
 后续方向是补充确认过的硬编码文本，并允许用户配置部分术语叫法。

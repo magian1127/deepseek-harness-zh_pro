@@ -35,3 +35,8 @@ export const ZH_PROMPT_TARGET_LEGACY = 'context'
 //    工具名换成中文（工具名与参数不变，未收录工具原样保留）。
 export const ZH_AGENT_PROMPT_KEY = 'zhAgentPrompt'
 export const ZH_TOOL_DESC_KEY = 'zhToolDesc'
+// 3) zhContextInject：DSH 注入会话的官方英文上下文（工作区指令帧、skill 目录帧、
+//    runtime-context 快照正文、审批策略切换通知、压缩检查点前言）在进入会话
+//    历史前换成中文（注入源头替换：GUI、会话日志与模型请求一致显示中文）。
+//    仅新会话生效；机制说明见 context-locale.ts。
+export const ZH_CONTEXT_INJECT_KEY = 'zhContextInject'

@@ -13,7 +13,7 @@
 | --- | --- | --- |
 | `src/lib/client/`（TypeScript 源片段） | 浏览器 | 中文补全、DOM 增强、设置分区、会话删除菜单、服务监控面板和本地设置；`data/` 为语言数据，`logic/` 为逻辑 |
 | `lib/client.js` | 浏览器 | 由 `scripts/build-client.mjs` 转译并拼接 `src/lib/client/` 生成的经典脚本 bundle |
-| `src/lib/*.ts` → `lib/*.js` | DSH Node.js 进程 | settings 注册、提示词注入、会话删除/回收站路由、热装卸监督和主机热重载 |
+| `src/lib/*.ts` → `lib/*.js` | DSH Node.js 进程 | settings 注册、提示词注入、模型请求中文化、上下文注入中文化、会话删除/回收站路由、热装卸监督和主机热重载 |
 | `src/bin/*.mts` → `bin/*.mjs` | 命令行进程 | 安装、卸载、状态检查和 Windows 命令转发 |
 | `cordis.patch.yml` | bundle 配置层 | 声明持久挂载行 `dsh-zh` |
 | `package.json` | npm/DSH 元数据 | 导出、客户端依赖图、bundle patch 和发布文件 |
@@ -77,7 +77,7 @@ CLI 和官方 remove 都会删除依赖声明。主机监督器发现本包被�
 | 设置 | 数据流 |
 | --- | --- |
 | 中文补全、思考显示、统计、归档视图、会话删除/多选、服务监控、卡片展开态 | 设置页 → 浏览器 store → localStorage → DOM/locale/轮询效果 |
-| 代理角色/工具说明中文化、提示词开关/文本/目标、自动归档天数 | 设置页 → `settingsScope` → `settings.yaml` → 主机 `scope.watch` |
+| 代理角色/工具说明/上下文注入中文化、提示词开关/文本/目标、自动归档天数 | 设置页 → `settingsScope` → `settings.yaml` → 主机 `scope.watch` |
 | `system` 注入 | 主机包装 `systemPrompt.assemble`，修改最终 assembly sections |
 | `user` 注入 | 主机在 `agent/pre-step` 插入一条 notice `user/message` |
 

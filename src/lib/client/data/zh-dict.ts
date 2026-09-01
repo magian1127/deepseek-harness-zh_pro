@@ -15,6 +15,12 @@ const ZH = {
     'panel.trigger': 'Cordis 插件',
     'panel.runningCount': '{count} 个运行中',
   },
+    'settings.agentPreset': {
+      // 用户自定义叫法：上游官方名为「PTC 模式」，按用户要求改称「程序模式」；
+      // 描述中的「PTC 模式 SDK」同步译作「程序模式开发包」。整句覆盖，不随上游措辞变化。
+      presetPtcName: '程序模式',
+      presetPtcDescription: '具备标准模式的全部能力，并通过程序模式开发包呈现工具，让模型用一个 TypeScript 程序组合多步操作。',
+    },
   '*': {
     retry: '重试', submit: '提交', submitting: '正在提交', save: '保存', cancel: '取消',
     close: '关闭', copy: '复制', copied: '复制成功', delete: '删除', edit: '编辑',

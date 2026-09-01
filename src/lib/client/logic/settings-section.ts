@@ -275,9 +275,9 @@ const ZhSettingsSection = function (props) {
     React.createElement('h3', { style: zhTitleStyle }, t('nav')),
     React.createElement('p', { style: zhIntroStyle }, t('sectionIntro')),
     React.createElement('div', { style: zhRowsStyle },
-        // 平铺四项：中文补全 / 代理角色提示中文化 / 工具说明中文化 / 提示词注入。
-        // 后三者与「提示词注入」同走主机 settings（dsh-zh 命名空间，默认关闭），
-        // 只作用于新会话的模型请求；settingsScope 未就绪时显示为禁用。
+          // 平铺开关：中文补全 / 代理角色提示 / 工具说明 / 上下文注入中文化 / 提示词注入。
+          // 后四项与「提示词注入」同走主机 settings（dsh-zh 命名空间，默认关闭），
+          // 官方文本；全部只作用于新会话；settingsScope 未就绪时显示为禁用。
         row('zhComplete', t('zhComplete'), t('zhCompleteDesc'),
           toggle(snapshot.zhComplete, function () { settingsStore.set('zhComplete', !snapshot.zhComplete) }, false, t('zhComplete'))),
         row('zhAgentPrompt', t('zhAgentPrompt'), t('zhAgentPromptDesc'),
@@ -292,6 +292,12 @@ const ZhSettingsSection = function (props) {
               void boundPromptScope.set('zhToolDesc', !(promptReady && promptSnapshot.value.zhToolDesc === true))
             }
           }, boundPromptScope === null, t('zhToolDesc'))),
+        row('zhContextInject', t('zhContextInject'), t('zhContextInjectDesc'),
+          toggle(promptReady && promptSnapshot.value.zhContextInject === true, function () {
+            if (boundPromptScope !== null && promptReady === true) {
+              void boundPromptScope.set('zhContextInject', !(promptReady && promptSnapshot.value.zhContextInject === true))
+            }
+          }, boundPromptScope === null, t('zhContextInject'))),
       // ---- 提示词注入：列布局复杂行，hairline 分隔 ----
       React.createElement('div', {
         key: 'zhPrompt',

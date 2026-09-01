@@ -25,6 +25,7 @@ The rows below follow **DSH Settings → Enhancements** from top to bottom:
 | Flat row | Chinese completion | On | Chinese UI only: fixes confirmed leftover English and normalizes tokens, API keys, model IDs, durations, and count formats |
 | Flat row | Agent-role prompt localization | Off | Uses Chinese for the four built-in agent roles and confirmed first-party system sections; locked on the first request of a new session and never reinjected into existing sessions |
 | Flat row | Tool-description localization | Off | Localizes confirmed built-in DSH tool descriptions and guidance; tool names, parameter names, and third-party tools remain unchanged; new sessions only |
+| Flat row | Injected-context localization | Off | Replaces DSH-injected official context (workspace instruction frames, skill catalog frames, runtime context including its header line, approval/mode switch notices, dynamic-plugin notices, scheduled reminders, compaction checkpoint preambles) with Chinese before it enters session history; GUI and model requests stay consistent, new sessions only; translating the snapshot header makes DSH inject one replacement snapshot per step (slight session-log growth) |
 | Flat row | Prompt injection | Off | Injects editable text into subsequent requests; the default text asks for Chinese reasoning and replies, and the default target is the initial system prompt |
 | Chat display | Auto-expand latest thinking | On | Expands the newest streaming thinking block and collapses the previous block that the plugin auto-expanded |
 | Chat display | Default expanded lines | 20 lines, latest N | Limits the initial visible region to 0–200 lines; 0 disables the limit, and the direction can be changed to earliest N |
@@ -107,11 +108,14 @@ after reinstalling.
 | Data | Storage |
 | --- | --- |
 | Chinese completion, thinking display, stats, archived-session view, session deletion, session multi-select, service monitor, and the three cards' open state | Browser localStorage: `deepseek-harness-zh_pro:enhancements` |
-| Agent-role localization, tool-description localization, prompt toggle/text/target, and auto-archive days | DSH `settings.yaml`, namespace `dsh-zh` |
+| Agent-role localization, tool-description localization, injected-context localization, prompt toggle/text/target, and auto-archive days | DSH `settings.yaml`, namespace `dsh-zh` |
 
 The plugin registers no model tools and uploads no data. Except for explicitly enabled
-prompt injection, agent-role localization, and tool-description localization, no feature
-modifies model requests. Chinese completion only applies to the Chinese interface; the
+prompt injection, agent-role localization, tool-description localization, and
+injected-context localization, no feature modifies model requests; injected-context
+localization replaces DSH-injected official English text before it enters session history
+(closing the toggle restores English for new injections, while already-written history stays
+as official behavior). Chinese completion only applies to the Chinese interface; the
 other interface enhancements also apply to the English interface. Each model-request
 feature is controlled solely by its own toggle.
 

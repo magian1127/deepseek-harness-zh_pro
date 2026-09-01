@@ -25,6 +25,23 @@ async function importCli(label) {
   return import(`./bin/dsh-zh.mjs?verify=${label}-${Date.now()}-${Math.random()}`)
 }
 
+// 忠实模拟 Cordis waterfall 的 agent/pre-step 监听链执行顺序：
+// prepend 监听器移到链头（多个 prepend 之间逆序），其余按注册顺序；
+// 先执行者为外层，其 next() 返回值携带内层监听器（含核心注入器）的改动。
+function makePreStepDispatcher(handlers) {
+  return async function (args, base) {
+    const all = handlers['agent/pre-step'] ?? []
+    const prepends = all.filter(function (entry) { return entry.prepend }).reverse().map(function (entry) { return entry.handler })
+    const normals = all.filter(function (entry) { return !entry.prepend }).map(function (entry) { return entry.handler })
+    const list = prepends.concat(normals)
+    const call = async function (index) {
+      if (index >= list.length) return base()
+      return list[index](args, function () { return call(index + 1) })
+    }
+    return call(0)
+  }
+}
+
 try {
   // 旧版无标记行即使位于文件第一行，也必须能识别、归一化并删除。
   const legacyRoot = tempRoot('legacy')
@@ -207,10 +224,16 @@ try {
       if (name === 'systemPrompt') return systemPrompt
       return undefined
     },
-    on: function (name, handler) {
-      handlers[name] = handler
-      effects.push(function () { delete handlers[name] })
-    },
+      // 同名事件支持多个监听（真实 Cordis 行为）：chinese-prompt 与
+      // context-locale 各自注册一个 agent/pre-step 监听。Cordis waterfall
+      // 先注册者在链头（外层）；prepend 监听器注册时移到链头。mock 用
+      // { handler, prepend } 记录，dispatchPreStep 按「prepend 在前（各自逆序）、
+      // 其后按注册顺序」执行，忠实模拟 cordis register 的 unshift/push。
+      on: function (name, handler, options) {
+        if (!Array.isArray(handlers[name])) handlers[name] = []
+        handlers[name].push({ handler, prepend: options?.prepend === true })
+        effects.push(function () { handlers[name] = [] })
+      },
     effect: function (setup) {
       const dispose = setup()
       if (typeof dispose === 'function') effects.push(dispose)
@@ -234,12 +257,13 @@ try {
   assembly = await systemPrompt.assemble({})
   check(assembly.sections.map(function (section) { return section.name }), ['deployment:persona'], 'user 目标不写 system prompt')
   const claimed = { role: 'user', id: 'claimed', content: [{ type: 'text', text: '问题' }] }
-  const decision = await handlers['agent/pre-step']({
-    agent: { session: { surface: { nodes: [] }, events: [] }, inbox: {} },
-    messages: [claimed],
-    step: 1,
-    signal: { throwIfAborted: function () {} },
-  }, async function () { return { kind: 'enter', messages: [claimed] } })
+    const dispatchPreStep = makePreStepDispatcher(handlers)
+    const decision = await dispatchPreStep({
+      agent: { session: { surface: { nodes: [] }, events: [], id: 'main-zh' }, inbox: {} },
+      messages: [claimed],
+      step: 1,
+      signal: { throwIfAborted: function () {} },
+    }, async function () { return { kind: 'enter', messages: [claimed] } })
   check(decision.messages.length, 2, 'user 目标插入一条上下文消息')
   check(decision.messages[1].source, { kind: 'plugin', plugin: 'deepseek-harness-zh_pro', form: 'notice', summary: '提示词注入：只用中文' }, 'user 目标上下文来源正确')
   for (let i = effects.length - 1; i >= 0; i -= 1) await effects[i]()
@@ -252,26 +276,39 @@ try {
       const standardPersona = 'You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.'
     // 每次调用产出全新 section 对象：localizeSections 原地改写 entry.text，
     // 复用同一对象会让后续 assemble 看到上一次的中文而失真。
-    let stubSectionsFactory = function () {
-      return [
-          { name: 'deployment:persona', text: standardPersona },
-          { name: 'harness:identity', text: 'You are an AI agent powered by DeepSeek Harness.' },
-          { name: 'harness:source', text: 'The DeepSeek Harness implementation checkout is at D:\\Projects\\dsh. The checkout location and current working directory are separate values and may differ.' },
-          { name: 'app:web-surface', text: 'You are interacting with the user through the DeepSeek Harness Web GUI at http://127.0.0.1:3080. When the user refers to "this page", "this GUI", or "this app" without naming another target, they mean this GUI.' },
-          { name: 'tool:read', text: 'Use the read tool — not shell commands like cat — to inspect text files. Results include line numbers. Use offset and limit to continue reading large files.' },
-          { name: 'tool:hashline', text: 'The read and edit tools are currently the Hashline read/editor. Use write for new files.' },
-      ]
-    }
-    const localeOriginal = async function () {
-      return {
-        sections: stubSectionsFactory(),
-        tools: [
-          { name: 'pwsh', description: 'Execute a PowerShell command', parameters: { type: 'object', properties: {} } },
-          { name: 'edit', description: 'Edit an existing UTF-8 text file. Two input styles: (1) a simple unique literal replacement with old_string/new_string and optional replace_all, or (2) based on read.', parameters: { type: 'object', properties: {} } },
-          { name: 'unknown_tool', description: 'Keep me', parameters: { type: 'object', properties: {} } },
-        ],
+      let stubSectionsFactory = function () {
+        return [
+            { name: 'deployment:persona', text: standardPersona },
+            { name: 'harness:identity', text: 'You are an AI agent powered by DeepSeek Harness.' },
+            { name: 'harness:source', text: 'The DeepSeek Harness implementation checkout is at D:\\Projects\\dsh. The checkout location and current working directory are separate values and may differ.' },
+            { name: 'app:web-surface', text: 'You are interacting with the user through the DeepSeek Harness Web GUI at http://127.0.0.1:3080. When the user refers to "this page", "this GUI", or "this app" without naming another target, they mean this GUI.' },
+            { name: 'tool:read', text: 'Use the read tool — not shell commands like cat — to inspect text files. Results include line numbers. Use offset and limit to continue reading large files.' },
+            { name: 'tool:hashline', text: 'The read and edit tools are currently the Hashline read/editor. Use write for new files.' },
+            // 官方 tool:edit 原文（应换成中文）与 hashline 同名阴影文本（应保持原样）。
+            { name: 'tool:edit', text: 'Use the edit tool for targeted changes to existing UTF-8 text files. It replaces literal old_string with new_string; by default old_string must appear exactly once. If old_string appears multiple times, provide a more specific old_string or set replace_all to true. Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session.' },
+            { name: 'tool:edit', text: 'Use the edit tool for strictly hash-anchored changes to existing UTF-8 text files. Call read first and copy fresh LINE:HASH anchors exactly. This surface does not accept old_string/new_string literal replacement. Use write for new files.' },
+            // 智谱同名阴影 tool:web_search（应保持原样）。
+            { name: 'tool:web_search', text: 'Use the web_search tool to search the web through Zhipu. Provide 1–4 focused queries in the required queries array; Zhipu applies sensitive-result filtering, so narrow each query before searching.' },
+            // PTC 模式 tools:sdk 最小 TS 样本：固定说明 + 假代码声明。
+            { name: 'tools:sdk', text: '## Writing code for run_code\n\n`run_code` takes two required arguments: `code` — the body of an async TypeScript function (erasable syntax only — no `enum` or namespaces; type annotations are advisory, the code runs type-stripped) — and `description`, a short summary of what the program does. The declarations below are SDK bindings for this program. A declaration does not make its name a directly callable tool; only names supplied as separate tool schemas may be called directly.\n\nInside the program:\n\n- Call tools as `await tools.name(args)` — quoted access for exotic names: `tools["my-tool"](args)`. Every call resolves to the tool\'s typed canonical JSON value. Tool arguments must be lossless JSON.\n- A FAILED tool call rejects with `ToolCallError`, whose `toolName` identifies the failed tool and whose `message` is human-readable — `try/catch` it to handle and continue.\n- Independent read-only calls MAY overlap under `Promise.all` (safe calls run concurrently; mutating calls run alone, in submission order). Sequence dependent work with `await`.\n- Emit results with `return` and/or `console.log(...)`. Only what you print or return is program output. A successful tool result containing an image is attached after the run so you can inspect it on the next step; every other intermediate result stays out of the conversation, so extract just what you need.\n\nProgram-only SDK bindings:\n\n```ts\ndeclare const tools: {}\n```' },
+        ]
       }
-    }
+      const localeOriginal = async function () {
+        return {
+          sections: stubSectionsFactory(),
+          tools: [
+            { name: 'pwsh', description: 'Execute a PowerShell command', parameters: { type: 'object', properties: {} } },
+            { name: 'edit', description: 'Edit an existing UTF-8 text file. Two input styles: (1) a simple unique literal replacement with old_string/new_string and optional replace_all, or (2) based on read.', parameters: { type: 'object', properties: {} } },
+            { name: 'unknown_tool', description: 'Keep me', parameters: { type: 'object', properties: {} } },
+            // 极简模式 persistent pwsh（preset 覆盖文本）→ flavor 表译文。
+            { name: 'pwsh', description: 'Run commands in a PowerShell shell\n* When invoking this tool, the contents of the "command" parameter does NOT need to be XML-escaped.\n* You don\'t have access to the internet via this tool.\n* State is persistent across command calls and discussions with the user.\n* Use native Windows paths (C:\\...) and $env:NAME variables; this is PowerShell, not bash.', parameters: { type: 'object', properties: {} } },
+            // 极简模式 str_replace_editor 默认描述 → 中文。
+            { name: 'str_replace_editor', description: 'Custom editing tool for viewing, creating and editing files\n* State is persistent across command calls and discussions with the user', parameters: { type: 'object', properties: {} } },
+            // PTC 模式 run_code TypeScript flavor → 中文。
+            { name: 'run_code', description: 'Execute a TypeScript program against the available tools. Takes two required arguments: `code`, the BODY of an async function (erasable syntax only; top-level `await` and `return` work), and `description`, a short summary of what the program does.', parameters: { type: 'object', properties: {} } },
+          ],
+        }
+      }
     const localeSystemPrompt = { assemble: localeOriginal }
     const localeEffects = []
     const localeCtx = {
@@ -335,6 +372,19 @@ try {
       // 工具指引段落（guidance sections）：官方 tool:* 换成中文，第三方 section 保持英文
       check(localeAssembly.sections[4].text.includes('用 read 工具'), true, '新会话 tool:read 指引换成中文')
       check(localeAssembly.sections[5].text.includes('Hashline'), true, '第三方 tool:hashline 指引保持英文')
+      // 官方 tool:edit 原文换成中文；hashline/智谱同名阴影段落不被按名盖回旧版。
+      check(localeAssembly.sections[6].text.includes('用 edit 工具'), true, '官方 tool:edit 指引换成中文')
+      check(localeAssembly.sections[7].text.includes('hash-anchored'), true, 'hashline 阴影 tool:edit 保持原样')
+      check(localeAssembly.sections[8].text.includes('through Zhipu'), true, '智谱阴影 tool:web_search 保持原样')
+      // tools:sdk 分段替换：固定说明翻中文，生成的代码声明保留英文。
+      check(localeAssembly.sections[9].text.includes('为 run_code 编写代码'), true, 'tools:sdk 标题翻成中文')
+      check(localeAssembly.sections[9].text.includes('SDK 绑定'), true, 'tools:sdk 首段说明翻成中文')
+      check(localeAssembly.sections[9].text.includes('在程序内部'), true, 'tools:sdk 程序内说明翻成中文')
+      check(localeAssembly.sections[9].text.includes('declare const tools'), true, 'tools:sdk 代码声明保留英文')
+      // 多 flavor 工具描述：persistent pwsh / str_replace_editor / run_code。
+      check(localeAssembly.tools[3].description.includes('持久的 PowerShell shell') === false && localeAssembly.tools[3].description.includes('在 PowerShell shell 中运行命令'), true, 'persistent pwsh 覆盖文本换成中文')
+      check(localeAssembly.tools[4].description.includes('自定义编辑工具'), true, 'str_replace_editor 说明换成中文')
+      check(localeAssembly.tools[5].description.includes('TypeScript 程序'), true, 'run_code 说明换成中文')
       // 老会话：不重新注入
       localeAssembly = await localeSystemPrompt.assemble({ agent: oldAgent, scope: oldAgent })
       check(localeAssembly.sections[0].text, standardPersona, '老会话 persona 不重新注入')
@@ -392,6 +442,184 @@ try {
       localeState.zhAgentPrompt = false
       localeState.zhToolDesc = false
 
+
+      // ---- 上下文注入中文化：contexts 正文改写 + pre-step 行级替换 + regime 门控 ----
+      // 独立装配 context-locale（带 query 绕开 ESM 缓存），共享同一 chinese-prompt
+      // 实例的 modelState 切换开关；英文样本逐字取自部署版源码。
+          const ctxDefaultContexts = function () {
+            return [
+              { name: 'sandbox:policy', text: 'Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.' },
+              { name: 'approval:policy', text: 'Approval prompts are disabled in this session: actions that require approval are rejected automatically — do not request sandbox escalation (do not set `sandbox_permissions`).' },
+              { name: 'unknown:future', text: 'Some future context stays English.' },
+            ]
+          }
+          // 可变工厂：每次调用产出全新 context 对象（改写器原地改 entry.text），
+          // 切换场景时不替换 assemble 本身，包装链保持不动。
+          let ctxContextsFactory = ctxDefaultContexts
+          const ctxOriginal = async function () {
+            return { sections: [], tools: [], contexts: ctxContextsFactory() }
+          }
+        const ctxSystemPrompt = { assemble: ctxOriginal }
+        const ctxEffects = []
+        const ctxHandlers = {}
+        const ctxLocaleCtx = {
+          fiber: { entry: { options: { id: 'dsh-zh' } } },
+          loader: { entries: function () { return [] } },
+          get: function (name) {
+            if (name === 'settings') return undefined
+            if (name === 'systemPrompt') return ctxSystemPrompt
+            return undefined
+          },
+            on: function (name, handler, options) {
+              if (!Array.isArray(ctxHandlers[name])) ctxHandlers[name] = []
+              ctxHandlers[name].push({ handler, prepend: options?.prepend === true })
+            },
+          effect: function (setup) {
+            const dispose = setup()
+            if (typeof dispose === 'function') ctxEffects.push(dispose)
+          },
+        }
+        const ctxPromptMod = await import('./lib/chinese-prompt.js')
+        const ctxState = ctxPromptMod.getModelState()
+        ctxState.ready = true
+          ctxState.zhContextInject = false
+          // 模拟核心注入器（agent-instructions 风格：先注册、非 prepend，内层）：
+          // 在 next() 返回的 decision 上追加英文工作区指令消息。zh_pro 的监听
+          // 以 prepend 注册在链头（外层），其 next() 返回值应携带本注入器的消息
+          // 并完成翻译——这正是真实多监听场景下链序的回归（prepend 修复前，
+          // zh_pro 落在内层，外层注入的英文永远绕过翻译）。
+          const fakeInjectorFrame = ['<system-reminder>',
+            'The following workspace instructions may be relevant to your work. Use them as guidance when applicable. More specific instructions take precedence over broader ones. They do not override system, developer, or direct user instructions.',
+            '',
+            'Instructions from: AGENTS.md',
+            '',
+            '# injected by fake core injector',
+            '</system-reminder>'].join('\n')
+          const fakeInjectorMsg = { role: 'user', id: 'ctx-fake', content: [{ type: 'text', text: fakeInjectorFrame }], source: { kind: 'plugin', plugin: 'agent-instructions' } }
+          ctxLocaleCtx.on('agent/pre-step', async function (args, next) {
+            const decision = await next()
+            if (decision === null || typeof decision !== 'object' || decision.kind === 'reject') return decision
+            return { ...decision, messages: [...decision.messages, fakeInjectorMsg] }
+          })
+        const ctxMod = await import(`./lib/context-locale.js?verify=ctx-${Date.now()}-${Math.random()}`)
+        const ctxOriginalLog = console.log
+        const ctxOriginalWarn = console.warn
+        try {
+          console.log = function () {}
+          console.warn = function () {}
+          ctxMod.installContextLocale(ctxLocaleCtx)
+        } finally {
+          console.log = ctxOriginalLog
+          console.warn = ctxOriginalWarn
+        }
+        const zhAgent = { session: { id: 'ctx-zh', events: [] } }
+        const enAgent = { session: { id: 'ctx-old', events: [{ type: 'assistant/message' }] } }
+        // 开关关：contexts 与注入消息都零改动
+        let ctxAssembly = await ctxSystemPrompt.assemble({ agent: zhAgent, scope: zhAgent })
+        check(ctxAssembly.contexts[0].text.includes('danger-full-access. The DSH file sandbox'), true, '开关关时 contexts 保持英文')
+        const ctxDispatch = makePreStepDispatcher(ctxHandlers)
+        let ctxDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: [] } })
+        check(ctxDecision.messages.length, 1, '开关关时 fake 注入器仍追加消息（zh_pro 零改动）')
+        check(ctxDecision.messages[0], fakeInjectorMsg, '开关关时注入消息保持英文原样')
+        // 开关开 + 新会话：contexts 正文换中文，未知 context 保留
+        ctxState.zhContextInject = true
+        ctxAssembly = await ctxSystemPrompt.assemble({ agent: zhAgent, scope: zhAgent })
+        check(ctxAssembly.contexts[0].text, '当前 DSH 文件策略：danger-full-access。DSH 文件沙箱不限制可用操作对文件的修改。', '文件策略 context 换成中文')
+        check(ctxAssembly.contexts[1].text, '本会话已禁用审批提示：需要审批的操作会被自动拒绝——不要请求沙箱升级（不要设置 `sandbox_permissions`）。', '审批策略 context 换成中文')
+        check(ctxAssembly.contexts[2].text, 'Some future context stays English.', '未收录 context 保持英文')
+          // workspace-write 动态路径保留（切工厂不换 assemble，包装链不动）
+          ctxContextsFactory = function () {
+            return [{ name: 'sandbox:policy', text: 'Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: "D:\\ws". Some platform temporary areas may also be writable.' }]
+          }
+          ctxAssembly = await ctxSystemPrompt.assemble({ agent: zhAgent, scope: zhAgent })
+          check(ctxAssembly.contexts[0].text.includes('当前 DSH 文件策略：workspace-write。'), true, 'workspace-write context 换成中文')
+          check(ctxAssembly.contexts[0].text.includes('"D:\\ws"'), true, 'workspace-write 保留动态工作区路径')
+          ctxContextsFactory = ctxDefaultContexts
+          // 老会话：contexts 不改写（仍走同一包装链）
+          ctxAssembly = await ctxSystemPrompt.assemble({ agent: enAgent, scope: enAgent })
+          check(ctxAssembly.contexts[0].text.includes('The DSH file sandbox'), true, '老会话 contexts 不改写')
+        // pre-step：工作区指令帧 / skill 目录帧 / 审批切换 / budget marker 换中文
+        const wsFrame = ['<system-reminder>',
+          'The following workspace instructions may be relevant to your work. Use them as guidance when applicable. More specific instructions take precedence over broader ones. They do not override system, developer, or direct user instructions.',
+          '',
+          'Instructions from: AGENTS.md',
+          '',
+          '# 本地规则（用户内容不翻译）',
+          '</system-reminder>'].join('\n')
+        const skillFrame = ['<system-reminder>',
+          'A skill is a reusable set of task-specific instructions. The following skills are available in this session:',
+          '',
+          '<available_skills>',
+          '- `code-review`: Review the changes since a fixed point.',
+          '</available_skills>',
+          '',
+          "If the user names a skill, or the task clearly matches a skill's description, call the `skill` tool with the exact skill name before taking task actions. Load all applicable skills, then follow their full instructions. This catalog contains summaries only; do not infer or follow a skill's instructions until it has been loaded.",
+          'A user may also invoke a skill directly; its <skill_content> block then appears in this conversation. Follow it, and do not call the `skill` tool again for that skill.',
+          '</system-reminder>'].join('\n')
+        const runtimeZh = 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n当前 DSH 文件策略：danger-full-access。DSH 文件沙箱不限制可用操作对文件的修改。'
+        const makeMsg = function (source, text) {
+          return { role: 'user', id: `ctx-m${makeMsg.seq += 1}`, content: [{ type: 'text', text }], source }
+        }
+        makeMsg.seq = 0
+        const wsMsg = makeMsg({ kind: 'plugin', plugin: 'agent-instructions' }, wsFrame)
+        const skillMsg = makeMsg({ kind: 'skill-catalog', form: 'catalog' }, skillFrame)
+        const approvalMsg = makeMsg({ kind: 'plugin', plugin: 'user-approval' }, 'The approval policy changed from "ask" to "never" (changed by the user).')
+        const budgetMsg = makeMsg({ kind: 'agent-instructions', form: 'instructions', changes: [] }, 'Workspace instruction budget 4096 bytes: omitted AGENTS.md, docs/x.md; truncated big.md from 8000 to 300 bytes')
+        const runtimeMsg = makeMsg({ kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt', form: 'snapshot' }, runtimeZh)
+        const userMsg = makeMsg({ kind: 'user' }, '用户消息保持原样')
+        const ownMsg = makeMsg({ kind: 'plugin', plugin: 'deepseek-harness-zh_pro', form: 'notice' }, '提示词注入：只用中文')
+        const input = [userMsg, wsMsg, skillMsg, approvalMsg, budgetMsg, runtimeMsg, ownMsg]
+          const zhDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: input.slice() } })
+        check(zhDecision.kind, 'enter', 'pre-step 返回 enter decision')
+          const [outUser, outWs, outSkill, outApproval, outBudget, outRuntime, outOwn, outFake] = zhDecision.messages
+        check(outUser, userMsg, '用户消息对象引用不变')
+        check(outOwn, ownMsg, '本插件自身消息引用不变')
+        check(outRuntime !== runtimeMsg, true, 'runtime 快照被克隆（头部行已翻译）')
+        check(outRuntime.source, runtimeMsg.source, 'runtime 快照 source 引用不变')
+        check(outRuntime.content[0].text.includes('当前运行时上下文。本快照取代更早的运行时上下文快照。'), true, 'runtime 快照头部行换成中文')
+        check(outRuntime.content[0].text.includes('当前 DSH 文件策略：danger-full-access'), true, 'runtime 快照正文保持中文')
+        check(outRuntime.content[0].text.includes('Current runtime context'), false, 'runtime 快照头部英文不再出现')
+        const planModeMsg = makeMsg({ kind: 'plugin', plugin: 'plan-mode', form: 'notice' }, 'The user switched this session to plan mode.')
+        const planModeDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: [planModeMsg] } })
+        check(planModeDecision.messages[0].content[0].text, '用户已将本会话切换到计划模式。', '计划模式切换通知换成中文')
+        const runnerMsg = makeMsg({ kind: 'plugin', plugin: 'cordis-host-runner' }, 'Cordis run zhre-1/pkg-1 completed successfully. currentPackageId is pkg-1. Continue using the running Plugin.')
+        const runnerDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: [runnerMsg] } })
+        check(runnerDecision.messages[0].content[0].text, 'Cordis run zhre-1/pkg-1 已成功完成。currentPackageId 为 pkg-1。继续使用正在运行的 Plugin。', '动态插件激活成功通知换成中文')
+        check(outWs.source, wsMsg.source, '工作区指令消息 source 引用不变')
+        check(outWs.id, wsMsg.id, '工作区指令消息 id 不变')
+        check(outWs.content[0].text.includes('以下工作区指令可能与你的工作相关'), true, '工作区指令 intro 换成中文')
+        check(outWs.content[0].text.includes('来自 AGENTS.md 的指令：'), true, 'Instructions from 行换成中文')
+        check(outWs.content[0].text.includes('# 本地规则（用户内容不翻译）'), true, '指令文件正文保留原文')
+        check(outWs.content[0].text.includes('<system-reminder>'), true, 'system-reminder 标签保留')
+        check(outWs.content[0].text.includes('The following workspace instructions'), false, 'intro 英文不再出现')
+        check(outSkill.content[0].text.includes('skill 是一组可复用的任务专用指令'), true, 'skill 目录首行换成中文')
+        check(outSkill.content[0].text.includes('如果用户点名了某个 skill'), true, 'skill 目录尾段换成中文')
+        check(outSkill.content[0].text.includes('- `code-review`: Review the changes since a fixed point.'), true, 'skill 条目行保留作者原文')
+        check(outApproval.content[0].text, '审批策略已从 "ask" 切换为 "never"（由用户更改）。', '审批切换通知换成中文')
+        check(outBudget.content[0].text, '工作区指令预算 4096 字节：已省略 AGENTS.md, docs/x.md；已截断 big.md 从 8000 截断到 300 字节', 'budget marker 换成中文')
+        const settledMsg = { role: 'user', id: 'ctx-settled', content: [{ type: 'text', text: 'Background subagent child-1 finished and will do no further work unless you send it more.' }, { type: 'text', text: 'Its closing message:' }], source: { kind: 'subagent-settled', form: 'notice' } }
+        const settledDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: [settledMsg] } })
+        check(settledDecision.messages[0].content[0].text, '后台子代理 child-1 已完成，除非你再给它发消息，否则它不会再做任何工作。', '后台子代理完成通知换成中文')
+        check(settledDecision.messages[0].content[1].text, '其结束消息：', '结束消息引导行换成中文')
+        check(settledDecision.messages[0].source, settledMsg.source, 'subagent-settled source 引用不变')
+          // 链序回归：fake 核心注入器在内层（非 prepend）追加的英文消息，
+          // 被 prepend 在链头的 zh_pro 监听翻译后返回——prepend 修复前此消息永远保持英文
+          check(zhDecision.messages.length, 8, '内层注入器的消息保留在链尾')
+          check(outFake.content[0].text.includes('以下工作区指令可能与你的工作相关'), true, '内层（核心注入器）追加的工作区指令也被翻译')
+          check(outFake.content[0].text.includes('来自 AGENTS.md 的指令：'), true, '内层注入的 Instructions from 行换成中文')
+          check(outFake.content[0].text.includes('# injected by fake core injector'), true, '内层注入的正文保留原文')
+        // 老会话与 reject decision：零改动
+          const enDecision = await ctxDispatch({ agent: enAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: input.slice() } })
+          check(enDecision.messages[1], wsMsg, '老会话注入消息引用不变')
+          check(enDecision.messages.length, 8, '老会话消息不被翻译（含 fake 注入，全部原样）')
+          const rejectDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'reject', reason: 'blocked' } })
+        check(rejectDecision.kind, 'reject', 'reject decision 原样返回')
+        // 卸载后恢复原 assemble
+        for (let i = ctxEffects.length - 1; i >= 0; i -= 1) await ctxEffects[i]()
+        check(ctxSystemPrompt.assemble, ctxOriginal, '卸载后恢复 context-locale 的 assemble')
+        // 还原共享状态
+        ctxState.ready = false
+        ctxState.zhContextInject = false
   // ---- 会话删除（回收站）：live 会话归档隐藏 + 回收站登记 ----
   // 前面的 CLI shim 测试改过 PATH（可能找不到 powershell.exe），
   // 这里恢复原 PATH 让 trashItem 能调用 PowerShell 回收站。

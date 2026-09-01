@@ -87,6 +87,19 @@ profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢
 插件以 symlink link 到 profile 时，`import.meta.url` 解析为 realpath，清缓存时要
 按 realpath 路径匹配。
 
+2026-09-01 实测（dsh web 长跑进程，bundle 行在线）：上述三条热通道（自监视 watcher、
+动态插件 disabled 往返、动态插件 `hmr.stashed.add` + `partialReload`）**全部未能把新构建
+装入当前进程**，但插件自身始终存活（`/dsh-zh/api/service-monitor` 探活正常、未停在
+禁用态）。验证是否装入新代码不要凭日志：新开会话（或子代理）后解压其
+`session.jsonl.zstd`（zstd 多帧，按帧魔数 0x28B52FFD 分段解压）看注入消息文本。
+此场景下按工作区规则不重启进程，新构建由下次自然重启的 bundle 行从磁盘加载生效。
+
+**验收注入中文化必须用全新会话**：`subagent_fork` 的子会话继承父对话全部历史
+（含 `assistant/message`），regime 按设计锁定 en，注入不翻译是正确行为——用它验收会
+得到假阴性（2026-09-01 连续五轮误判；而重启后首次用全新 subagent 验收即全部命中）。
+用普通 `subagent`（无种子）或 GUI 新建会话，验收点：persona 中文、文件策略/审批
+策略正文中文、skill 目录首句中文、runtime-context 头部句英文（设计保留）。
+
 ## 中文界面仍出现英文或还原错误
 
 - 先检查 active profile 的部署包原文，不要以 checkout 猜测运行时版本。

@@ -30,7 +30,7 @@ export interface HostContext {
   loader: LoaderLike
   get(name: string): any
   effect(setup: () => unknown, label?: string): unknown
-  on(name: string, handler: (...args: any[]) => unknown): unknown
+  on(name: string, handler: (...args: any[]) => unknown, options?: { prepend?: boolean }): unknown
   off(name: string, handler: (...args: any[]) => unknown): unknown
   plugin(plugin: unknown, config: Record<string, unknown>): PluginHandleLike
 }

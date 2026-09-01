@@ -96,7 +96,9 @@ window.__ModuleLoader__.load({
 `src/lib/chinese-prompt.ts`、`src/lib/assemble-patch.ts`（systemPrompt.assemble 的唯一
 包装管线，chinese-prompt 与 model-locale 都以改写器形式注册）、`src/lib/model-locale.ts`
 （模型请求中文化：persona/系统段落/工具说明/指引段落改写；`cordis-section-zh.ts` 存放
-`tool:cordis` 大段的中文版）、`src/lib/hot-mount.ts`、`src/lib/trash.ts`（跨平台回收站）、
+`tool:cordis` 大段的中文版）、`src/lib/context-locale.ts`（上下文注入中文化：
+runtime-context 正文（contexts）改写 + 注入消息的 agent/pre-step 行级替换，见下文专节）、
+`src/lib/hot-mount.ts`、`src/lib/trash.ts`（跨平台回收站）、
 `src/lib/session-delete.ts`（会话删除编排与 `/dsh-zh/api` 路由）、`src/lib/service-monitor.ts`
 （服务监控：本机监听端口扫描 + 基线 diff + 进程归属解析 + 快照与目录打开）；CLI 实现拆在 `src/bin/cli/`，`src/bin/dsh-zh.mts`
 是转发导出并保留入口守卫的聚合入口。编译后对应的 `.js`/`.mjs` 文件供 DSH 和 npm 消费。
@@ -323,11 +325,19 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
   persona 匹配键不得带尾部换行（shipped yml 块标量会剥掉末尾换行，曾因键多一个
   `\n` 使 cordis persona 整段失配保持英文）；运行时文本先按原样查、失败再按
   trim 后查。
-- **开关2（zhToolDesc）**：工具说明（`TOOL_DESC_ZH`）+ 官方工具指引段落（`SECTION_ZH`，
-  `tool:*` sections 与 `plan:policy`）。**只翻译 DSH 官方工具**：`TOOL_MATCH` 表存官方描述特征片段，
-  运行时 `description.includes(特征)` 才替换，被第三方插件（如 hashline 替换的 edit）
-  的实现保持英文。`plan:policy` 的文本来自 preset 配置（`{ zh, en }` 条目），仅原文
-  逐字一致才替换；section 文本为空（非计划模式）时跳过，绝不凭空注入。
+ - **开关2（zhToolDesc）**：工具说明（`TOOL_DESC_ZH` + `TOOL_FLAVOR_DESC_ZH`）+ 官方工具指引
+    段落（`SECTION_ZH`，`tool:*` sections、`tools:ptc-only`、`tools:sdk` 与 `plan:policy`）。
+    **只翻译 DSH 官方内容，两层都带官方特征守卫**：工具描述用 `TOOL_MATCH` 单特征表或
+    `TOOL_FLAVOR_DESC_ZH` 多 flavor 表（同一工具名的多种官方描述逐 flavor 匹配：极简模式
+    persistent `pwsh`/`bash` 的包默认与 preset 覆盖两套、`str_replace_editor` 默认描述、
+    PTC 模式 `run_code` 的 TS/Python 两语言；全未命中再退回单表，如一次性 pwsh），
+    运行时 `description.includes(特征)` 才替换，被第三方插件（如 hashline 替换的 edit）
+    的实现保持英文。段落用 `match` 特征片段守卫——hashline/智谱在 Agent 作用域注册的
+    同名阴影段落（`tool:read`/`tool:edit`/`tool:web_search`）不含官方片段，保持原样，
+    不会被按名盖回内置旧版。`tools:sdk` 是 `replacements` 分段替换（`split().join()`
+    逐段精确匹配）：固定说明模板翻中文，生成的 SDK 代码声明保留英文，替换不命中即原样。
+    `plan:policy` 的文本来自 preset 配置（`{ zh, en }` 条目），仅原文
+    逐字一致才替换；section 文本为空（非计划模式）时跳过，绝不凭空注入。
 - **唯一包装管线（assemble-patch.ts）**：chinese-prompt 与 model-locale 都通过
   `registerAssembleRewriter` 注册改写器，由 `ensureAssemblePatch` 保证
   `systemPrompt.assemble` 只包一层。**禁止再直接对 `systemPrompt.assemble` 赋值**：
@@ -345,11 +355,41 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
 
 修改此模块后，`lib/model-locale.js` 与 `lib/chinese-prompt.js` 都要在运行进程里生效：
 HMR 失效时按 [`troubleshooting.md`](troubleshooting.md) 的强制重载通道加载新代码，
-并在会话日志（`request/header`）验证实际效果。自监视热重载只盯 5 个文件
+并在会话日志（`request/header`）验证实际效果。自监视热重载只盯 6 个文件
 （`lib/index.js`、`lib/session-delete.js`、`lib/trash.js`、`lib/model-locale.js`、
-`bin/dsh-zh.mjs`）：单独修改 `cordis-section-zh.ts`、`assemble-patch.ts` 等被依赖
-模块不会触发重载，需同时改动任一被监视文件（或走强制重载通道）。
+`lib/context-locale.js`、`bin/dsh-zh.mjs`）：单独修改 `cordis-section-zh.ts`、
+`assemble-patch.ts` 等被依赖模块不会触发重载，需同时改动任一被监视文件
+（或走强制重载通道）。
 
+
+### 上下文注入中文化（context-locale）
+
+`src/lib/context-locale.ts` 维护开关 `zhContextInject`（与上述两开关共用 `dsh-zh` 命名空间
+与 regime 锁定，`regimeOf` 从 model-locale 导出共享同一张锁定表），覆盖两类注入面：
+
+- **runtime-context 正文**：通过共享 assemble 管线注册改写器，按 context 注册名
+  （`sandbox:policy` / `approval:policy` / `subagent:delegation`）把官方英文正文换成
+  中文（workspace-write 的动态路径用正则提取拼入）。改写发生在渲染前，快照投影
+  两次渲染得到同一中文文本，`RuntimeContextProjection` 的 retained 比较稳定、不重复注入。
+- **注入消息**：`agent/pre-step` 监听在 decision.messages append 进会话之前做行级模板
+  替换（整行锚定正则 + 捕获组重建动态值），按 source 白名单（`agent-instructions` /
+  `skill-catalog` / `user-approval` / `compact` / `@deepseek-ai/dsh-system-prompt`）识别
+  官方注入；source 与 id 原样保留——agent-instructions 的基线/变更去重、skill 目录
+digest、runtime-context 投影归属全部由 source 驱动。
+
+**链序是本模块的生死线**：Cordis waterfall **先注册的监听器在外层**。zh_pro 晚于核心
+注入器注册，默认落在最内层——其 `next()` 直达 executor，官方注入发生在更外层，
+翻译器套不住（实测 persona（assemble 路径）中文而注入消息仍英文即此因）。必须以
+`{ prepend: true }` 注册移到链头：先执行，`next()` 返回的 decision 已含核心注入器的
+英文消息，翻译后返回。`verify-cli.mts` 的 `makePreStepDispatcher` 忠实模拟该顺序，
+并以「内层 fake 注入器追加的消息也被翻译」作为链序回归。
+
+**头行翻译的替换代价**：快照头行（`Current runtime context. …` 及 CLEARED 变体）由
+agent-loop 硬编码拼接，官方渲染侧永远是英文；按用户需求在行级规则中翻译它，代价是
+投影比较每步失配、每步注入一条替换快照（surface 替换语义，模型输入不膨胀，会话
+日志每步 +1 条快照事件）。tmux-context 快照同理且为 per-turn 重注入，不翻。
+
+修改本模块后同样要求 lib/context-locale.js 在运行进程里生效（见上文热重载说明）。
 ## CLI 规则
 
 `src/bin/dsh-zh.mts` 编译生成的 `bin/dsh-zh.mjs` 优先直接运行 profile store 内 bundled `dsh`。
