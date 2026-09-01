@@ -90,9 +90,25 @@ profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢
 2026-09-01 实测（dsh web 长跑进程，bundle 行在线）：上述三条热通道（自监视 watcher、
 动态插件 disabled 往返、动态插件 `hmr.stashed.add` + `partialReload`）**全部未能把新构建
 装入当前进程**，但插件自身始终存活（`/dsh-zh/api/service-monitor` 探活正常、未停在
-禁用态）。验证是否装入新代码不要凭日志：新开会话（或子代理）后解压其
+禁用态）。`loader.update`/`remove`/`reload`/`add` 在运行版上均不可用或无法解析条目；
+`hmr.partialReload` 需要 loadCache 里的旧 job 与 registry 里的旧 runtime，任一被清都进不了
+重载队列。验证是否装入新代码不要凭日志：新开会话（或子代理）后解压其
 `session.jsonl.zstd`（zstd 多帧，按帧魔数 0x28B52FFD 分段解压）看注入消息文本。
-此场景下按工作区规则不重启进程，新构建由下次自然重启的 bundle 行从磁盘加载生效。
+
+#### 可用的强制重装通道（2026-09-01 晚间实测成功）
+
+经动态 Cordis 插件（受限环境 `ctx.get('loader')` 可用）对目标 bundle 条目执行三步：
+
+1. 清 `loader.internal.loadCache` 中本包 realpath 的键（`Map.prototype.delete`；Node 24
+   的实例 `.delete()` 只置空类型槽不删条目）；
+2. `entry.fiber.dispose()`（`entry` 从 `loader.entries()` 按 `options.id`/`options.name` 取；
+   此时条目仍在 entries 列表，但主机半边下线、探活 404）；
+3. `entry.init()`——`Entry.init()` 会经 `tree.import` → `internal.import` 重新导入：缓存已清
+   故从磁盘读取**新构建**并启动新 Fiber（探活恢复 200）。
+
+副作用：重建 Fiber 会丢失进程内存态——`model-locale` 的 regime 锁定表被清空，所有已开始
+会话（含当前会话）按老会话规则锁 en、中文注入停用；新会话恢复 zh。settings/监督器等随
+Fiber 重新装配。此通道适用于任意 bundle 行插件（hashline/智谱同理）。
 
 **验收注入中文化必须用全新会话**：`subagent_fork` 的子会话继承父对话全部历史
 （含 `assistant/message`），regime 按设计锁定 en，注入不翻译是正确行为——用它验收会
