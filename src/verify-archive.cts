@@ -352,31 +352,36 @@ function syncRejected(error) {
 }
 
 // ---------- mock ctx / services ----------
+// 会话摘要表（模块级可变：新用例预置已删除驻留/对照组会话）。
+const sessionsById = {
+  'a1': { id: 'a1', displayTitle: '归档会话1', updatedAt: MOCK_NOW - 86400000 },
+  'a2': { id: 'a2', displayTitle: '归档会话2', updatedAt: MOCK_NOW - 172800000 },
+  'a3': { id: 'a3', displayTitle: '归档会话3', updatedAt: MOCK_NOW - 259200000 },
+  'a4': { id: 'a4', displayTitle: '归档会话4', updatedAt: MOCK_NOW - 345600000 },
+  'a5': { id: 'a5', displayTitle: '归档会话5', updatedAt: MOCK_NOW - 432000000 },
+  'a6': { id: 'a6', displayTitle: '归档会话6', updatedAt: MOCK_NOW - 518400000 },
+  'a7': { id: 'a7', displayTitle: '归档会话7', updatedAt: MOCK_NOW - 604800000 },
+  'a8': { id: 'a8', displayTitle: '归档会话8', updatedAt: MOCK_NOW - 648000000 },
+  'a9': { id: 'a9', displayTitle: '归档会话2', updatedAt: MOCK_NOW - 691200000 },
+  'a10': { id: 'a10', displayTitle: '归档会话10', updatedAt: MOCK_NOW - 734400000 },
+  'a11': { id: 'a11', displayTitle: '归档会话11', updatedAt: MOCK_NOW - 777600000 },
+  'a12': { id: 'a12', displayTitle: '归档会话12', updatedAt: MOCK_NOW - 820800000 },
+  'u1': { id: 'u1', displayTitle: '未分组归档', updatedAt: MOCK_NOW - 700000000 },
+  // 已删除但驻留内存的会话（回归：删除后 id 仍留在归档集合，归档视图
+  // 必须按主机已删除集合把它排除）与未删除的对照组。
+  'dead1': { id: 'dead1', displayTitle: '已删除驻留', updatedAt: MOCK_NOW - 500000000 },
+  'dead2': { id: 'dead2', displayTitle: '未删除对照', updatedAt: MOCK_NOW - 510000000 },
+  // 恢复后官方列表永不可见的两类：不应出现在归档视图。
+  'sub1': { id: 'sub1', displayTitle: '子代理归档', updatedAt: MOCK_NOW - 800000000, origin: 'subagent' },
+  'blank1': { id: 'blank1', displayTitle: '', updatedAt: MOCK_NOW - 810000000, blank: true },
+}
 const sessionsService = {
   list: {
     getSnapshot() {
       return {
         current: undefined,
-        byId: {
-          'a1': { id: 'a1', displayTitle: '归档会话1', updatedAt: MOCK_NOW - 86400000 },
-          'a2': { id: 'a2', displayTitle: '归档会话2', updatedAt: MOCK_NOW - 172800000 },
-          'a3': { id: 'a3', displayTitle: '归档会话3', updatedAt: MOCK_NOW - 259200000 },
-          'a4': { id: 'a4', displayTitle: '归档会话4', updatedAt: MOCK_NOW - 345600000 },
-          'a5': { id: 'a5', displayTitle: '归档会话5', updatedAt: MOCK_NOW - 432000000 },
-          'a6': { id: 'a6', displayTitle: '归档会话6', updatedAt: MOCK_NOW - 518400000 },
-          'a7': { id: 'a7', displayTitle: '归档会话7', updatedAt: MOCK_NOW - 604800000 },
-          'a8': { id: 'a8', displayTitle: '归档会话8', updatedAt: MOCK_NOW - 648000000 },
-          'a9': { id: 'a9', displayTitle: '归档会话2', updatedAt: MOCK_NOW - 691200000 },
-          'a10': { id: 'a10', displayTitle: '归档会话10', updatedAt: MOCK_NOW - 734400000 },
-          'a11': { id: 'a11', displayTitle: '归档会话11', updatedAt: MOCK_NOW - 777600000 },
-          'a12': { id: 'a12', displayTitle: '归档会话12', updatedAt: MOCK_NOW - 820800000 },
-          'u1': { id: 'u1', displayTitle: '未分组归档', updatedAt: MOCK_NOW - 700000000 },
-          // 恢复后官方列表永不可见的两类：不应出现在归档视图。
-          'sub1': { id: 'sub1', displayTitle: '子代理归档', updatedAt: MOCK_NOW - 800000000, origin: 'subagent' },
-          'blank1': { id: 'blank1', displayTitle: '', updatedAt: MOCK_NOW - 810000000, blank: true },
-        },
-        ids: ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9', 'a10', 'a11', 'a12', 'u1', 'sub1', 'blank1'],
-        phase: 'ready',
+          byId: sessionsById,
+          ids: Object.keys(sessionsById),
       }
     },
     subscribe() { return function () {} },
@@ -459,22 +464,46 @@ const localeService = {
 }
 let openedSessions = []
 let fetchCalls = []
+// 已删除会话集合（模拟主机进程内 deletedSessionIds ∪ 回收站清单）。
+const mockDeletedIds = new Set()
 // fetch 返回同步 thenable（立即 resolve），测试可同步断言完整请求链。
 globalThis.fetch = function (url, opts) {
   fetchCalls.push({ url: url, opts: opts })
-  // 模拟主机行为：取消归档只移出归档集合（账本席位保留，恢复原位）；
-  // 删除同时移出归档集合与账本（无恢复位）。
-  if (url === '/dsh-zh/api/session.unarchive' || url === '/dsh-zh/api/session.delete') {
+  if (url === '/dsh-zh/api/session.delete') {
+    // 模拟真实主机行为：日志移入回收站 + 从工作区账本移除（无恢复位）；
+    // 对仍驻留内存的会话，删除后加入官方归档集合隐藏（上游无按 id 卸载
+    // live agent 的 API）——因此**已删除的 id 会留在归档集合里**，归档
+    // 视图必须靠已删除集合过滤，而不能指望集合里没有它；响应全量返回
+    // 最新已删除集合。
     try {
       const body = JSON.parse(opts.body)
-      const removeFromLedger = url === '/dsh-zh/api/session.delete'
+      mockDeletedIds.add(body.sessionId)
+      wsSnapshot = {
+        ...wsSnapshot,
+        archivedSessionIds: wsSnapshot.archivedSessionIds.includes(body.sessionId)
+          ? wsSnapshot.archivedSessionIds
+          : [...wsSnapshot.archivedSessionIds, body.sessionId],
+        items: wsSnapshot.items.map(function (it) {
+          return { ...it, sessionIds: it.sessionIds.filter(function (id) { return id !== body.sessionId }) }
+        }),
+      }
+    } catch { /* 忽略 */ }
+    return syncPromise({
+      json: function () { return syncPromise({ ok: true, value: { deletedIds: Array.from(mockDeletedIds) } }) },
+    })
+  }
+  if (url === '/dsh-zh/api/session.deleted') {
+    return syncPromise({
+      json: function () { return syncPromise({ ok: true, value: { ids: Array.from(mockDeletedIds) } }) },
+    })
+  }
+  // 模拟主机行为：取消归档只移出归档集合（账本席位保留，恢复原位）。
+  if (url === '/dsh-zh/api/session.unarchive') {
+    try {
+      const body = JSON.parse(opts.body)
       wsSnapshot = {
         ...wsSnapshot,
         archivedSessionIds: wsSnapshot.archivedSessionIds.filter(id => id !== body.sessionId),
-        items: wsSnapshot.items.map(function (it) {
-          if (!removeFromLedger) return it
-          return { ...it, sessionIds: it.sessionIds.filter(function (id) { return id !== body.sessionId }) }
-        }),
       }
     } catch { /* 忽略 */ }
   }
@@ -765,6 +794,34 @@ check(ungroupedRowTitle !== null && ungroupedRowTitle.textContent === '未分组
 ungroupedArchiveBtn.click('click')
 check(panelOf(), null, '未分组归档视图可再点退出')
 
+  // 8a) 已删除驻留会话不进入归档视图（回归：批量删除后「未分组」的
+  // 归档会话里不应看到已删除项）。dead1 曾被打开过（byId 有摘要，模拟
+  // 驻留内存）、已从账本移除（未分组桶）且删除后仍留在归档集合（主机
+  // 删除驻留会话时会归档隐藏）；归档视图必须按主机已删除集合把它排除，
+  // dead2 对照组正常显示。
+  wsSnapshot = {
+    items: [{ workspaceId: 'ws-1', title: '项目A', path: '/proj/a', sessionIds: ['s1'] }],
+    archivedSessionIds: ['dead1', 'dead2', 'u1'],
+    phase: 'ready',
+  }
+  mockDeletedIds.clear()
+  mockDeletedIds.add('dead1')
+  ungroupedArchiveBtn.click('click')
+  check(panelOf() !== null, true, '已删除过滤 进入未分组归档视图')
+  const filteredRows = panelRowsOf()
+  check(filteredRows.length, 2, '已删除驻留会话被过滤，仅剩 dead2 与 u1')
+  check(filteredRows.some(r => r.getAttribute('data-dsh-zh-archive-id') === 'dead1'), false, '已删除的 dead1 不显示')
+  check(filteredRows.some(r => r.getAttribute('data-dsh-zh-archive-id') === 'dead2'), true, '未删除的 dead2 正常显示')
+  check(fetchCalls.some(c => c.url === '/dsh-zh/api/session.deleted'), true, '进入归档视图拉取已删除集合')
+  ungroupedArchiveBtn.click('click')
+  check(panelOf(), null, '已删除过滤 退出归档视图')
+  // dead1 从已删除集合移除（如恢复）后重新可见：过滤只针对已删除集合。
+  mockDeletedIds.clear()
+  ungroupedArchiveBtn.click('click')
+  check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'dead1'), true, '不在已删除集合时恢复显示（对照组反向验证）')
+  ungroupedArchiveBtn.click('click')
+  check(panelOf(), null, '已删除过滤 反向验证后退出')
+
 // 9) 空归档集合 → 空状态
 wsSnapshot = {
   items: [{ workspaceId: 'ws-1', title: '项目A', path: '/proj/a', sessionIds: ['s1'] }],
@@ -1029,6 +1086,9 @@ check(deleteOnMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]').length
 // 归档 / 批量删除」，执行后批量路由正确、多选清空、行消失。
 // （归档集合在 10d 后为空：先为 ws-1 补充归档会话；并清掉 11d 段残留的
 // 官方行勾选，从干净的多选状态开始。）
+  // （另外清空已删除集合：11d 批量删除的 a1 已被新 mock 记入，不清会让
+  // 本段 a1 归档行被已删除过滤隐藏。）
+  mockDeletedIds.clear()
 settingsStoreUnderTest.set('batchOpsEnabled', false)
 settingsStoreUnderTest.set('batchOpsEnabled', true)
 pluginExports.sessionBatch.pass()
@@ -1168,6 +1228,8 @@ check(panelOf(), null, '归档多选 退出归档视图')
 
 // 11f) 工作区行「全选」按钮：点击勾选该工作区当前视图下所有可勾选的会话，
 // 再点取消勾选（toggle）；会话多选开关关闭时按钮移除、开启时恢复。
+  // （清空已删除集合：11e 批量删除的 a2 已被记入，不清会让 a2 行被过滤。）
+  mockDeletedIds.clear()
 wsSnapshot = {
   items: [{ workspaceId: 'ws-1', title: '项目A', path: '/proj/a', sessionIds: ['a1', 'a2', 'a3'] }],
   archivedSessionIds: ['a1', 'a2', 'a3'],

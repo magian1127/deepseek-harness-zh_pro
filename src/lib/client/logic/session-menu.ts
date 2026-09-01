@@ -33,6 +33,39 @@ const DELETE_ITEM_HINTS = {
 const BATCH_DELETE_ITEM_LABELS = { zh: '批量删除（{n}）', en: 'Delete selected ({n})' }
 const BATCH_ARCHIVE_ITEM_LABELS = { zh: '批量归档（{n}）', en: 'Archive selected ({n})' }
 
+// ---------- 已删除会话 id 缓存（归档视图过滤用） ----------
+// 上游没有按 id 卸载 live agent 的公开 API：删除「曾打开过、仍驻留内存」
+// 的会话时，主机会把它加入官方归档集合（archivedSessionIds）来从主列表
+// 隐藏；而归档视图按归档集合渲染，若不排除会把已删除会话当归档行显示
+// （表现为「批量删除后，未分组的归档会话里还看得到」）。删除路由每次
+// 成功都全量返回最新已删除集合，这里同步缓存；归档视图打开时再向主机
+// 拉一次兑底（覆盖本页加载前或其它入口的删除）。
+const deletedSessionIds = new Set()
+const applyDeletedSessionIds = function (ids) {
+  if (!Array.isArray(ids)) return
+  deletedSessionIds.clear()
+  for (const id of ids) deletedSessionIds.add(String(id))
+}
+const fetchDeletedSessionIds = function () {
+  return fetch('/dsh-zh/api/session.deleted', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  }).then(function (response) {
+    return response.json().catch(function () { return null })
+  }).then(function (parsed) {
+    if (parsed !== null && parsed.ok === true && parsed.value !== null && typeof parsed.value === 'object'
+      && Array.isArray(parsed.value.ids)) {
+      applyDeletedSessionIds(parsed.value.ids)
+    }
+  }).catch(function () { /* 拉取失败时保持旧缓存 */ })
+}
+const syncDeletedSessionIdsFromValue = function (value) {
+  if (value !== null && typeof value === 'object' && Array.isArray(value.deletedIds)) {
+    applyDeletedSessionIds(value.deletedIds)
+  }
+}
+
 // 确认框与提示条文案（按界面语言）。
 const CONFIRM_TEXTS = {
   zh: {
@@ -498,7 +531,8 @@ function installSessionMenu(ctx) {
           showToast(copy.failed.replace('{message}', String(message)), 5000)
           return
         }
-        showToast(copy.deleted, 4000)
+          syncDeletedSessionIdsFromValue(parsed.value)
+          showToast(copy.deleted, 4000)
         // 删除的是当前正在查看的会话 → 自动跳转到新会话页面（clear() 清除
         // 当前选择，布局回到无会话空状态 / 新会话界面）。
         if (currentSessionId !== null && currentSessionId === sessionId) {
@@ -572,7 +606,8 @@ function installSessionMenu(ctx) {
               ? parsed.error.message : 'HTTP ?'
             return { id: id, ok: false, message: String(message) }
           }
-          return { id: id, ok: true }
+            syncDeletedSessionIdsFromValue(parsed.value)
+            return { id: id, ok: true }
         }).catch(function (error) {
           return { id: id, ok: false, message: error instanceof Error ? error.message : String(error) }
         })

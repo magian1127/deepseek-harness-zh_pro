@@ -93,6 +93,70 @@ function createSessionTrash() {
 
 export const sessionTrash = createSessionTrash()
 
+// 已删除会话 id 集合（进程内存）：deleteSession 成功即记入（无论日志是否
+// 进了回收站——locate 失败的逻辑删除同样算已删除），restoreSession 成功
+// 移除。归档视图用 `/dsh-zh/api/session.deleted` 拉取它，把「已删除但
+// 驻留内存」的会话从归档集合里排除：上游没有按 id 卸载 live agent 的
+// 公开 API，删除驻留会话时必须把它加入官方归档集合才能从主列表隐藏，
+// 若不反向排除，归档视图会把已删除会话当归档行显示（2026-09 批量删除
+// 回归：删除的会话出现在「未分组」的归档视图里）。
+const deletedSessionIds = new Set<string>()
+
+/**
+ * 归档视图可见的「已删除」全集：显式集合 ∪ 回收站清单（进程生命周期内
+ * 的全部删除，包括插件挂载早于本次修复时已记入回收站的项）。
+ */
+function collectDeletedSessionIds(): string[] {
+  const ids = new Set(deletedSessionIds)
+  for (const item of sessionTrash.list()) ids.add(item.sessionId)
+  return [...ids]
+}
+
+// 惰性对账标记：session.deleted 首次查询时执行一次「归档集合 × 日志存在性」
+// 对账（见 pruneDeletedSessionIds）。
+let deletedSetPruned = false
+
+/**
+ * 自愈对账：Fiber 重建（热更）会丢失进程内存态——sessionTrash 与
+ * deletedSessionIds 清空，但宿主进程里已删除会话的驻留摘要仍在（sessions
+ * 服务不随本插件 Fiber 重建），归档视图会重新显示死会话。首次查询
+ * session.deleted 时对官方归档集合逐项 readRaw：活归档会话的日志必然在
+ * 磁盘（归档不动日志）；readRaw 为空 = 日志已被删除移走 → 死 id，恢复进
+ * deletedSessionIds。历史残留的死 id（早于本修复的删除）同样被识别。
+ * 对账失败不影响响应（保持现状）。
+ */
+async function pruneDeletedSessionIds(deps: DeleteDeps): Promise<void> {
+  if (deletedSetPruned) return
+  deletedSetPruned = true
+  const persistence = deps.sessionPersistence
+  if (persistence === undefined || typeof persistence.readRaw !== 'function') return
+  const storage = deps.storageDomain
+  if (storage === undefined || typeof storage.get !== 'function') return
+  let archived: readonly string[] = []
+  try {
+    const domain = storage.get('workspace') as { global?: unknown } | undefined
+    const global = domain !== undefined && domain !== null ? domain.global : undefined
+    const state = global !== undefined && global !== null && typeof (global as { get?: unknown }).get === 'function'
+      ? (global as { get(): { archivedSessionIds?: readonly string[] } | undefined }).get()
+      : undefined
+    if (state !== undefined && state !== null && Array.isArray(state.archivedSessionIds)) {
+      archived = state.archivedSessionIds.map(String)
+    }
+  } catch {
+    return
+  }
+  for (const id of archived) {
+    if (deletedSessionIds.has(id)) continue
+    let raw: unknown
+    try {
+      raw = await persistence.readRaw(id)
+    } catch {
+      raw = undefined
+    }
+    if (raw === undefined || raw === null) deletedSessionIds.add(id)
+  }
+}
+
 // ---------- 信任围栏（与 /api 网关同策略：Host 回环 + 同源） ----------
 function isLoopbackHostname(hostname: string): boolean {
   if (hostname === 'localhost' || hostname === '[::1]') return true
@@ -385,6 +449,7 @@ export async function deleteSession(
     }
   }
 
+  deletedSessionIds.add(sessionId)
   return {
     ok: true,
     trashed: dirRemoved && options.trash,
@@ -428,6 +493,8 @@ export async function restoreSession(
   // 让会话重新出现在列表。
   await unarchiveSession(deps, entry.sessionId)
   sessionTrash.forget(entry.sessionId)
+  deletedSessionIds.delete(entry.sessionId)
+  return { ok: true }
   return { ok: true }
 }
 
@@ -571,7 +638,15 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
           }
           return
         }
-        if (pathname === '/dsh-zh/api/session.unarchive') {
+          if (pathname === '/dsh-zh/api/session.deleted') {
+            // 已删除会话集合（归档视图过滤用）：deleteSession 成功即记入，
+            // 恢复成功移除；先做一次自愈对账（热更丢内存态时从归档集合 ×
+            // 日志存在性恢复死 id），再并入回收站清单。
+            await pruneDeletedSessionIds(deps())
+            writeJson(res, 200, { ok: true, value: { ids: collectDeletedSessionIds() } })
+            return
+          }
+          if (pathname === '/dsh-zh/api/session.unarchive') {
           const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
           if (!isValidSessionId(sessionId)) {
             writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'invalid sessionId' } })
@@ -602,7 +677,7 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
             writeJson(res, 400, { ok: false, error: { code: result.code, message: result.message } })
             return
           }
-          writeJson(res, 200, { ok: true, value: result })
+            writeJson(res, 200, { ok: true, value: { ...result, deletedIds: collectDeletedSessionIds() } })
           return
         }
         if (pathname === '/dsh-zh/api/trash.list') {

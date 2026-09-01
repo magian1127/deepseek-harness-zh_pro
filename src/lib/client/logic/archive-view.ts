@@ -449,7 +449,11 @@ function runArchiveView(ctx) {
       return memberOf
     }
     // 单行构造：summary 缺失或不可展示（子代理/blank）时返回 null。
-    const rowOf = function (id, byId) {
+      // 已删除（含删除后仍驻留内存）的会话不显示：主机删除流程会把驻留
+      // 会话加入归档集合隐藏（上游无按 id 卸载 live agent 的 API），这里
+      // 必须反向排除，否则删除的会话在归档视图里「复活」。
+      const rowOf = function (id, byId) {
+        if (deletedSessionIds.has(String(id))) return null
       const summary = byId !== null && typeof byId === 'object' ? byId[String(id)] : undefined
       if (summary === undefined || summary === null) return null
       if (summary.origin === 'subagent' || summary.blank === true) return null
@@ -600,6 +604,15 @@ function runArchiveView(ctx) {
         }, 60000)
       }
       syncArchivedSection()
+        // 拉取最新已删除集合（本页缓存可能滞后：页面加载前的删除、或
+        // 其它入口的删除未同步到本页）。返回后重渲染：orderedIds 快照行
+        // 也会被 rowOf 的已删除过滤剔除。syncPromise 同步链在测试环境立即
+        // 完成；真实环境在微任务后重渲染。
+        void fetchDeletedSessionIds().then(function () {
+          if (activeTarget === null) return
+          sectionRenderKey = null
+          renderSectionContent()
+        })
     }
     const leaveArchive = function () {
       if (activeTarget === null) return
@@ -895,7 +908,8 @@ function runArchiveView(ctx) {
           showToast(archiveT('delete.failed', { message: String(message) }), 5000)
           return false
         }
-        if (silent !== true) showToast(archiveT('delete.done'), 4000)
+          syncDeletedSessionIdsFromValue(parsed.value)
+          if (silent !== true) showToast(archiveT('delete.done'), 4000)
         dropRow(row.id)
         if (currentSessionId !== null && currentSessionId === row.id) {
           try {

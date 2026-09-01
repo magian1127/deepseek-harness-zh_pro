@@ -110,6 +110,14 @@ profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢
 会话（含当前会话）按老会话规则锁 en、中文注入停用；新会话恢复 zh。settings/监督器等随
 Fiber 重新装配。此通道适用于任意 bundle 行插件（hashline/智谱同理）。
 
+另一个副作用（2026-09-02 实测）：第 2 步的外部 `fiber.dispose()` 会命中 loader 的
+self-dispose 钩子（`vendor/loader/src/index.ts` case 7），把 `entry.options.disabled`
+置 `true`；第 3 步 `init()` 重启 fiber 后该标志残留，设置页「插件列表」显示
+「已停用」（pluginInventory 按它计算 enabled，而 fiber 实际 active、探活 200）。
+复位：动态插件把 `entry.options.disabled = false`（fiber 已 active 无需 init；
+pluginInventory 每次直读 `loader.entries()`，重开插件列表即恢复「已启用」）。
+建议把复位并入重装插件的第 3 步之后。
+
 **验收注入中文化必须用全新会话**：`subagent_fork` 的子会话继承父对话全部历史
 （含 `assistant/message`），regime 按设计锁定 en，注入不翻译是正确行为——用它验收会
 得到假阴性（2026-09-01 连续五轮误判；而重启后首次用全新 subagent 验收即全部命中）。
