@@ -27,6 +27,7 @@ const UPSTREAM = {
     'message.tokensPerSecond': '{tps} tok/s',
     // 上游 0.1.2-alpha.2 新增：回答末尾用量/耗时统计（TurnUsagePanel）。
     'message.turnUsage.count': '{count} tok',
+    'message.turnUsage.consumed': '用量 {total}',
     'message.turnTime.ttft': '首 token 用时（TTFT）',
     'message.retry.status': '{label}（{retry}/{maximum}） · {seconds}s',
     'message.turnProcess.subagents.one': '{count} 个 subagent',
@@ -956,6 +957,10 @@ check(locale.translate('chat', 'stats.ttftAverage', { duration: '2.4s' }), '首�
 check(locale.translate('chat', 'stats.tokens', { input: '12.2K', output: '40.9M' }), '输入 1.22万 词元 · 输出 4090万 词元', 'translate stats.tokens')
 check(locale.translate('chat', 'stats.tokens', { input: '8K', output: '46.7M' }), '输入 0.8万 词元 · 输出 4670万 词元', 'translate stats.tokens 46.7M')
 check(locale.translate('chat', 'stats.tokens', { input: '5K', output: '123.4M' }), '输入 0.5万 词元 · 输出 1.234亿 词元', 'translate stats.tokens 123.4M')
+check(locale.translate('chat', 'message.turnUsage.count', { count: '2.4M' }), '240万 词元', 'translate message.turnUsage.count 2.4M')
+check(locale.translate('chat', 'message.turnUsage.count', { count: '15.8K' }), '1.58万 词元', 'translate message.turnUsage.count 15.8K')
+check(locale.translate('chat', 'message.turnUsage.count', { count: '2,400,000' }), '2,400,000 词元', 'translate message.turnUsage.count 精确计数保持原样')
+check(locale.translate('chat', 'message.turnUsage.consumed', { total: '240万 词元' }), '用量 240万 词元', 'translate message.turnUsage.consumed')
 check(locale.translate('settings.models', 'deleteDescriptionWithCredential', { provider: 'openai' }), '删除 openai 会移除其配置和存储的接口密钥。', 'translate deleteDescriptionWithCredential')
 
 // 英文界面必须原样

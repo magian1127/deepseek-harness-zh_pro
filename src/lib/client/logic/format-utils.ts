@@ -142,5 +142,8 @@ const PARAM_TRANSFORMS = {
     'stats.toolCall': { duration: formatEnDurationToZh },
     'stats.ttftAverage': { duration: formatEnDurationToZh },
     'stats.tokens': { input: formatCompactNumberToZh, output: formatCompactNumberToZh },
+    // TurnUsagePanel 用量 pill：{count} 携带 K/M 缩写（如 2.4M/15.8K）；
+    // 详细面板的精确计数（2,400,000，带千分位）不匹配 K/M 正则，原样保留。
+    'message.turnUsage.count': { count: formatCompactNumberToZh },
   },
 }
