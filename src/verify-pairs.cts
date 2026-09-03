@@ -1,6 +1,7 @@
 // 一次性校验：把 lib/client.js 装进 mock locale，用上游真实 zh 值核对全部补丁键的输出。
 'use strict'
 const fs = require('fs')
+const { execFileSync } = require('child_process')
 
 // ---------- 上游 zh 词典（摘自 checkout packages/client/**/locales.ts） ----------
 const UPSTREAM = {
@@ -1048,6 +1049,18 @@ check(JSON.stringify(serviceMonitorUnderTest.parseServiceAddress('127.0.0.1:81')
 check(JSON.stringify(serviceMonitorUnderTest.parseServiceAddress('localhost:3000')), '{"host":"localhost","port":3000}', '服务监控 地址解析 localhost')
 check(JSON.stringify(serviceMonitorUnderTest.parseServiceAddress('[::1]:8080')), '{"host":"[::1]","port":8080}', '服务监控 地址解析 IPv6')
 check(serviceMonitorUnderTest.parseServiceAddress('not an address'), null, '服务监控 地址解析 非法输入返回 null')
+
+// ---- host 进程命令行脱敏（host 为 ESM，批量子进程调用编译后的导出） ----
+const cmdlineCases = [
+  ['--api-key=AbCdEf0123456789XYZ', '--api-key=***'],
+  ['--jwt eyJhbGciOiJIUzI1NiJ9.payload_signature_value.signature', '--jwt ***'],
+  ['Authorization Bearer abcdefghijklmnopqrstuvwxyz012345', 'Authorization Bearer ***'],
+  ['node server.js --port 3000 --verbose', 'node server.js --port 3000 --verbose'],
+  ['node app.js --api-key=secretvalue123456 normal abcdefghijklmnopqrstuvwxyz012345', 'node app.js --api-key=*** normal ***'],
+]
+const cmdlineScript = "import { sanitizeCmdline } from './lib/service-monitor.js'; const cases = JSON.parse(process.argv[1]); process.stdout.write(JSON.stringify(cases.map(([raw]) => sanitizeCmdline(raw))))"
+const cmdlineActual = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', cmdlineScript, JSON.stringify(cmdlineCases)], { cwd: __dirname }).toString())
+for (let i = 0; i < cmdlineCases.length; i += 1) check(cmdlineActual[i], cmdlineCases[i][1], '服务监控 命令行脱敏 ' + (i + 1))
 
 const smStubCopy = {
   autoTitle: '{addr} · 监听 {time}',

@@ -90,6 +90,19 @@ function truncateField(value: string, max: number): string {
   return text.length > max ? text.slice(0, max - 1) + '…' : text
 }
 
+/** 进程命令行脱敏：保留参数结构，但不让凭据进入归属快照。 */
+export function sanitizeCmdline(raw: string): string {
+  let text = raw.trim()
+  const secret = '(?:[A-Za-z0-9_-]{12,}(?:\\.[A-Za-z0-9_-]+){2}|[A-Za-z0-9_-]{12,})'
+  // 处理 --key=value、-key value 与 KEY=value 三种常见凭据写法。
+  text = text.replace(new RegExp(`(^|\\s)(--?[A-Za-z0-9][A-Za-z0-9_-]*|[A-Za-z][A-Za-z0-9_-]*)=(${secret})(?=$|\\s)`, 'g'), '$1$2=***')
+  text = text.replace(new RegExp(`(^|\\s)(--?[A-Za-z0-9][A-Za-z0-9_-]*|[A-Za-z][A-Za-z0-9_-]*)\\s+(${secret})(?=$|\\s)`, 'g'), '$1$2 ***')
+  text = text.replace(/(Bearer)\s+[^\s]+/gi, '$1 ***')
+  // 仅匹配以字母数字开头的独立长串，避免把 --long-option 当作凭据。
+  text = text.replace(/(?<![A-Za-z0-9_-])[A-Za-z0-9][A-Za-z0-9_-]{19,}(?![A-Za-z0-9_-])/g, '***')
+  return text
+}
+
 /** 可归属的目标主机：仅 localhost / IPv4 字面量 / 含冒号（IPv6）。域名不匹配本机监听。 */
 export function isAttributableHost(host: string): boolean {
   const text = String(host).trim().toLowerCase()
@@ -191,6 +204,15 @@ const PROBE_TIMEOUT_MS = 1200
 /** 单次请求最多接受的自定义监控项数。 */
 const PROBE_MAX_TARGETS = 100
 
+// 仅接受明确的环回字面量，避免探活 API 被用作公网扫描器。
+function isLoopbackLiteral(host: string): boolean {
+  const normalized = host.toLowerCase()
+  if (normalized === 'localhost' || normalized === '::1' || normalized === '[::1]') return true
+  const octets = normalized.split('.')
+  if (octets.length !== 4 || octets[0] !== '127') return false
+  return octets.every((octet) => /^\d{1,3}$/.test(octet) && Number.parseInt(octet, 10) <= 255)
+}
+
 function normalizeProbeTarget(item: unknown): ProbeTarget | null {
   if (item === null || typeof item !== 'object') return null
   const record = item as Record<string, unknown>
@@ -199,6 +221,7 @@ function normalizeProbeTarget(item: unknown): ProbeTarget | null {
   const port = typeof record.port === 'number' && Number.isFinite(record.port) ? Math.round(record.port) : 0
   if (host === '' || port < 1 || port > 65535) return null
   if (/[\s/\\]/.test(host)) return null
+  if (!isLoopbackLiteral(host)) throw new Error('服务监控仅支持本机地址')
   return { name, host, port }
 }
 
@@ -224,7 +247,7 @@ function probeOne(target: ProbeTarget): Promise<ProbeResult> {
   })
 }
 
-/** 对请求携带的自定义监控项逐个 TCP 连接探活（结构与字段严格校验）。 */
+/** 对请求携带的自定义监控项逐个 TCP 连接探活（仅允许环回字面量）。 */
 export async function probeTargets(raw: unknown): Promise<ProbeResult[]> {
   if (!Array.isArray(raw)) return []
   const targets: ProbeTarget[] = []
@@ -359,7 +382,7 @@ export function computeMonitoredEndpoints(
 
 /**
  * 目录打开命令（纯函数）：在文件管理器中定位进程文件。
- * win32 用 explorer /select（成功也返回码 1，调用方只把 spawn 失败当错误）；
+ * win32 用 explorer /select（成功也返回码 1，调用方允许该码）；
  * darwin 用 `open -R`；linux 用 xdg-open 打开所在目录。
  */
 export function revealCommandFor(platform: NodeJS.Platform, exePath: string): { file: string; args: string[] } {
@@ -510,7 +533,7 @@ function resolveWin32Process(pid: number): Promise<MonitorOwner | null> {
           pid,
           name: truncateField(typeof record.Name === 'string' ? record.Name : '', 120),
           path: truncateField(typeof record.ExecutablePath === 'string' ? record.ExecutablePath : '', 500),
-          cmdline: truncateField(typeof record.CommandLine === 'string' ? record.CommandLine : '', OWNER_CMDLINE_MAX),
+            cmdline: truncateField(sanitizeCmdline(typeof record.CommandLine === 'string' ? record.CommandLine : ''), OWNER_CMDLINE_MAX),
           via: 'process',
         }
       } catch {
@@ -536,7 +559,7 @@ async function resolvePosixProcess(platform: NodeJS.Platform, pid: number): Prom
       pid,
       name: truncateField(name, 120),
       path: truncateField(path, 500),
-      cmdline: truncateField(cmdline, OWNER_CMDLINE_MAX),
+        cmdline: truncateField(sanitizeCmdline(cmdline), OWNER_CMDLINE_MAX),
       via: 'process',
     }
   }
@@ -554,7 +577,7 @@ async function resolvePosixProcess(platform: NodeJS.Platform, pid: number): Prom
     pid,
     name: truncateField(basename(path), 120),
     path: truncateField(path, 500),
-    cmdline: truncateField(cmdline, OWNER_CMDLINE_MAX),
+      cmdline: truncateField(sanitizeCmdline(cmdline), OWNER_CMDLINE_MAX),
     via: 'process',
   }
 }
@@ -645,12 +668,26 @@ export async function openServiceOwnerDirectory(platform: NodeJS.Platform, rawAd
   return { path: exePath }
 }
 
-/** 运行 reveal 命令：exit 即成功（explorer.exe 成功也返回码 1），仅 spawn 失败报错。 */
+/** reveal 命令的非零退出码失败；explorer.exe 的退出码 1 是已知成功语义。 */
 function spawnRevealProcess(file: string, args: string[]): Promise<void> {
   return new Promise(function (resolve, reject) {
+    let settled = false
+    const fail = (error: Error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
     const child = execFile(file, args, { windowsHide: true, timeout: 8000 })
-    child.on('error', function (error) { reject(error) })
-    child.on('exit', function () { resolve() })
+    child.on('error', function (error) { fail(error) })
+    child.on('exit', function (code) {
+      if (settled) return
+      if (code === 0 || (file.toLowerCase() === 'explorer.exe' && code === 1)) {
+        settled = true
+        resolve()
+      } else {
+        fail(new Error(`打开服务目录失败（退出码 ${String(code)}）`))
+      }
+    })
     child.stdout?.resume()
     child.stderr?.resume()
   })

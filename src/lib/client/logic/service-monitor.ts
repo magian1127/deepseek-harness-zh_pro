@@ -668,6 +668,8 @@ function runServiceMonitor(ctx) {
   // ------- 轮询主机快照（setTimeout 自循环：间隔每轮读设置，即时生效） -------
   let pollTimer = null
   let polling = false
+  let disposed = false
+  let requestController = null
   const readIntervalSec = function () {
     const sec = typeof settingsStore !== 'undefined' && settingsStore !== null
       ? settingsStore.getSnapshot().serviceMonitorIntervalSec
@@ -676,23 +678,29 @@ function runServiceMonitor(ctx) {
     return Math.max(SERVICE_INTERVAL_MIN_SEC, Math.min(SERVICE_INTERVAL_MAX_SEC, Math.round(sec)))
   }
   const scheduleTick = function () {
-    if (pollTimer !== null) return
+    if (disposed || pollTimer !== null) return
     pollTimer = setTimeout(function () {
       pollTimer = null
+      if (disposed) return
       tick()
     }, readIntervalSec() * 1000)
   }
   const tick = function () {
+    if (disposed) return
     if (polling) { scheduleTick(); return }
     // 页面不可见时跳过本轮（回到前台后下一轮立即补上）。
     if (typeof document.hidden === 'boolean' && document.hidden) { scheduleTick(); return }
     polling = true
     const finish = function () {
+      if (disposed) return
       polling = false
+      requestController = null
       scheduleTick()
     }
     let pending = null
     try {
+      const controller = new AbortController()
+      requestController = controller
       const targets = (typeof settingsStore !== 'undefined' && settingsStore !== null
         && Array.isArray(settingsStore.getSnapshot().serviceMonitorTargets)
         ? settingsStore.getSnapshot().serviceMonitorTargets
@@ -705,6 +713,7 @@ function runServiceMonitor(ctx) {
         // intervalSec = 本页当前的刷新间隔：主机用它判定扫描缓存是否
         // 仍然新鲜（超过一个间隔才重扫，否则直接返回缓存结果）。
         body: JSON.stringify({ targets: targets, intervalSec: readIntervalSec() }),
+        signal: controller.signal,
       })
     } catch {
       // 旧运行时/异常环境：fetch 同步抛出时静默等下一轮。
@@ -712,16 +721,21 @@ function runServiceMonitor(ctx) {
       return
     }
     pending.then(function (response) {
+      if (disposed) return
       if (!response.ok) throw new Error('HTTP ' + response.status)
       return response.json()
     }).then(function (parsed) {
+      if (disposed) return
       if (parsed !== null && typeof parsed === 'object' && parsed.ok === true
         && parsed.value !== null && typeof parsed.value === 'object') {
         lastValue = parsed.value
         render(lastValue)
       }
       finish()
-    }).catch(function () { finish() })
+    }).catch(function () {
+      if (disposed) return
+      finish()
+    })
   }
 
   // ------- 启动 -------
@@ -732,7 +746,12 @@ function runServiceMonitor(ctx) {
   tick()
 
   return function () {
+    disposed = true
     if (pollTimer !== null) { clearTimeout(pollTimer); pollTimer = null }
+    if (requestController !== null) {
+      requestController.abort()
+      requestController = null
+    }
     if (keepAlive !== null) { keepAlive.disconnect() }
     if (railObserver !== null) { railObserver.disconnect(); railObserver = null }
     if (localeUnsubscribe !== null && typeof localeUnsubscribe === 'function') localeUnsubscribe()
@@ -752,4 +771,5 @@ function runServiceMonitor(ctx) {
     ownerStates.clear()
     lastValue = null
   }
+
 }
