@@ -26,7 +26,7 @@
 // 第三方包；所有异步错误原样上抛，由调用方决定失败语义。
 
 import { execFile } from 'node:child_process'
-import { access, cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { access, cp, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { homedir, platform, tmpdir } from 'node:os'
 
@@ -171,18 +171,38 @@ async function trashXdg(path: string): Promise<string> {
     suffix += 1
     targetName = `${name}.${suffix}`
   }
-  // 同卷 rename；跨卷复制后删除（rename 抛 EXDEV 时兜底）。
-  try {
-    await rename(path, join(filesDir, targetName))
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException | null)?.code !== 'EXDEV') throw error
-    await cp(path, join(filesDir, targetName), { recursive: true })
-    await rm(path, { recursive: true, force: true })
-  }
-  const deletedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
-  const info = `[Trash Info]\nPath=${escapeTrashPath(path)}\nDeletionDate=${deletedAt}\n`
-  await writeFile(join(infoDir, `${targetName}.trashinfo`), info, 'utf8')
-  return join(filesDir, targetName)
+    // 同卷 rename；跨卷时必须先完成副本和元数据落盘，再删除源。
+    try {
+      await rename(path, join(filesDir, targetName))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | null)?.code !== 'EXDEV') throw error
+      const target = join(filesDir, targetName)
+      const infoPath = join(infoDir, `${targetName}.trashinfo`)
+      try {
+        await cp(path, target, { recursive: true })
+        const deletedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+        const info = `[Trash Info]\nPath=${escapeTrashPath(path)}\nDeletionDate=${deletedAt}\n`
+        const handle = await open(infoPath, 'w')
+        try {
+          await handle.writeFile(info, 'utf8')
+          await handle.sync()
+        } finally {
+          await handle.close()
+        }
+        if (!(await exists(target))) throw new Error('回收站副本写入后校验失败')
+        await rm(path, { recursive: true, force: true })
+      } catch (copyError) {
+        // 任一步失败均保留源，并清理本次创建的半成品。
+        await rm(target, { recursive: true, force: true }).catch(() => undefined)
+        await rm(infoPath, { force: true }).catch(() => undefined)
+        throw copyError
+      }
+      return target
+    }
+    const deletedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+    const info = `[Trash Info]\nPath=${escapeTrashPath(path)}\nDeletionDate=${deletedAt}\n`
+    await writeFile(join(infoDir, `${targetName}.trashinfo`), info, 'utf8')
+    return join(filesDir, targetName)
 }
 
 // XDG trashinfo Path= 转义：%XX URL 编码，保留 / 作为路径分隔符。
@@ -197,27 +217,33 @@ function unescapeTrashPath(escaped: string): string {
 async function restoreXdg(location: string, originalPath: string): Promise<void> {
   // 优先按 trashinfo 的 Path= 恢复原位置；location 仅作兜底。
   let resolved: string | null = null
+  let resolvedInfo: string | null = null
   const infoDir = join(xdgTrashDir(), 'info')
   try {
     const entries = await readdir(infoDir)
     for (const entry of entries) {
       if (!entry.endsWith('.trashinfo')) continue
-      const content = await readFile(join(infoDir, entry), 'utf8')
+      const infoPath = join(infoDir, entry)
+      const content = await readFile(infoPath, 'utf8')
       const match = /^Path=(.+)$/m.exec(content)
       if (match === null) continue
       if (unescapeTrashPath(match[1]) === originalPath) {
         resolved = join(xdgTrashDir(), 'files', entry.slice(0, -'.trashinfo'.length))
-        await rm(join(infoDir, entry), { force: true })
+        resolvedInfo = infoPath
         break
       }
     }
   } catch {
     resolved = null
+    resolvedInfo = null
   }
   const source = resolved ?? location
-  await mkdir(dirname(originalPath), { recursive: true })
+  if (await exists(originalPath)) throw new Error(`恢复目标已存在，拒绝覆盖: ${originalPath}`)
   if (await exists(source)) {
+    await mkdir(dirname(originalPath), { recursive: true })
     await rename(source, originalPath)
+    // 仅在目标 rename 成功后删除元数据，失败时保留以便重试。
+    if (resolvedInfo !== null) await rm(resolvedInfo, { force: true })
     return
   }
   await mkdir(originalPath, { recursive: true })

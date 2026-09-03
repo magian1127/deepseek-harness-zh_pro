@@ -117,23 +117,31 @@ export function spawnCommand(file: string, args: string[], options: SpawnOptions
   if (resolved !== null) {
     const extension = extname(resolved).toLowerCase()
     if (extension === '.exe' || extension === '.com') return spawnSync(resolved, args, nativeOptions) as SpawnResult
-    if (extension === '.cmd' || extension === '.bat') {
-      const direct = parseDirectNodeShim(resolved, inheritedCwd)
-      if (direct !== null) {
-        const directOptions = { ...nativeOptions }
-        if (direct.cwd !== null) directOptions.cwd = direct.cwd
-        return spawnSync(direct.file, [...direct.argsPrefix, ...args], directOptions) as SpawnResult
-      }
-      if (!cmdShimArgsAreSafe(args)) {
-        return {
-          status: null,
-          error: new Error(`无法安全转发包含 %、!、引号或尾反斜杠的参数到命令 shim: ${resolved}`),
+      if (extension === '.cmd' || extension === '.bat') {
+        const direct = parseDirectNodeShim(resolved, inheritedCwd)
+        if (direct !== null) {
+          const directOptions = { ...nativeOptions }
+          if (direct.cwd !== null) directOptions.cwd = direct.cwd
+          return spawnSync(direct.file, [...direct.argsPrefix, ...args], directOptions) as SpawnResult
         }
+        if (/[&|<>^%!]/.test(resolved)) {
+          // 防御性拒绝：未知 shim 必须经过 shell，正常安装路径不含这些元字符。
+          return {
+            status: null,
+            error: new Error(`无法安全执行包含 shell 元字符的命令 shim 路径: ${resolved}`),
+          }
+        }
+        if (!cmdShimArgsAreSafe(args)) {
+          return {
+            status: null,
+            error: new Error(`无法安全转发包含 %、!、引号或尾反斜杠的参数到命令 shim: ${resolved}`),
+          }
+        }
+        file = resolved
+      } else {
+        file = resolved
       }
-      file = resolved
-    } else {
-      file = resolved
-    }
+    // 已完成 Windows 命令解析；无法识别的 shim 统一走下方受控 PowerShell。
   }
   const powershell = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
   if (!existsSync(powershell)) {

@@ -27,7 +27,7 @@ import { main } from './cli/main.mjs'
 
 // ---------- 公共导出面（lib/index.js 与 verify-cli.mjs 依赖，勿删勿改名） ----------
 export { PKG, ROW_BEGIN, ROW_END, NEW_FILE_HEADER, WINDOWS_COMMAND_ENV, WINDOWS_COMMAND_ENCODED } from './cli/constants.mjs'
-export { dshHome, profileDir, patchPath } from './cli/paths.mjs'
+export { dshHome, profileDir, validateProfileName, patchPath } from './cli/paths.mjs'
 export { rowBlock, escapeRe, legacyRowPattern } from './cli/rowblock.mjs'
 export { spawnCommand } from './cli/spawn.mjs'
 export { addManagedRow, removeManagedRow } from './cli/managedrow.mjs'

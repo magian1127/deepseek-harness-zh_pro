@@ -421,3 +421,11 @@ profile patch 只编辑带 `# dsh-zh:begin/end` 的受管块，同时兼容旧�
 5. 客户端/主机改动验证实际运行副本、Fiber 与 GUI；不能以重启代替热路径。
 6. 用户可见行为同步双语 README 与 `behavior.md`；新的故障模式更新
    `troubleshooting.md`；发布要求只写入 `release.md`。
+
+## 安全审计（2026-09）
+
+项目专属要点（完整清单见工作区根 `docs/audit-2026-09.md`，勿在此复制）：
+
+- 已确认高危：host 服务监控快照携带完整进程 cmdline（凭据入快照，修复中）；client 服务监控卸载后轮询复活（修复中）；restore/unarchive 假成功（attach 失败只 warn、返回值忽略）；直写 `workspaceRegistry` 私有 state 绕过串行器；`locate().path` 父目录即会话独占目录的假设在上游 persistence backend 变化时会删错目录。
+- 升级脆弱性最重：React Fiber 私有字段、CSS-module 类名（`sessionRow`/`title`/`slot`）、aria 文案锚点、PROMPT_PROVIDER_NAME 精确文案匹配、`hot-mount` 的 `manifest.dsh.profile.bundles`/`parseSimplePatch` 私有形状。升版后按根文档「抗升级通用模式」逐项加探测与回退。
+- 正面范例（保持）：`session-delete.ts` 的 `isTrustedApiRequest` 三重围栏、`session-menu.ts` 三级 ID 回退。

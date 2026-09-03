@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { PKG } from './constants.mjs'
-import { profileDir } from './paths.mjs'
+import { profileDir, validateProfileName } from './paths.mjs'
 import { addManagedRow, removeManagedRow } from './managedrow.mjs'
 import { runDshPlugin } from './invocations.mjs'
 import { bundlesHasPlugin, hasManagedRow, liveGraphHasPlugin, profileUsesMarket, serverAlive } from './probes.mjs'
@@ -17,6 +17,7 @@ function parseArgs(argv: string[]): ParsedCliArgs {
     const arg = argv[i]
     if (arg === '--profile' && argv[i + 1] !== undefined) {
       profile = argv[i + 1]
+      validateProfileName(profile)
       i += 1
     } else if (arg === '--port' && argv[i + 1] !== undefined) {
       port = parseInt(argv[i + 1], 10)

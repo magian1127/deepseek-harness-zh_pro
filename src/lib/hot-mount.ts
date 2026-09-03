@@ -166,22 +166,31 @@ async function hotMount(ctx: HostContext, profileDir: string, packageName: strin
     rows = [{ id: `client-${slug(packageName)}`, name: packageName }]
   }
 
-  try {
+    try {
     const dir = join(profileDir, HOT_DIR)
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     hotSequence += 1
     const file = join(dir, `hot-${String(hotSequence)}.yml`)
     const yml = rows.map((row) => `- id: 'zh-${row.id}'\n  name: '${row.name}'\n`).join('')
     writeFileSync(file, yml)
-    const handle = ctx.plugin(HotTree, { path: pathToFileURL(file).href })
-    await handle.await()
-    handles.set(packageName, handle)
-    log(`热挂载: ${packageName}`)
-    return true
-  } catch (error) {
-    warn(`热挂载 ${packageName} 失败，需重启一次: ${error instanceof Error ? error.message : String(error)}`)
-    return false
-  }
+      const handle = ctx.plugin(HotTree, { path: pathToFileURL(file).href })
+      try {
+        await handle.await()
+      } catch (error) {
+        try {
+          await handle.dispose()
+        } catch {
+          // 已 settled 或正在释放，忽略清理异常。
+        }
+        throw error
+      }
+      handles.set(packageName, handle)
+      log(`热挂载: ${packageName}`)
+      return true
+    } catch (error) {
+      warn(`热挂载 ${packageName} 失败，需重启一次: ${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
 }
 
 async function hotUnmount(packageName: string): Promise<boolean> {

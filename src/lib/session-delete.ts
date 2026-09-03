@@ -222,70 +222,59 @@ interface DeleteDeps {
 // 会话驻留内存时的收敛等待上限：取消后等待 agent 归位到空闲。
 const IDLE_CONVERGE_TIMEOUT_MS = 3000
 
-/**
- * 把会话从工作区归档集合移除（取消归档）。官方只有 archiveSession 单向
- * API，这里通过 storageDomain 直接改写 workspace domain 的 global state
- * （archivedSessionIds）实现 unarchive——用于恢复已删除会话后重新可见，
- * 以及归档会话视图里的「取消归档」操作。
- * 同时同步 workspaceRegistry 实例的内存 state 缓存（registry 的
- * requireState() 读缓存、不监听 domain/changed；不同步的话 UI 仍按旧
- * 归档集合过滤，恢复的会话依旧不可见）。
- * @returns { ok: 是否成功完成（storage/domain 缺失时为 false）；
- *   changed: 是否真正改写了归档集合（会话本就不在集合中时为 false，
- *   幂等调用不产生变化） }。
- */
-export async function unarchiveSession(
-  deps: DeleteDeps,
-  sessionId: string,
-): Promise<{ ok: boolean; changed: boolean }> {
-  const storage = deps.storageDomain
-  if (storage === undefined || typeof storage.get !== 'function') return { ok: false, changed: false }
-  let domain: { global?: unknown } | undefined
-  try {
-    domain = storage.get('workspace') as { global?: unknown } | undefined
-  } catch {
-    return { ok: false, changed: false }
+const CONFIRMED_JSONL_KINDS = new Set(['jsonl', 'jsonl-zstd'])
+
+function warnRouteFailure(context: string, error: unknown): void {
+  const detail = error instanceof Error ? error.message : String(error)
+  warn(`[dsh-zh] ${context}: ${detail}`)
+}
+
+function routeErrorMessage(code: string): string {
+  switch (code) {
+    case 'session-busy': return '该会话正在运行，请先停止或等待其结束。'
+    case 'trash-failed': return '移入回收站失败，请稍后重试。'
+    case 'reattach-failed': return '恢复未完成，请稍后重试。'
+    case 'restore-failed': return '恢复失败，请稍后重试。'
+    case 'unarchive-failed': return '取消归档失败，请稍后重试。'
+    default: return '操作失败，请稍后重试。'
   }
-  if (domain === undefined || domain.global === undefined) return { ok: false, changed: false }
-  const global = domain.global as {
-    get(): { archivedSessionIds?: readonly string[] } | undefined
-    set(value: { archivedSessionIds: readonly string[] }): Promise<void>
-  }
-  let state: { archivedSessionIds?: readonly string[] } | undefined
-  try {
-    state = typeof global.get === 'function' ? global.get() : undefined
-  } catch {
-    return { ok: false, changed: false }
-  }
-  if (state === undefined || state === null) return { ok: false, changed: false }
-  const archived = state.archivedSessionIds ?? []
-  const next = archived.filter(id => String(id) !== sessionId)
-  const changed = next.length !== archived.length
-  // 无论持久化里有没有该会话，都按过滤后的集合写回并同步缓存——
-  // registry 的内存缓存（requireState()）不监听 domain/changed，删除时
-  // archiveSession 只更新缓存、旧代码曾只更新持久化，两者可能不一致；
-  // 这里以持久化为准把两边对齐，保证恢复的会话重新可见。
-  const nextState = { ...state, archivedSessionIds: next }
-  if (changed) {
+}
+let unarchiveWarningIssued = false
+
+  /**
+   * 把会话从工作区归档集合移除（取消归档）。
+   * workspaceRegistry 当前仅公开 archiveSession，没有 unarchive/事务写 API；
+   * 因而只通过 storageDomain 做归档集合持久化，不写 registry 私有 state，
+   * 等待上游公开 API 后再恢复内存缓存同步，避免绕过 registry 串行器。
+   */
+  export async function unarchiveSession(
+    deps: DeleteDeps,
+    sessionId: string,
+  ): Promise<{ ok: boolean; changed: boolean }> {
+    if (!unarchiveWarningIssued) {
+      unarchiveWarningIssued = true
+      warn(JSON.stringify({
+        code: 'workspace-unarchive-partial',
+        message: 'workspaceRegistry 当前没有公开 unarchive 或事务写 API，仅执行归档集合持久化；等待上游公开 API',
+      }))
+    }
+    const storage = deps.storageDomain
+    if (storage === undefined || typeof storage.get !== 'function') return { ok: false, changed: false }
     try {
-      await global.set(nextState as { archivedSessionIds: readonly string[] })
+      const domain = storage.get('workspace') as { global?: { get(): { archivedSessionIds?: readonly string[] } | undefined; set(value: { archivedSessionIds: readonly string[] }): Promise<void> } } | undefined
+      const global = domain?.global
+      const state = global?.get()
+      if (global === undefined || state === undefined) return { ok: false, changed: false }
+      const archived = state.archivedSessionIds ?? []
+      const next = archived.filter(id => String(id) !== sessionId)
+      const changed = next.length !== archived.length
+      if (changed) await global.set({ archivedSessionIds: next })
+      return { ok: true, changed }
     } catch (error) {
-      warn(`取消归档会话 ${sessionId} 失败: ${error instanceof Error ? error.message : String(error)}`)
+      warnRouteFailure(`取消归档会话 ${sessionId} 失败`, error)
       return { ok: false, changed: false }
     }
   }
-  // 同步 registry 的内存缓存（TS private 字段编译后为普通属性）。
-  try {
-    const registryAny = deps.workspaceRegistry as unknown as { state?: unknown }
-    if (registryAny !== undefined && registryAny !== null && typeof registryAny === 'object') {
-      ;(registryAny as { state: unknown }).state = nextState
-    }
-  } catch {
-    // 缓存同步失败时，恢复的会话在重启前仍归档隐藏；持久化已更新。
-  }
-  return { ok: true, changed }
-}
-
 /**
  * 定位会话的物理日志目录（绝对路径）与展示信息。
  * 返回 null 表示无法定位（后端不提供 locate / 日志从未落盘）。
@@ -293,7 +282,7 @@ export async function unarchiveSession(
 async function resolveSessionTarget(
   deps: DeleteDeps,
   sessionId: string,
-): Promise<{ header: { id: string; cwd?: string }; dir: string | null } | null> {
+  ): Promise<{ header: { id: string; cwd?: string }; dir: string | null; kind: string | null } | null> {
   const persistence = deps.sessionPersistence
   if (persistence === undefined) return null
 
@@ -323,18 +312,22 @@ async function resolveSessionTarget(
 
   // 3) locate() 给出物理路径；取父目录作为会话私有目录。
   let dir: string | null = null
-  if (typeof persistence.locate === 'function') {
+    let kind: string | null = null
+    if (typeof persistence.locate === 'function') {
     try {
-      const location = persistence.locate(header)
-      if (location !== undefined && location !== null && typeof location.path === 'string' && location.path !== '') {
-        const parent = dirname(location.path)
-        if (parent !== '' && parent !== '.') dir = parent
+        const location = persistence.locate(header)
+        if (location !== undefined && location !== null && typeof location.kind === 'string') {
+          kind = location.kind
+          if (CONFIRMED_JSONL_KINDS.has(location.kind) && typeof location.path === 'string' && location.path !== '') {
+            const parent = dirname(location.path)
+            if (parent !== '' && parent !== '.') dir = parent
+          }
+        }
+      } catch {
+        dir = null
       }
-    } catch {
-      dir = null
     }
-  }
-  return { header, dir }
+    return { header, dir, kind }
 }
 
 /**
@@ -387,7 +380,7 @@ export async function deleteSession(
   // 2) 物理移动：失败则中止（不留下「列表已删但日志还在」的中间态）。
   let trashLocation = ''
   let dirRemoved = false
-  if (target !== null && target.dir !== null) {
+    if (target !== null && target.dir !== null && target.kind !== null && CONFIRMED_JSONL_KINDS.has(target.kind)) {
     try {
       if (options.trash) {
         const result = await trashItem(target.dir)
@@ -398,10 +391,11 @@ export async function deleteSession(
       }
       dirRemoved = true
     } catch (error) {
+        warnRouteFailure(`删除会话 ${sessionId} 的物理目录失败`, error)
       return {
         ok: false,
         code: 'trash-failed',
-        message: `移入回收站失败：${error instanceof Error ? error.message : String(error)}`,
+          message: '移入回收站失败，请稍后重试。',
       }
     }
   }
@@ -417,7 +411,7 @@ export async function deleteSession(
         }
       }
     } catch (error) {
-      warn(`移除会话 ${sessionId} 的工作区账本槽位失败: ${error instanceof Error ? error.message : String(error)}`)
+      warnRouteFailure(`移除会话 ${sessionId} 的工作区账本槽位失败`, error)
       // 不视为致命：日志已移走，账本残项在列表渲染时被过滤（byId 缺失）。
     }
   }
@@ -445,7 +439,7 @@ export async function deleteSession(
     try {
       await registry.archiveSession(sessionId)
     } catch (error) {
-      warn(`归档已删除的驻留会话 ${sessionId} 失败: ${error instanceof Error ? error.message : String(error)}`)
+        warnRouteFailure(`归档已删除的驻留会话 ${sessionId} 失败`, error)
     }
   }
 
@@ -453,48 +447,61 @@ export async function deleteSession(
   return {
     ok: true,
     trashed: dirRemoved && options.trash,
-    ...(target !== null && target.dir === null
-      ? { hint: '该会话日志无法定位，已从列表移除（后端不支持回收）。' }
+      ...(target !== null && (target.dir === null || target.kind === null || !CONFIRMED_JSONL_KINDS.has(target.kind))
+        ? { hint: target?.kind !== null && target?.kind !== undefined && !CONFIRMED_JSONL_KINDS.has(target.kind) ? '该会话后端类型未确认，已逻辑删除（未触碰物理目录）。' : '该会话日志无法定位，已从列表移除（后端不支持回收）。' }
       : {}),
   }
 }
 
 /**
  * 从回收站恢复一个会话目录（并重新挂回工作区账本）。
+ * @param deps - 服务面解析器。
+ * @param entry - 回收站条目。
+ * @param restoreItemImpl - 恢复实现（可注入；默认平台实现，测试用）。
  */
 export async function restoreSession(
   deps: DeleteDeps,
   entry: TrashEntry,
+  restoreItemImpl: (location: string, originalPath: string) => Promise<void> = restoreItem,
 ): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
   try {
-    await restoreItem(entry.trashLocation, entry.originalPath)
+    await restoreItemImpl(entry.trashLocation, entry.originalPath)
   } catch (error) {
-    return { ok: false, code: 'restore-failed', message: `恢复失败：${error instanceof Error ? error.message : String(error)}` }
+      warnRouteFailure(`恢复会话 ${entry.sessionId} 失败`, error)
+      return { ok: false, code: 'restore-failed', message: `恢复失败：${error instanceof Error ? error.message : String(error)}` }
   }
-  // 重新挂回工作区：找到 cwd 匹配的 workspace（恢复后日志已回原位，
-  // registry 的 header 索引会重新识别它）。
+  // 重新挂回工作区：找到 cwd 匹配的 workspace（恢复后日志已回原位）。
   const registry = deps.workspaceRegistry
+  let reattachFailed = registry === undefined
   if (registry !== undefined) {
     try {
       const workspaces = registry.list()
-      for (const workspace of workspaces) {
-        if (workspace.path === entry.cwd) {
-          if (!workspace.sessionIds.includes(entry.sessionId)) {
-            await workspace.attachSession(entry.sessionId)
-          }
-          break
-        }
+      const workspace = workspaces.find(candidate => candidate.path === entry.cwd)
+      if (workspace === undefined) {
+        reattachFailed = true
+      } else if (!workspace.sessionIds.includes(entry.sessionId)) {
+        await workspace.attachSession(entry.sessionId)
       }
     } catch (error) {
-      warn(`恢复会话 ${entry.sessionId} 后重新挂载工作区失败: ${error instanceof Error ? error.message : String(error)}`)
+      reattachFailed = true
+        warnRouteFailure(`恢复会话 ${entry.sessionId} 后重新挂载工作区失败`, error)
     }
   }
-  // 删除驻留内存会话时会把它加入归档集合（隐藏）；恢复后取消归档，
-  // 让会话重新出现在列表。
-  await unarchiveSession(deps, entry.sessionId)
+    // 删除驻留内存会话时会把它加入归档集合（隐藏）；恢复后取消归档。
+    // attach 已失败时跳过：失败路径不动账本（归档集合保留、条目可重试），
+    // 避免"目录已恢复+归档集合被顺手清理"的部分副作用泄漏。
+    const unarchive = reattachFailed
+      ? { ok: false as const, changed: false }
+      : await unarchiveSession(deps, entry.sessionId)
+  if (reattachFailed || !unarchive.ok) {
+    return {
+      ok: false,
+      code: 'reattach-failed',
+      message: '目录已恢复到原位置，但重新挂载工作区/取消归档未完成；请重试恢复或在列表刷新后检查',
+    }
+  }
   sessionTrash.forget(entry.sessionId)
   deletedSessionIds.delete(entry.sessionId)
-  return { ok: true }
   return { ok: true }
 }
 
@@ -634,7 +641,8 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
             }
             writeJson(res, 200, { ok: true, value: opened })
           } catch (error) {
-            writeJson(res, 500, { ok: false, error: { code: 'open-failed', message: error instanceof Error ? error.message : String(error) } })
+              warnRouteFailure('打开服务目录失败', error)
+              writeJson(res, 500, { ok: false, error: { code: 'open-failed', message: '打开服务目录失败，请稍后重试。' } })
           }
           return
         }
@@ -674,7 +682,7 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
             ...(currentSessionId === '' ? {} : { currentSessionId }),
           })
           if (!result.ok) {
-            writeJson(res, 400, { ok: false, error: { code: result.code, message: result.message } })
+              writeJson(res, 400, { ok: false, error: { code: result.code, message: routeErrorMessage(result.code) } })
             return
           }
             writeJson(res, 200, { ok: true, value: { ...result, deletedIds: collectDeletedSessionIds() } })
@@ -698,7 +706,7 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
           }
           const result = await restoreSession(deps(), entry)
           if (!result.ok) {
-            writeJson(res, 400, { ok: false, error: { code: result.code, message: result.message } })
+              writeJson(res, 400, { ok: false, error: { code: result.code, message: routeErrorMessage(result.code) } })
             return
           }
           writeJson(res, 200, { ok: true, value: { restored: true } })
@@ -706,7 +714,8 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
         }
         writeJson(res, 404, { ok: false, error: { code: 'not-found', message: 'unknown method' } })
       } catch (error) {
-        writeJson(res, 500, { ok: false, error: { code: 'internal', message: error instanceof Error ? error.message : String(error) } })
+          warnRouteFailure('API 路由处理失败', error)
+          writeJson(res, 500, { ok: false, error: { code: 'internal', message: '服务器内部错误，请稍后重试。' } })
       }
     }
 

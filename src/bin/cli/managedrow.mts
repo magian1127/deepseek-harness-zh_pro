@@ -1,8 +1,16 @@
 // 幂等读写 profile 挂载行（标记文本层）。
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { NEW_FILE_HEADER, ROW_BEGIN, ROW_END } from './constants.mjs'
 import { patchPath } from './paths.mjs'
 import { escapeRe, legacyRowPattern, rowBlock } from './rowblock.mjs'
+
+// CLI 是本地单用户进程；同步调用在同一事件循环内不会交错。跨进程并发仍不在此模块的保证范围内。
+function atomicWrite(path: string, content: string): void {
+  const temporary = `${path}.tmp`
+  try { unlinkSync(temporary) } catch { /* stale temp is optional */ }
+  writeFileSync(temporary, content, 'utf8')
+  renameSync(temporary, path)
+}
 
 /**
  * 幂等写入本插件的挂载行。返回 true 表示本次实际写入了（此前不存在）。
@@ -13,7 +21,7 @@ export function addManagedRow(name: string = 'web'): boolean {
   const path = patchPath(name)
   const existing = existsSync(path) ? readFileSync(path, 'utf8').replace(/\r\n/g, '\n') : null
   if (existing === null) {
-    writeFileSync(path, NEW_FILE_HEADER + rowBlock() + '\n')
+      atomicWrite(path, NEW_FILE_HEADER + rowBlock() + '\n')
     return true
   }
   if (existing.includes(ROW_BEGIN)) {
@@ -21,7 +29,7 @@ export function addManagedRow(name: string = 'web'): boolean {
     if (existing.includes('- id: dsh-zh-hot')) return false
     const re = new RegExp(`${escapeRe(ROW_BEGIN)}[^\\n]*\\n[\\s\\S]*?\\n${escapeRe(ROW_END)}[^\\n]*\\n?`, 'g')
     const next = existing.replace(re, rowBlock() + '\n')
-    writeFileSync(path, next)
+      atomicWrite(path, next)
     return true
   }
   // 旧式无标记块（id 可能是 dsh-zh 或 dsh-zh-hot）：归一化为标记热行块。
@@ -32,7 +40,7 @@ export function addManagedRow(name: string = 'web'): boolean {
       const next = existing.replace(legacy, function (_match, prefix) {
         return prefix + rowBlock()
       })
-      writeFileSync(path, next.endsWith('\n') ? next : next + '\n')
+        atomicWrite(path, next.endsWith('\n') ? next : next + '\n')
       return true
     }
   }
@@ -46,7 +54,7 @@ export function addManagedRow(name: string = 'web'): boolean {
   next = lines.join('\n').replace(/[ \t]+$/gm, '')
   if (next !== '' && !next.endsWith('\n')) next += '\n'
   if (next !== '') next += '\n'
-  writeFileSync(path, next + rowBlock() + '\n')
+    atomicWrite(path, next + rowBlock() + '\n')
   return true
 }
 
@@ -85,6 +93,6 @@ export function removeManagedRow(name: string = 'web'): boolean {
     const comments = next.split('\n').filter((line) => line.trim().startsWith('#'))
     next = [...comments, '[]'].join('\n') + '\n'
   }
-  writeFileSync(path, next)
+  atomicWrite(path, next)
   return true
 }

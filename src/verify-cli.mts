@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
+import * as path from 'node:path'
 import { delimiter, dirname, join } from 'node:path'
+import * as fs from 'node:fs'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
@@ -687,6 +689,22 @@ try {
   check(coldResult.ok, true, 'cold 会话删除成功')
   check(archivedCold.length, 0, 'cold 会话删除不归档（无残留列表问题）')
   check(existsSync(sessionDirCold), false, 'cold 会话日志目录已移走')
+  // D6：未知 persistence kind 必须降级逻辑删除，绝不触碰可能共享的目录。
+  const sharedDir = join(delRoot, 'shared-unknown-kind')
+  mkdirSync(sharedDir, { recursive: true })
+  const sharedMarker = join(sharedDir, 'marker.txt')
+  writeFileSync(sharedMarker, 'keep')
+  const unknownKindResult = await sessionDelete.deleteSession({
+    sessions: { get: function () { return undefined } },
+    agents: { get: function () { return undefined } },
+    sessionPersistence: {
+      readRaw: function () { return Promise.resolve({ meta: { id: 'session-unknown-kind', cwd: '/tmp/proj' } }) },
+      locate: function () { return { kind: 'sqlite', path: join(sharedDir, 'sessions.db') } },
+    },
+  }, 'session-unknown-kind', { trash: false, title: 'unknown-kind' })
+  check(unknownKindResult.ok, true, '未知 persistence kind 降级逻辑删除成功')
+  check(unknownKindResult.ok && unknownKindResult.hint?.includes('未确认'), true, '未知 persistence kind 返回未确认提示')
+  check(existsSync(sharedDir) && existsSync(sharedMarker), true, '未知 persistence kind 不物理删除共享目录')
 
   // 运行中的会话拒绝删除。
   const runningDeps = {
@@ -722,10 +740,82 @@ try {
   const unarchivedOk = await sessionDelete.unarchiveSession(unarchiveDeps, 'session-arch1')
   check(unarchivedOk, { ok: true, changed: true }, '取消归档成功返回 { ok: true, changed: true }')
   check(unarchiveState.archivedSessionIds, ['session-arch2'], '取消归档后持久化集合移除该会话')
-  check((unarchiveRegistryCache.state as typeof unarchiveState).archivedSessionIds, ['session-arch2'], '取消归档同步 registry 内存缓存')
+  // D4 降级契约：不私写 workspaceRegistry 内存缓存（并发安全），归档状态由 storageDomain 持久化集合表达，等待上游公开 unarchive API
+  check((unarchiveRegistryCache.state as typeof unarchiveState).archivedSessionIds, ['session-arch1', 'session-arch2'], '取消归档不私写 registry 内存缓存（state 保持初始快照）')
   // 幂等：会话本就不在归档集合时不再写回，changed=false。
   const unarchiveIdempotent = await sessionDelete.unarchiveSession(unarchiveDeps, 'session-arch-gone')
   check(unarchiveIdempotent, { ok: true, changed: false }, '会话不在归档集合时 changed=false')
+
+  // ---- D3 restore 语义：attach 失败/无匹配/registry 缺失 → reattach-failed 且保留可重试状态 ----
+  const restoreEntry = {
+    sessionId: 'session-restore1', title: 'restore-fixture', cwd: 'C:/ws/alpha',
+    originalPath: 'C:/ws/alpha/session-restore1', trashLocation: 'C:/trash/session-restore1',
+    trashedAt: 1, token: 'tok',
+  }
+  let restoreArchiveState = { archivedSessionIds: ['session-restore1'] as readonly string[] }
+  const makeRestoreDeps = (registry: unknown) => ({
+    storageDomain: {
+      get: function (name: string) {
+        if (name !== 'workspace') return undefined
+        return {
+          global: {
+            get: function () { return restoreArchiveState },
+            set: async function (value: unknown) { restoreArchiveState = value as typeof restoreArchiveState },
+          },
+        }
+      },
+    },
+    workspaceRegistry: registry,
+  })
+  const noopRestoreItem = async () => {}
+  const wsAttachOk = { path: 'C:/ws/alpha', sessionIds: [] as readonly string[], detachSession: async () => {}, attachSession: async () => {} }
+  const wsAttachThrow = { path: 'C:/ws/alpha', sessionIds: [] as readonly string[], detachSession: async () => {}, attachSession: async () => { throw new Error('attach boom') } }
+  const restoreAttachFail = await sessionDelete.restoreSession(makeRestoreDeps({ list: () => [wsAttachThrow] }) as never, restoreEntry, noopRestoreItem)
+  check(restoreAttachFail.ok === false && (restoreAttachFail as { code?: string }).code === 'reattach-failed', true, 'restore：attach 抛错返回 reattach-failed')
+  check(restoreArchiveState.archivedSessionIds.includes('session-restore1'), true, 'restore：attach 失败后归档集合保留该会话（失败路径不动账本、可重试）')
+  const restoreNoMatch = await sessionDelete.restoreSession(makeRestoreDeps({ list: () => [] }) as never, restoreEntry, noopRestoreItem)
+  check(restoreNoMatch.ok === false && (restoreNoMatch as { code?: string }).code === 'reattach-failed', true, 'restore：无匹配 workspace 返回 reattach-failed')
+  const restoreNoRegistry = await sessionDelete.restoreSession(makeRestoreDeps(undefined), restoreEntry, noopRestoreItem)
+  check(restoreNoRegistry.ok === false && (restoreNoRegistry as { code?: string }).code === 'reattach-failed', true, 'restore：registry 缺失返回 reattach-failed')
+  const restoreOkCase = await sessionDelete.restoreSession(makeRestoreDeps({ list: () => [wsAttachOk] }) as never, restoreEntry, noopRestoreItem)
+  check(restoreOkCase, { ok: true }, 'restore：attach 成功返回 { ok: true }')
+  check(restoreArchiveState.archivedSessionIds.includes('session-restore1'), false, 'restore：成功后归档集合移除该会话')
+  // ---- D3：恢复物理目录成功后，账本操作失败必须保留可重试状态 ----
+  const makeRestoreEntry = async function (id, attachWorkspace) {
+    const entry = sessionDelete.sessionTrash.remember({
+      sessionId: id,
+      title: id,
+      cwd: '/tmp/proj',
+      originalPath: `/tmp/dsh-d3-${id}`,
+      trashLocation: `/tmp/dsh-d3-trash-${id}`,
+      trashedAt: Date.now(),
+    })
+    const result = await sessionDelete.restoreSession({
+      workspaceRegistry: attachWorkspace,
+      storageDomain: {
+        get: function () {
+          return { global: {
+            get: function () { return { archivedSessionIds: [id] } },
+            set: async function () {},
+          } }
+        },
+      },
+    }, entry, async function () {})
+    return { result, entry, retained: sessionDelete.sessionTrash.get(id) }
+  }
+  const attachFailure = await makeRestoreEntry('d3-attach-failure', {
+    list: function () { return [{ path: '/tmp/proj', sessionIds: [], detachSession: async function () {}, attachSession: async function () { throw new Error('attach failed') } }] },
+  })
+  check(attachFailure.result.ok === false && (attachFailure.result as { code?: string }).code === 'reattach-failed', true, '恢复 attach 失败返回 reattach-failed')
+  check(attachFailure.retained?.sessionId, 'd3-attach-failure', '恢复 attach 失败保留 trash entry 以便重试')
+  const missingRegistry = await makeRestoreEntry('d3-missing-registry', undefined)
+  check(missingRegistry.result.ok === false && (missingRegistry.result as { code?: string }).code === 'reattach-failed', true, '恢复 registry 缺失返回 reattach-failed')
+  check(missingRegistry.retained?.sessionId, 'd3-missing-registry', '恢复 registry 缺失保留 trash entry 以便重试')
+  const restoreSuccess = await makeRestoreEntry('d3-success', {
+    list: function () { return [{ path: '/tmp/proj', sessionIds: [], detachSession: async function () {}, attachSession: async function () {} }] },
+  })
+  check(restoreSuccess.result, { ok: true }, '恢复 attach 与取消归档均成功返回 ok')
+  check(restoreSuccess.retained, undefined, '恢复成功清理 trash entry')
 
     // ---- 服务监控：netstat/ss 解析与基线 diff ----
     const serviceMonitor = await import(`./lib/service-monitor.js?verify=sm-${Date.now()}-${Math.random()}`)
