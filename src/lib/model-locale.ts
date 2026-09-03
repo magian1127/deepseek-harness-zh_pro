@@ -359,6 +359,10 @@ const SECTION_ZH: Record<string, SectionRule> = {
     zh: '用 grep 工具（而不是 shell 的 grep 或 rg）搜索文件内容。需要上下文时对匹配的文件使用 read。',
     match: 'Use the grep tool — not shell grep or rg —',
   },
+  'tool:bash': {
+    zh: '检查每个 bash 结果上的 `[exit code: N]` 标记；继续前先调查失败。',
+    match: 'Check the [exit code: N] marker on every bash result',
+  },
   'tool:pwsh': {
     zh: '非零退出码会以 `[exit code: N]` 标记报告；继续前先调查失败。在 Windows 上被强制终止的进程以 `[exit code: 1]` 结束且没有信号标记；把中断后的裸 exit 1 视为终止，而不是命令失败。',
     match: 'Non-zero exits are reported as `[exit code: N]` markers',

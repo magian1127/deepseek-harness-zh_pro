@@ -5,7 +5,7 @@
 **语言 / Language:** [中文](README.md) · [English](README.en.md)
 
 <p align="center">
-  <img alt="Version 0.9.1" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.9.1-5965d8">
+  <img alt="Version 0.9.2" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.9.2-5965d8">
   <img alt="Interface Chinese" src="https://img.shields.io/badge/%E7%95%8C%E9%9D%A2-%E4%B8%AD%E6%96%87-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -27,7 +27,7 @@ The rows below follow **DSH Settings → Enhancements** from top to bottom:
 | Flat row | Tool-description localization | Off | Localizes confirmed built-in DSH tool descriptions and guidance; tool names, parameter names, and third-party tools remain unchanged; new sessions only |
 | Flat row | Injected-context localization | Off | Replaces DSH-injected official context (workspace instruction frames, skill catalog frames, runtime context including its header line, approval/mode switch notices, dynamic-plugin notices, scheduled reminders, compaction checkpoint preambles) with Chinese before it enters session history; GUI and model requests stay consistent, new sessions only; translating the snapshot header makes DSH inject one replacement snapshot per step (slight session-log growth) |
 | Flat row | Prompt injection | Off | Injects editable text into subsequent requests; the default text asks for Chinese reasoning and replies, and the default target is the initial system prompt |
-| Chat display | Auto-expand latest thinking | On | Expands the newest streaming thinking block and collapses the previous block that the plugin auto-expanded |
+| Chat display | Auto-expand latest thinking | On | Expands the newest streaming thinking block and collapses the previous block that the plugin auto-expanded; after a turn closes under the DSH v0.1.2 compact view it stays hidden with the official process fold (see the behavior contract) |
 | Chat display | Default expanded lines | 20 lines, latest N | Limits the initial visible region to 0–200 lines; 0 disables the limit, and the direction can be changed to earliest N |
 | Chat display | Expand mode | Button mode | Button mode reveals lines in batches; scroll mode uses a fixed-height scrolling viewport |
 | Chat display | Full stats line | On | Keeps the chat stats on one line, shrinking or scrolling horizontally when needed |
@@ -46,7 +46,7 @@ for full interaction, data, and safety boundaries.
 
 ## Requirements
 
-- DeepSeek Harness Web GUI ≥ 0.1.2-alpha.2, default profile `web`
+- DeepSeek Harness Web GUI ≥ 0.1.2-rc.1, default profile `web`
 - Node.js `^22.19.0 || >=24.0.0`
 
 ## Installation

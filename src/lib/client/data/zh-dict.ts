@@ -92,6 +92,18 @@ const ZH_PARTIAL = {
     agentLoopTitle: ['agentLabel'],
     agentLoopDescription: ['agentLabel'],
     webSearchApiKey: ['apiKey'],
+    // 上游 0.1.2-rc.1 新增的子代理模型选择卡：zh 模板仍夹带 Agent/Subagent。
+    subagentModelSelectionTitle: ['subagent'],
+    subagentModelSelectionDescription: ['subagent', 'agentLabel'],
+    subagentModelSelectionToggle: ['subagent', 'agentLabel'],
+    subagentModelSelectionChoose: ['subagent', 'agentLabel'],
+    subagentModelSelectionAllowed: ['agentLabel'],
+    subagentModelSelectionOff: ['subagent', 'agentLabel'],
+  },
+  'settings.pluginInventory': {
+    // 上游 0.1.2-rc.1 插件清单面板：预设切换与按会话提供说明仍夹带 Agent。
+    switcherLabel: ['agentLabel'],
+    presetProvidedDetail: ['agentLabel'],
   },
   'settings.agentPreset': {
     // 上游 0.1.2-alpha.2 起 agentPreset 词典内置大量中文，但描述仍夹带
