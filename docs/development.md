@@ -305,6 +305,7 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
 - watcher、assemble 包装和事件监听必须随 Fiber 释放。
 
 包装逻辑不得让 schema 漂移或 section 异常中断模型请求；失败时保留原 assembly 并输出一次警告。
+`open-design` profile 的 probe/models/stdio stdout 是严格 JSONL。所有 Host 信息日志统一经过 `src/lib/util.ts#log`；该 profile 必须改写到 stderr，warn/error 本来就在 stderr。新增直接 `console.log` 会破坏 Open Design 协议。
 
 ### 模型请求中文化（model-locale）
 
@@ -317,14 +318,7 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
 - **会话语言锁定（regime）**：`Map<sessionId, 'zh' | 'en'>`。会话首次请求时按当前
   开关状态判定：会话已产生过 `assistant/message` 视为老会话锁 `'en'`，否则锁
   `'zh'`；锁定后开关翻转不再影响该会话。regime 表是进程内存，随插件实例生命周期存在。
-- **开关1（zhAgentPrompt）**：`deployment:persona` 精确文本匹配换中文（`PERSONA_ZH`，
-  占位符 `{{model}}`/`{{cwd}}` 保留），加系统级官方段落（`SYSTEM_SECTION_ZH`：
-  `harness:identity` / `harness:source` / `app:web-surface` / `context:file-reference` /
-  `ui:deliverable-file-references`；含动态值的段落用 `keep()` 从原文提取路径/URL 拼入，
-  提取结果须去掉句末英文句点与路径尾分隔符，避免「.。」/「\。」混入中文）。
-  persona 匹配键不得带尾部换行（shipped yml 块标量会剥掉末尾换行，曾因键多一个
-  `\n` 使 cordis persona 整段失配保持英文）；运行时文本先按原样查、失败再按
-  trim 后查。
+- **开关1（zhAgentPrompt）**：`deployment:persona` 通过 `PERSONA_ZH` 精确文本匹配，覆盖默认代理与 Open Design runtime 官方 persona；占位符保留。系统级官方段落继续由 `SYSTEM_SECTION_ZH` 处理。OpenDesign Charter 位于用户消息，禁止在此翻译。persona 匹配键不得带尾部换行；运行时文本先原样查、失败再 trim。
  - **开关2（zhToolDesc）**：工具说明（`TOOL_DESC_ZH` + `TOOL_FLAVOR_DESC_ZH`）+ 官方工具指引
     段落（`SECTION_ZH`，`tool:*` sections、`tools:ptc-only`、`tools:sdk` 与 `plan:policy`）。
     **只翻译 DSH 官方内容，两层都带官方特征守卫**：工具描述用 `TOOL_MATCH` 单特征表或

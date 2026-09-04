@@ -21,7 +21,7 @@
 | 设置位置 | 功能 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | 平铺 | 中文补全 | 开 | 仅中文界面：修正已确认的残留英文，并统一词元、接口密钥、模型标识、时长和数量格式 |
-| 平铺 | 代理角色提示中文化 | 关 | 把四个默认代理及系统级官方段落换成中文版本；只在新会话首次请求时锁定，不重新注入已有会话 |
+| 平铺 | 代理角色提示中文化 | 关 | 把四个默认代理、Open Design runtime persona 及已确认系统段落换成中文；只在新会话首次请求时锁定，不追溯旧会话 |
 | 平铺 | 工具说明中文化 | 关 | 中文化已确认的 DSH 官方工具说明和官方指引段落；工具名、参数名及第三方工具保持不变，只对新会话生效 |
 | 平铺 | 上下文注入中文化 | 关 | 把 DSH 注入会话的官方上下文（工作区指令帧、skill 目录帧、运行时上下文含头部行、审批/模式切换通知、动态插件通知、定时提醒、压缩检查点前言）在进入会话历史前换成中文；GUI 与模型请求一致显示，仅新会话生效；翻译快照头部行会使 DSH 每步注入一条替换快照（会话日志略增） |
 | 平铺 | 提示词注入 | 关 | 向后续模型请求注入可编辑文本；默认文本为“思考过程和回复始终使用中文输出”，默认目标为初始系统提示，也可改为首用户提示词 |
@@ -43,24 +43,34 @@
 
 ## 环境要求
 
-- DeepSeek Harness Web GUI ≥ 0.1.2-rc.1，默认 profile 为 `web`
+- DeepSeek Harness ≥ `0.1.2-rc.1`；完整 UI 使用 `web`，Open Design stdio 使用 `open-design`，DSH 一次性任务可用 `headless`
 - Node.js `^22.19.0 || >=24.0.0`
 
 ## 安装
 
 ```sh
-# 官方持久通道：自然下一次启动后生效
+# Web GUI
 dsh plugin --profile web add deepseek-harness-zh_pro
 
-# 热安装：DSH 正在运行时可立即生效
+# Open Design 的真实 stdio profile
+dsh plugin --profile open-design add deepseek-harness-zh_pro
+
+# 可选：DSH 自带 headless
+dsh plugin --profile headless add deepseek-harness-zh_pro
+
+# 仅用于正在运行的 Web GUI 热安装
 npx -y deepseek-harness-zh_pro install --profile web
 ```
 
-本地源码联调（首次使用先安装依赖，`prepare` 会生成运行产物）：
+bundle 按 profile 隔离；Open Design 实际运行 `dsh --profile open-design --stdio`。两个非 Web profile 只运行 Host 半边；浏览器增强不会注入 Open Design UI。`open-design` stdout 是严格 JSONL，本插件信息日志在该 profile 写 stderr。
+
+本地源码联调：
 
 ```powershell
 pnpm install
 node bin/dsh-zh.mjs install --profile web --link $PWD
+dsh plugin --profile open-design add "link:<项目绝对路径>"
+dsh plugin --profile headless add "link:<项目绝对路径>"
 ```
 
 TypeScript 源码构建与检查：
@@ -75,10 +85,13 @@ npm pack --dry-run --json
 `src/` 是唯一手写源码；`lib/`、`bin/`、`scripts/` 和根目录验证脚本都是被 Git 忽略的构建产物，
 由 `prepare`、`npm run build` 或 `prepack` 动态生成。发布前会重新编译并生成客户端经典脚本。
 
-安装后可检查状态：
+安装后按 profile 分别检查：
 
 ```sh
 npx -y deepseek-harness-zh_pro status --profile web
+dsh plugin --profile open-design list
+dsh --profile open-design --dump-default-config
+dsh plugin --profile headless list
 ```
 
 ## 更新
@@ -90,12 +103,13 @@ npx -y deepseek-harness-zh_pro status --profile web
 
 ```sh
 dsh plugin --profile web remove deepseek-harness-zh_pro
-# 或
+dsh plugin --profile open-design remove deepseek-harness-zh_pro
+dsh plugin --profile headless remove deepseek-harness-zh_pro
+# 正在运行的 Web GUI 也可使用：
 npx -y deepseek-harness-zh_pro remove --profile web
 ```
 
-卸载会清理临时热行和运行中条目，不会删除 DSH 会话数据。localStorage 与 settings 中的
-已有设置值可能保留，重新安装后可继续使用。
+卸载按 profile 独立清理；短进程 profile 从下一次调用起不再加载，且不删除会话数据。
 
 ## 设置与数据
 
@@ -106,6 +120,8 @@ npx -y deepseek-harness-zh_pro remove --profile web
 
 插件不注册模型工具、不上传数据。除用户显式开启的提示词注入、代理角色提示中文化、工具说明中文化与上下文注入中文化外，其余功能不会修改模型请求；上下文注入中文化替换注入会话历史的官方英文文本，关闭后新注入恢复英文，已写入会话的部分按官方行为保留。
 中文补全只在中文界面生效；其余界面增强在英文界面同样生效。提示词注入仍只由自身开关决定。
+
+Open Design 与 stock headless 没有浏览器设置页，但共用 `${DSH_HOME:-~/.dsh}/settings.yaml`；可先在 Web GUI 保存四个 Host 开关，后续 `open-design` / `headless` 读取同一 `dsh-zh` 命名空间。OpenDesign Charter 是应用提供的用户消息，不由本插件翻译。
 
 ## 常见问题
 

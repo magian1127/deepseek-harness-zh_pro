@@ -13,13 +13,14 @@
 | --- | --- | --- |
 | `src/lib/client/`（TypeScript 源片段） | 浏览器 | 中文补全、DOM 增强、设置分区、会话删除菜单、服务监控面板和本地设置；`data/` 为语言数据，`logic/` 为逻辑 |
 | `lib/client.js` | 浏览器 | 由 `scripts/build-client.mjs` 转译并拼接 `src/lib/client/` 生成的经典脚本 bundle |
-| `src/lib/*.ts` → `lib/*.js` | DSH Node.js 进程 | settings 注册、提示词注入、模型请求中文化、上下文注入中文化、会话删除/回收站路由、热装卸监督和主机热重载 |
+| `src/lib/*.ts` → `lib/*.js` | DSH Node.js 进程 | settings、提示词/模型/上下文中文化、Web 路由与热重载；`open-design` profile 的信息日志写 stderr，保护 stdout JSONL |
 | `src/bin/*.mts` → `bin/*.mjs` | 命令行进程 | 安装、卸载、状态检查和 Windows 命令转发 |
 | `cordis.patch.yml` | bundle 配置层 | 声明持久挂载行 `dsh-zh` |
 | `package.json` | npm/DSH 元数据 | 导出、客户端依赖图、bundle patch 和发布文件 |
 
 浏览器与主机不通过自定义 RPC 传递设置。客户端使用 DSH 官方 `settingsScope` 读写命名空间
 `dsh-zh`，主机使用 `settings.register` 和 `scope.watch` 消费同一份数据。
+Open Design 使用独立 `dsh --profile open-design --stdio` 短进程；只加载 Host 半边并复用同一 settings。其 runtime persona 可由 `zhAgentPrompt` 精确翻译，应用提供的 Charter 仍是用户消息。
 
 「删除会话（回收站）」与「服务监控」共用自定义 HTTP 通道 `/dsh-zh/api`：前者浏览器
 POST 请求会话删除（路由由主机注册到 DSH `webServer`，仅接受回环主机 + 同源请求）；

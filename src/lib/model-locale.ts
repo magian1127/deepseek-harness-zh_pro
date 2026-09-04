@@ -1,6 +1,6 @@
 // 「模型请求中文化」：两个独立开关（settings 命名空间 dsh-zh）：
-//   1) zhAgentPrompt（代理角色提示中文化）：四个默认代理的
-//      deployment:persona 系统提示词换成中文版本。
+//   1) zhAgentPrompt（代理角色提示中文化）：四个默认代理与 Open Design
+//      runtime 的 deployment:persona 系统提示词换成中文版本。
 //      匹配键是 assemble 后的原英文 persona 文本（精确匹配，含 {{model}}/
 //      {{cwd}} 占位符——插值发生在 render 阶段，assemble 后仍是原形）。
 //      未收录的自定义 persona 原样保留。
@@ -20,12 +20,14 @@ import { CORDIS_SECTION_ZH } from './cordis-section-zh.js'
 import { log, warn } from './util.js'
 import type { HostContext } from './types.js'
 
-// ============ 四个默认代理的 persona 中文版 ============
+// ============ 默认代理与 Open Design runtime 的 persona 中文版 ============
 // 键为 assemble 后 sections 里 deployment:persona 的精确文本（原文逐字，
 // 含 {{model}}/{{cwd}}；standard 与 code 原文相同共用一个键）。
 // 译文保留全部代码标识符、命令名与占位符，只翻译叙述性文字。
 const STANDARD_PERSONA_EN = 'You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.'
 const MINIMAL_PERSONA_EN = 'You are a helpful software engineer assistant.'
+const OPEN_DESIGN_PERSONA_EN = 'You are a coding and design agent running for OpenDesign. Follow the complete task and project context supplied in the current user message.'
+const OPEN_DESIGN_PERSONA_ZH = '你是一个为 OpenDesign 运行的编码与设计代理。请遵循当前用户消息中提供的完整任务与项目上下文。'
 // 匹配键不得带尾部换行（shipped yml 的块标量会剥掉末尾换行；曾因键多一个
 // \n 导致 cordis persona 整段失配保持英文）。运行时文本若带尾随空白，
 // 由 localizePersona 的 trim 兜底命中。CORDIS 两个常量导出供回归脚本核对。
@@ -57,6 +59,7 @@ const PERSONA_ZH: Record<string, string> = {
   [STANDARD_PERSONA_EN]: '你是一个由 {{model}} 模型驱动的编码代理。你的工作目录是 {{cwd}}。',
   [MINIMAL_PERSONA_EN]: '你是一位乐于助人的软件工程师助手。',
   [CORDIS_PERSONA_EN]: CORDIS_PERSONA_ZH,
+  [OPEN_DESIGN_PERSONA_EN]: OPEN_DESIGN_PERSONA_ZH,
 }
 
 // ============ 默认工具说明中文版 ============

@@ -56,6 +56,10 @@ npm test
 profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢复。服务未运行时热安装不会制造
 临时热行，下次启动由持久 bundle 挂载。
 
+## Open Design 没有 Host 中文化或提示词注入
+
+Open Design 运行独立 `open-design` profile，而非 `headless`。检查 `dsh plugin --profile open-design list` 与 `dsh --profile open-design --dump-default-config` 是否含 `deepseek-harness-zh_pro` / `dsh-zh`。`dsh --profile open-design --probe` 和空 stdin `--stdio` 的 stdout 必须只有 JSONL；信息日志应在 stderr。最终检查安装后**新建** `od-*` 会话的首个 `request/header`；旧会话语言 regime 不追溯切换。OpenDesign Charter 属于用户消息，保持原文是正常边界。
+
 ## 卸载后首页仍显示插件
 
 只释放 Fiber 不会删除 Loader 图中的 bundle 条目。正确卸载必须按包名调用

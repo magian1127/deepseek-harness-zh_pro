@@ -63,6 +63,7 @@
 7. 术语修改优先改 `TERMS`（`data/terms.ts`）——它是部分翻译（`ZH_PARTIAL`）的
    术语唯一来源；整句覆盖（`ZH`）与字面对在各自条目内维护，改动时同样全局搜索
    旧名和新名，不能只依赖 `node --check`。
+8. Open Design 实际运行独立 `open-design` profile（不是 `headless`）；Host 功能需另装到该 profile。其 probe/models/stdio stdout 是严格 JSONL，所有 Host 信息日志必须经 `src/lib/util.ts#log` 并在该 profile 写 stderr。
 
 ## 共享工程纪律与验证
 

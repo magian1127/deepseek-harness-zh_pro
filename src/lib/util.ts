@@ -3,7 +3,10 @@ import { join } from 'node:path'
 import { dshHome, PKG } from '../bin/dsh-zh.mjs'
 
 export function log(message) {
-  console.log(`[${PKG}] ${message}`)
+  const line = `[${PKG}] ${message}`
+  // Open Design 的 probe/models/stdio 都要求 stdout 只含 JSONL 协议帧。
+  if (argvProfile() === 'open-design') console.error(line)
+  else console.log(line)
 }
 
 export function warn(message) {

@@ -45,6 +45,25 @@ function makePreStepDispatcher(handlers) {
 }
 
 try {
+  // Open Design 的 stdout 是严格 JSONL 协议；Host 信息日志必须改走 stderr。
+  const runtimeUtil = await import(`./lib/util.js?verify=stdio-log-${Date.now()}-${Math.random()}`)
+  const savedArgv = [...process.argv]
+  const savedLog = console.log
+  const savedError = console.error
+  const infoStdout = []
+  const infoStderr = []
+  try {
+    process.argv.splice(0, process.argv.length, process.execPath, 'dsh', '--profile', 'open-design', '--stdio')
+    console.log = function () { infoStdout.push(Array.prototype.join.call(arguments, ' ')) }
+    console.error = function () { infoStderr.push(Array.prototype.join.call(arguments, ' ')) }
+    runtimeUtil.log('stdio protocol probe')
+  } finally {
+    process.argv.splice(0, process.argv.length, ...savedArgv)
+    console.log = savedLog
+    console.error = savedError
+  }
+  check(infoStdout, [], 'open-design 信息日志不污染 stdout')
+  check(infoStderr, ['[deepseek-harness-zh_pro] stdio protocol probe'], 'open-design 信息日志写入 stderr')
   // 旧版无标记行即使位于文件第一行，也必须能识别、归一化并删除。
   const legacyRoot = tempRoot('legacy')
   process.env.DSH_HOME = legacyRoot
@@ -398,6 +417,17 @@ try {
       // harness:source / app:web-surface 的 keep 不再把英文句点带进中文
       check(localeAssembly.sections[2].text.includes('位于 D:\\Projects\\dsh。'), true, 'harness:source 句点不再重复（路径 + 中文句号）')
       check(localeAssembly.sections[3].text.includes('位于 http://127.0.0.1:3080 的'), true, 'app:web-surface URL 后不再有英文句点')
+        // Open Design profile 的 deployment persona 由其官方 runtime 提供，也随开关中文化。
+        const openDesignPersonaEn = 'You are a coding and design agent running for OpenDesign. Follow the complete task and project context supplied in the current user message.'
+        const openDesignSectionsFactory = stubSectionsFactory
+        stubSectionsFactory = function () {
+          return [{ name: 'deployment:persona', text: openDesignPersonaEn }]
+        }
+        const openDesignAgent = { session: { id: 'locale-open-design', events: [] } }
+        localeAssembly = await localeSystemPrompt.assemble({ agent: openDesignAgent, scope: openDesignAgent })
+        check(localeAssembly.sections[0].text.includes('为 OpenDesign 运行的编码与设计代理'), true, 'Open Design persona 换成中文')
+        check(localeAssembly.sections[0].text.includes('当前用户消息'), true, 'Open Design persona 保留任务上下文语义')
+        stubSectionsFactory = openDesignSectionsFactory
       // ---- 创作模式（cordis）persona + 0.1.2-alpha.1 新增指引段落 ----
       const cordisPersonaEn = localeMod.CORDIS_PERSONA_EN
       check(cordisPersonaEn.endsWith('\n'), false, 'cordis persona 匹配键无尾部换行（回归保护）')

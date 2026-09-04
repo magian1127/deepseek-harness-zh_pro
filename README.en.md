@@ -23,7 +23,7 @@ The rows below follow **DSH Settings → Enhancements** from top to bottom:
 | Settings location | Feature | Default | Description |
 | --- | --- | --- | --- |
 | Flat row | Chinese completion | On | Chinese UI only: fixes confirmed leftover English and normalizes tokens, API keys, model IDs, durations, and count formats |
-| Flat row | Agent-role prompt localization | Off | Uses Chinese for the four built-in agent roles and confirmed first-party system sections; locked on the first request of a new session and never reinjected into existing sessions |
+| Flat row | Agent-role prompt localization | Off | Localizes the four built-in roles, the Open Design runtime persona, and confirmed system sections; locked on a new session's first request and never retrofitted into old sessions |
 | Flat row | Tool-description localization | Off | Localizes confirmed built-in DSH tool descriptions and guidance; tool names, parameter names, and third-party tools remain unchanged; new sessions only |
 | Flat row | Injected-context localization | Off | Replaces DSH-injected official context (workspace instruction frames, skill catalog frames, runtime context including its header line, approval/mode switch notices, dynamic-plugin notices, scheduled reminders, compaction checkpoint preambles) with Chinese before it enters session history; GUI and model requests stay consistent, new sessions only; translating the snapshot header makes DSH inject one replacement snapshot per step (slight session-log growth) |
 | Flat row | Prompt injection | Off | Injects editable text into subsequent requests; the default text asks for Chinese reasoning and replies, and the default target is the initial system prompt |
@@ -46,24 +46,34 @@ for full interaction, data, and safety boundaries.
 
 ## Requirements
 
-- DeepSeek Harness Web GUI ≥ 0.1.2-rc.1, default profile `web`
+- DeepSeek Harness ≥ `0.1.2-rc.1`; full UI uses `web`, Open Design stdio uses `open-design`, and DSH one-shot tasks may use `headless`
 - Node.js `^22.19.0 || >=24.0.0`
 
 ## Installation
 
 ```sh
-# Official persistent channel: takes effect on the next natural start
+# Web GUI
 dsh plugin --profile web add deepseek-harness-zh_pro
 
-# Hot install: takes effect immediately while DSH is running
+# Open Design's actual stdio profile
+dsh plugin --profile open-design add deepseek-harness-zh_pro
+
+# Optional: DSH's built-in headless profile
+dsh plugin --profile headless add deepseek-harness-zh_pro
+
+# Hot-install only into a running Web GUI
 npx -y deepseek-harness-zh_pro install --profile web
 ```
 
-Local source debugging (run dependency installation first; `prepare` generates runtime artifacts):
+Bundles are profile-scoped; Open Design actually runs `dsh --profile open-design --stdio`. Non-Web profiles run only the Host half, so browser enhancements cannot enter the Open Design UI. Because `open-design` reserves stdout for strict JSONL, informational logs go to stderr there.
+
+Local source development:
 
 ```powershell
 pnpm install
 node bin/dsh-zh.mjs install --profile web --link $PWD
+dsh plugin --profile open-design add "link:<project-path>"
+dsh plugin --profile headless add "link:<project-path>"
 ```
 
 TypeScript source build and checks:
@@ -79,10 +89,13 @@ npm pack --dry-run --json
 verification scripts are Git-ignored build artifacts. `prepare`, `npm run build`, or `prepack`
 generates them as needed, including the classic client script before publishing.
 
-Check the status after installing:
+Check each profile independently:
 
 ```sh
 npx -y deepseek-harness-zh_pro status --profile web
+dsh plugin --profile open-design list
+dsh --profile open-design --dump-default-config
+dsh plugin --profile headless list
 ```
 
 ## Updating
@@ -95,13 +108,13 @@ files hot-reload automatically while the DSH HMR service is available; otherwise
 
 ```sh
 dsh plugin --profile web remove deepseek-harness-zh_pro
-# or
+dsh plugin --profile open-design remove deepseek-harness-zh_pro
+dsh plugin --profile headless remove deepseek-harness-zh_pro
+# A running Web GUI can also use:
 npx -y deepseek-harness-zh_pro remove --profile web
 ```
 
-Uninstalling cleans up temporary hot rows and running entries but does not delete DSH
-session data. Existing values in localStorage and settings may remain and can be reused
-after reinstalling.
+Removal is profile-scoped; short-lived profiles stop loading it on their next invocation, without deleting sessions.
 
 ## Settings and data
 
@@ -118,6 +131,8 @@ localization replaces DSH-injected official English text before it enters sessio
 as official behavior). Chinese completion only applies to the Chinese interface; the
 other interface enhancements also apply to the English interface. Each model-request
 feature is controlled solely by its own toggle.
+
+Open Design and stock headless have no browser settings page but share `${DSH_HOME:-~/.dsh}/settings.yaml`. Configure the four Host toggles in Web; `open-design` / `headless` read the same namespace. The OpenDesign Charter is application-provided user content and is not translated.
 
 ## FAQ
 
