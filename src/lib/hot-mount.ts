@@ -86,7 +86,6 @@ function readSnapshot(): PackageSnapshot | null {
   try {
     const manifest = JSON.parse(readFileSync(path, 'utf8'))
     const deps = new Set(Object.keys(manifest.dependencies ?? {}))
-    const bundles = new Set(manifest.dsh?.profile?.bundles ?? [])
     return { deps, bundles: new Set<string>(manifest.dsh?.profile?.bundles ?? []) }
   } catch (error) {
     warn(`读取 profile manifest 失败，等待下次文件变化后重试: ${error instanceof Error ? error.message : String(error)}`)

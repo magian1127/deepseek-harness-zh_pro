@@ -1000,11 +1000,21 @@ try {
     const probed = await serviceMonitor.probeTargets([
       { name: 'self', host: '127.0.0.1', port: probeAddress.port },
       { name: 'closed', host: '127.0.0.1', port: 1 },
+      { name: 'lan', host: '192.168.1.10', port: 80 },
       'junk' as never,
     ])
-    check(probed.length, 2, '服务监控探活 只接受结构合法的自定义监控项')
+    check(probed.length, 3, '服务监控探活 结构合法项保留，非环回降级为离线不整体拒绝')
+    const ordered = await serviceMonitor.probeTargets([
+      { name: 'lan-first', host: '192.168.1.11', port: 80 },
+      { name: 'self-second', host: '127.0.0.1', port: probeAddress.port },
+      { name: 'lan-third', host: '192.168.1.12', port: 81 },
+    ])
+    check(ordered.map(item => item.name).join(','), 'lan-first,self-second,lan-third', '服务监控探活 结果保持输入顺序')
+    check(ordered[0] !== undefined && ordered[0].online, false, '服务监控探活 首位非环回恒离线')
+    check(ordered[1] !== undefined && ordered[1].online, true, '服务监控探活 中位环回监听在线')
     check(probed[0] !== undefined && probed[0].online, true, '服务监控探活 监听中的端口在线')
     check(probed[1] !== undefined && probed[1].online, false, '服务监控探活 未监听的端口离线')
+    check(JSON.stringify(probed[2]), '{"name":"lan","host":"192.168.1.10","port":80,"online":false}', '服务监控探活 非环回项恒为离线')
     await new Promise<void>((resolve) => { probeServer.close(() => resolve()) })
   console.log(`OK: CLI/主机全部 ${checks} 项校验通过`)
 } finally {

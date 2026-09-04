@@ -194,7 +194,7 @@ export interface ProbeTarget {
   port: number
 }
 
-/** 探活结果：online = TCP 连接成功（目标地址正在监听）。 */
+/** 探活结果：online = TCP 连接成功（目标地址正在监听）；非环回项不发起连接、恒为 false。 */
 export interface ProbeResult extends ProbeTarget {
   online: boolean
 }
@@ -221,7 +221,6 @@ function normalizeProbeTarget(item: unknown): ProbeTarget | null {
   const port = typeof record.port === 'number' && Number.isFinite(record.port) ? Math.round(record.port) : 0
   if (host === '' || port < 1 || port > 65535) return null
   if (/[\s/\\]/.test(host)) return null
-  if (!isLoopbackLiteral(host)) throw new Error('服务监控仅支持本机地址')
   return { name, host, port }
 }
 
@@ -247,15 +246,35 @@ function probeOne(target: ProbeTarget): Promise<ProbeResult> {
   })
 }
 
-/** 对请求携带的自定义监控项逐个 TCP 连接探活（仅允许环回字面量）。 */
+/**
+ * 对请求携带的自定义监控项逐个处理：仅环回字面量发起 TCP 连接探活
+ * （避免探活 API 被用作内网/公网扫描器）；格式合法但非环回的项不拒绝
+ * 整个请求，直接按离线返回——单项不可探活不影响其余条目与快照。
+ * 结果保持输入顺序（原位回填），调用方与回归断言不依赖探活完成顺序。
+ */
 export async function probeTargets(raw: unknown): Promise<ProbeResult[]> {
   if (!Array.isArray(raw)) return []
-  const targets: ProbeTarget[] = []
-  for (let i = 0; i < raw.length && targets.length < PROBE_MAX_TARGETS; i += 1) {
+  const slots: Array<ProbeResult | null> = []
+  const liveIndexes: number[] = []
+  const liveTargets: ProbeTarget[] = []
+  let accepted = 0
+  for (let i = 0; i < raw.length && accepted < PROBE_MAX_TARGETS; i += 1) {
     const target = normalizeProbeTarget(raw[i])
-    if (target !== null) targets.push(target)
+    if (target === null) { slots.push(null); continue }
+    accepted += 1
+    if (isLoopbackLiteral(target.host)) {
+      slots.push(null)
+      liveIndexes.push(slots.length - 1)
+      liveTargets.push(target)
+    } else {
+      slots.push({ ...target, online: false })
+    }
   }
-  return Promise.all(targets.map(function (target) { return probeOne(target) }))
+  const probed = await Promise.all(liveTargets.map(function (target) { return probeOne(target) }))
+  for (let i = 0; i < probed.length; i += 1) {
+    slots[liveIndexes[i]] = probed[i]
+  }
+  return slots.filter(function (slot): slot is ProbeResult { return slot !== null })
 }
 
 // ---------- 解析（纯函数） ----------

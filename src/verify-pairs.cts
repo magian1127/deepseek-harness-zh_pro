@@ -1049,6 +1049,10 @@ check(JSON.stringify(serviceMonitorUnderTest.parseServiceAddress('127.0.0.1:81')
 check(JSON.stringify(serviceMonitorUnderTest.parseServiceAddress('localhost:3000')), '{"host":"localhost","port":3000}', '服务监控 地址解析 localhost')
 check(JSON.stringify(serviceMonitorUnderTest.parseServiceAddress('[::1]:8080')), '{"host":"[::1]","port":8080}', '服务监控 地址解析 IPv6')
 check(serviceMonitorUnderTest.parseServiceAddress('not an address'), null, '服务监控 地址解析 非法输入返回 null')
+check(serviceMonitorUnderTest.isLoopbackServiceHost('127.0.0.1'), true, '服务监控 回环判定 IPv4')
+check(serviceMonitorUnderTest.isLoopbackServiceHost('localhost'), true, '服务监控 回环判定 localhost')
+check(serviceMonitorUnderTest.isLoopbackServiceHost('[::1]'), true, '服务监控 回环判定 IPv6')
+check(serviceMonitorUnderTest.isLoopbackServiceHost('192.168.1.10'), false, '服务监控 回环判定 非环回拒绝')
 
 // ---- host 进程命令行脱敏（host 为 ESM，批量子进程调用编译后的导出） ----
 const cmdlineCases = [

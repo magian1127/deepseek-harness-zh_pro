@@ -72,6 +72,7 @@ const wrapperEnd = `    exports.inject = ['locale', 'slots'];
     exports.settingsStore = settingsStore;
     exports.serviceMonitor = {
       parseServiceAddress: parseServiceAddress,
+      isLoopbackServiceHost: isLoopbackServiceHost,
       describeServiceOwner: describeServiceOwner,
       ownerTipText: ownerTipText,
       orderedPanelEntries: orderedPanelEntries,

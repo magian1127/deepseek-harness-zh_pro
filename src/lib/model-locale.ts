@@ -1,6 +1,6 @@
 // 「模型请求中文化」：两个独立开关（settings 命名空间 dsh-zh）：
-//   1) zhAgentPrompt（代理角色提示中文化）：四个默认代理（standard/code/
-//      minimal/cordis）的 deployment:persona 系统提示词换成中文版本。
+//   1) zhAgentPrompt（代理角色提示中文化）：四个默认代理的
+//      deployment:persona 系统提示词换成中文版本。
 //      匹配键是 assemble 后的原英文 persona 文本（精确匹配，含 {{model}}/
 //      {{cwd}} 占位符——插值发生在 render 阶段，assemble 后仍是原形）。
 //      未收录的自定义 persona 原样保留。
@@ -220,11 +220,18 @@ const TOOL_FLAVOR_DESC_ZH: Record<string, ReadonlyArray<{ match: string; zh: str
 // checkout 路径、app:web-surface 的 GUI 地址）在替换时从原文提取并拼入。
 // 第三方插件注册的段落（hashline 的 tool:hashline、agent-teams 的
 // team:policy 等）不在此列、保持原样。
-const SYSTEM_SECTION_ZH: Record<string, { zh: string; keep?: (text: string) => string }> = {
+// 每个条目的 match 是官方原文的特征片段：原文不含该片段（上游改版或
+// 第三方同名段落）时不替换、保持原样——与 SECTION_ZH/TOOL_MATCH 同一原则；
+// 含动态信息的段落提取 {keep} 失败时同样保留原文，绝不静默清空占位。
+const SYSTEM_SECTION_ZH: Record<string, { zh: string; match: string; keep?: (text: string) => string }> = {
   'harness:identity': {
+    // 官方特征：packages/core/system-prompt HARNESS_IDENTITY 开场句。
+    match: 'powered by DeepSeek Harness',
     zh: '你是由 DeepSeek Harness 驱动的 AI 代理。',
   },
   'harness:source': {
+    // 官方特征：app-boot addHarnessSourceSection 固定句式。
+    match: 'implementation checkout is at ',
     zh: 'DeepSeek Harness 实现检出目录位于 {keep}。检出位置与当前工作目录是两个不同的值，可能不同；不要从该路径推断工作目录。用 pwd 确定当前工作目录。此检出仅供检查或扩展 DSH 本身使用。',
     keep: function (text) {
       // 提取 'at <路径>.' 中的路径（不含句末英文句点与路径尾部分隔符，
@@ -234,6 +241,8 @@ const SYSTEM_SECTION_ZH: Record<string, { zh: string; keep?: (text: string) => s
     },
   },
   'app:web-surface': {
+    // 官方特征：web-app webSurfacePrompt 固定句式。
+    match: 'DeepSeek Harness Web GUI at ',
     zh: '你正通过位于 {keep} 的 DeepSeek Harness Web GUI 与用户交互。当用户提到 "this page"、"this GUI" 或 "this app" 而未指定其它目标时，指的就是这个 GUI。浏览器不提供隐式的 DOM、路由或截图上下文。客户端插件 HMR 接收器处于活动状态，但仅在从同一检出目录运行 `pnpm run dev:web` 重建其 bundle 时，客户端插件变更才能免刷新重载；在承诺自动更新前先验证该 watcher。其它一切变更——apps/web shell 与普通包——都需要重建受影响的 Web 工件并在页面刷新后验证此现有 URL。启动另一个服务器不会更新此 GUI。apps/web 的 Vite 入口构建 shell，但不是独立应用，因为只有 dsh web 注入 window.__DSH_BOOT__。除非用户要求，否则不要启动替代服务器；如果需要，使用受管后台任务并验证其确切 URL。',
     keep: function (text) {
       // 提取 'at <URL>.' 中的 URL（不含句末英文句点）
@@ -242,9 +251,13 @@ const SYSTEM_SECTION_ZH: Record<string, { zh: string; keep?: (text: string) => s
     },
   },
   'context:file-reference': {
+    // 官方特征：file-reference FILE_REFERENCE_PROMPT 开头。
+    match: 'Tokens prefixed with @ are workspace paths',
     zh: '带 @ 前缀的路径是用户显式引用的文件。需要其内容时使用 read 工具；在读取之前不要声称已检查过该文件。',
   },
   'ui:deliverable-file-references': {
+      // 官方特征：ui-deliverables 包独立的 FILE_REFERENCE_PROMPT 开头句（非 context:file-reference 同名常量）。
+      match: 'When you successfully create or modify files, mention the primary outputs',
     zh: '当你成功创建或修改文件时，在最终回复中提及主要输出。为让这些及其它变更文件引用在 Web 中可点击，请使用确切的文件工具路径（或本回合变更文件中唯一的 basename）以 Markdown 行内代码格式写出。',
   },
 }
@@ -524,12 +537,15 @@ function localizeSystemSections(assembly: unknown): void {
     const rule = SYSTEM_SECTION_ZH[entry.name]
     if (rule === undefined) continue
     if (typeof entry.text !== 'string') continue
+    // 官方特征守卫：原文不含 match 片段（上游改版或第三方同名段落）不替换。
+    if (!entry.text.includes(rule.match)) continue
     let zh = rule.zh
     if (rule.keep !== undefined) {
       const kept = rule.keep(entry.text)
-      if (kept !== '') zh = zh.replace('{keep}', kept)
+      // 动态值提取失败视为原文已改版：保留原文，绝不静默清空 {keep} 占位。
+      if (kept === '') continue
+      zh = zh.replace('{keep}', kept)
     }
-    zh = zh.replace('{keep}', '')
     entry.text = zh
   }
 }

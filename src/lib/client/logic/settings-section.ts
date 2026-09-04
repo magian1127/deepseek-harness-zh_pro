@@ -120,7 +120,8 @@ const ZhSettingsSection = function (props) {
   }
   const addServiceTarget = function () {
     const parsed = parseServiceAddress(svcDraft.addr)
-    if (parsed === null) { setSvcError(true); return }
+    // 仅接受本机回环地址：主机探活只支持环回字面量（非环回项恒报离线）。
+    if (parsed === null || !isLoopbackServiceHost(parsed.host)) { setSvcError(true); return }
     setSvcError(false)
     const next = snapshot.serviceMonitorTargets.concat([
       { name: svcDraft.name.trim().slice(0, 60), host: parsed.host, port: parsed.port },
@@ -150,6 +151,9 @@ const ZhSettingsSection = function (props) {
       : stored.host + ':' + String(stored.port)
     const parsed = parseServiceAddress(draftAddr)
     if (parsed === null) { setSvcEditErrorIndex(index); return }
+    // 仅当地址被改动时要求环回：存量非环回条目改名不受影响（主机将其回报为离线）。
+    if ((parsed.host !== stored.host || parsed.port !== stored.port)
+      && !isLoopbackServiceHost(parsed.host)) { setSvcEditErrorIndex(index); return }
     const next = snapshot.serviceMonitorTargets.slice()
     next.splice(index, 1, { name: draftName.trim().slice(0, 60), host: parsed.host, port: parsed.port })
     settingsStore.set('serviceMonitorTargets', next)

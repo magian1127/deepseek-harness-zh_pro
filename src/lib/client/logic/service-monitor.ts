@@ -161,6 +161,16 @@ function parseServiceAddress(text) {
   return { host: host, port: port }
 }
 
+// 与主机 isLoopbackLiteral 同规则：仅 localhost / [::1] / 127.0.0.0/8 可探活。
+// 设置页「添加/修改自定义监控项」用它拒绝非环回地址（主机对这类项只回报离线）。
+function isLoopbackServiceHost(host) {
+  const normalized = String(host).toLowerCase()
+  if (normalized === 'localhost' || normalized === '::1' || normalized === '[::1]') return true
+  const octets = normalized.split('.')
+  if (octets.length !== 4 || octets[0] !== '127') return false
+  return octets.every(function (octet) { return /^\d{1,3}$/.test(octet) && Number.parseInt(octet, 10) <= 255 })
+}
+
 // 相对时间：启动至今（面板每轮刷新一次，分钟级精度足够）。
 function serviceElapsedText(copy, since, now) {
   const seconds = Math.max(0, Math.floor((now - since) / 1000))

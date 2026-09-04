@@ -246,6 +246,11 @@ let unarchiveWarningIssued = false
    * workspaceRegistry 当前仅公开 archiveSession，没有 unarchive/事务写 API；
    * 因而只通过 storageDomain 做归档集合持久化，不写 registry 私有 state，
    * 等待上游公开 API 后再恢复内存缓存同步，避免绕过 registry 串行器。
+   * 写入无事务保障，但 global.set 排队在域的单一 FIFO 写链上：set resolve
+   * 时所有先前写入均已完成，随后的同步 get 读到的是链上权威真值（内存
+   * 即权威，无需穿透介质）。因此写后重读一次，目标 id 仍在则基于真值重放
+   * 一次过滤；无法覆盖的仅剩“排队更晚的官方 archiveSession 落地覆盖本
+   * 写”——那属于归档请求后到、归档生效，语义本应如此。
    */
   export async function unarchiveSession(
     deps: DeleteDeps,
@@ -266,10 +271,22 @@ let unarchiveWarningIssued = false
       const state = global?.get()
       if (global === undefined || state === undefined) return { ok: false, changed: false }
       const archived = state.archivedSessionIds ?? []
-      const next = archived.filter(id => String(id) !== sessionId)
-      const changed = next.length !== archived.length
-      if (changed) await global.set({ archivedSessionIds: next })
-      return { ok: true, changed }
+      const removeFrom = (ids: readonly string[]): readonly string[] | null => {
+        const next = ids.filter(id => String(id) !== sessionId)
+        return next.length !== ids.length ? next : null
+      }
+      const first = removeFrom(archived)
+      if (first === null) return { ok: true, changed: false }
+      await global.set({ archivedSessionIds: first })
+      // global.set 在域 FIFO 写链上串行：resolve 后重读即链上权威真值。
+      // 目标 id 仍在（先前并发的 archiveSession 已落地、被本写覆盖）则基于
+      // 真值重放一次过滤；排队更晚的归档写覆盖本结果属于“归档后到、归档生效”。
+      const reread = global.get()?.archivedSessionIds
+      if (reread !== undefined && reread.some(id => String(id) === sessionId)) {
+        const retry = removeFrom(reread)
+        if (retry !== null) await global.set({ archivedSessionIds: retry })
+      }
+      return { ok: true, changed: true }
     } catch (error) {
       warnRouteFailure(`取消归档会话 ${sessionId} 失败`, error)
       return { ok: false, changed: false }
