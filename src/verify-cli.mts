@@ -719,7 +719,8 @@ try {
   check(coldResult.ok, true, 'cold 会话删除成功')
   check(archivedCold.length, 0, 'cold 会话删除不归档（无残留列表问题）')
   check(existsSync(sessionDirCold), false, 'cold 会话日志目录已移走')
-  // D6：未知 persistence kind 必须降级逻辑删除，绝不触碰可能共享的目录。
+  // D6：未知 persistence kind 必须中止删除（绝不触碰可能共享的目录，
+  // 也绝不退化为「只移账本、日志还在」的假删除）。
   const sharedDir = join(delRoot, 'shared-unknown-kind')
   mkdirSync(sharedDir, { recursive: true })
   const sharedMarker = join(sharedDir, 'marker.txt')
@@ -732,9 +733,79 @@ try {
       locate: function () { return { kind: 'sqlite', path: join(sharedDir, 'sessions.db') } },
     },
   }, 'session-unknown-kind', { trash: false, title: 'unknown-kind' })
-  check(unknownKindResult.ok, true, '未知 persistence kind 降级逻辑删除成功')
-  check(unknownKindResult.ok && unknownKindResult.hint?.includes('未确认'), true, '未知 persistence kind 返回未确认提示')
-  check(existsSync(sharedDir) && existsSync(sharedMarker), true, '未知 persistence kind 不物理删除共享目录')
+  check(unknownKindResult.ok, false, '不可回收后端中止删除（不假删除）')
+  check(unknownKindResult.code, 'unsupported-backend', '不可回收后端返回 unsupported-backend')
+  check(existsSync(sharedDir) && existsSync(sharedMarker), true, '不可回收后端不物理删除共享目录')
+
+  // D7：DSH 0.1.3-alpha.1 新契约（stat/list 快照，无 readRaw/locate）：
+  // 物理目录按 <root>/<项目>/<id> 扫描定位，删除真正移入回收站。
+  const savedHomeForDelete = process.env.DSH_HOME
+  process.env.DSH_HOME = delRoot
+  const newApiDir = join(delRoot, 'sessions', 'proj-newapi', 'session-newapi1')
+  mkdirSync(newApiDir, { recursive: true })
+  writeFileSync(join(newApiDir, 'session.v2.jsonl.zstd'), '{}')
+  const archivedNewApi: string[] = []
+  const newApiDeps = {
+    sessions: { get: function (id: string) { return id === 'session-newapi1' ? { id: 'session-newapi1' } : undefined } },
+    agents: { get: function () { return { status: 'idle', cancel: function () {}, whenIdle: function () { return Promise.resolve() } } } },
+    sessionPersistence: {
+      stat: function () { return Promise.resolve({ header: { id: 'session-newapi1', cwd: '/tmp/proj' } }) },
+      list: function () { return Promise.resolve([{ header: { id: 'session-newapi1', cwd: '/tmp/proj' } }]) },
+    },
+    workspaceRegistry: {
+      list: function () { return [{ path: '/tmp/proj', sessionIds: [], detachSession: function () { return Promise.resolve() }, attachSession: function () { return Promise.resolve() } }] },
+      archiveSession: async function (id: string) { archivedNewApi.push(id) },
+    },
+  }
+  const newApiResult = await sessionDelete.deleteSession(newApiDeps, 'session-newapi1', { trash: true, title: 'newapi1' })
+  check(newApiResult.ok, true, '新契约 stat 定位删除成功')
+  check(archivedNewApi.includes('session-newapi1'), true, '新契约 驻留会话删除后归档隐藏（上游无卸载 API）')
+  check(existsSync(newApiDir), false, '新契约 会话日志目录已移入回收站')
+  check(sessionDelete.sessionTrash.list().some(function (e) { return e.sessionId === 'session-newapi1' }), true, '新契约 回收站已登记')
+
+  // D8：冷会话（无内存驻留）走新契约：物理移走后自然从列表消失，
+  // 删除不触碰归档集合（删除 ≠ 归档）。
+  const newApiColdDir = join(delRoot, 'sessions', 'proj-newapi', 'session-newapi2')
+  mkdirSync(newApiColdDir, { recursive: true })
+  writeFileSync(join(newApiColdDir, 'session.v2.jsonl.zstd'), '{}')
+  const archivedNewApiCold: string[] = []
+  const newApiColdDeps = {
+    sessions: { get: function () { return undefined } },
+    agents: { get: function () { return undefined } },
+    sessionPersistence: {
+      stat: function () { return Promise.resolve({ header: { id: 'session-newapi2', cwd: '/tmp/proj' } }) },
+      list: function () { return Promise.resolve([{ header: { id: 'session-newapi2', cwd: '/tmp/proj' } }]) },
+    },
+    workspaceRegistry: {
+      list: function () { return [{ path: '/tmp/proj', sessionIds: [], detachSession: function () { return Promise.resolve() }, attachSession: function () { return Promise.resolve() } }] },
+      archiveSession: async function (id: string) { archivedNewApiCold.push(id) },
+    },
+  }
+  const newApiColdResult = await sessionDelete.deleteSession(newApiColdDeps, 'session-newapi2', { trash: true, title: 'newapi2' })
+  check(newApiColdResult.ok, true, '新契约 冷会话删除成功')
+  check(archivedNewApiCold.length, 0, '新契约 冷会话删除不归档（物理移走后自然消失）')
+  check(existsSync(newApiColdDir), false, '新契约 冷会话日志目录已移入回收站')
+
+  // D9：无法定位（stat 无结果）→ 中止删除：报错、不动账本、不归档。
+  let detachCalled = false
+  let archiveCalled = false
+  const notFoundResult = await sessionDelete.deleteSession({
+    sessions: { get: function () { return undefined } },
+    agents: { get: function () { return undefined } },
+    sessionPersistence: {
+      stat: function () { return Promise.resolve(undefined) },
+      list: function () { return Promise.resolve([]) },
+    },
+    workspaceRegistry: {
+      list: function () { return [{ path: '/tmp/proj', sessionIds: ['session-ghost'], detachSession: function () { detachCalled = true; return Promise.resolve() }, attachSession: function () { return Promise.resolve() } }] },
+      archiveSession: async function () { archiveCalled = true },
+    },
+  }, 'session-ghost', { trash: true })
+  check(notFoundResult.ok, false, '无法定位时中止删除（不假删除）')
+  check(notFoundResult.code, 'locate-failed', '无法定位返回 locate-failed')
+  check(detachCalled, false, '无法定位时不移除工作区账本')
+  check(archiveCalled, false, '无法定位时不归档')
+  process.env.DSH_HOME = savedHomeForDelete
 
   // 运行中的会话拒绝删除。
   const runningDeps = {

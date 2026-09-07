@@ -9,24 +9,31 @@
 //     视为孤儿数据，绝不自动复活。
 //
 // 实现要点：
-//   1. 目标定位不用上游私有编码规则：通过服务面 sessionPersistence
-//      （list / inspect / locate / readRaw）读取权威 header，从而得到
-//      cwd、id 与物理日志路径。locate() 是「副作用为零的位置提示」，
-//      JSONL 后端据此给出真实文件路径（session.jsonl[.zstd]）；我们
-//      移动的是它的父目录（该目录归该会话独有，可含未来的会话私有
-//      工件）。readRaw 兜底 locate 不可用（如 SQLite 后端）时，artifact
-//      本身不带路径，此时退化为「逻辑删除 + 提示无法回收」。
-//   2. 删除顺序：先移动物理目录（若存在）→ 移除工作区账本槽位 →
-//      移除归档集合成员 → 处理在内存的活跃会话。任何一步失败都尽量
-//      保持现状并报告错误；物理移动失败时绝不继续（避免留下
-//      「列表已删但日志还在原地」的中间态）。
+//   1. 目标定位优先用上游服务面权威 header，物理路径按版本演进兼容：
+//      - 0.1.2-rc.1：sessionPersistence 公开 list / readRaw / locate；
+//        locate() 是「副作用为零的位置提示」，JSONL 后端据此给出真实
+//        文件路径（session.jsonl[.zstd]）；我们移动的是它的父目录（该
+//        目录归该会话独有，可含未来的会话私有工件）。
+//      - 0.1.3-alpha.1 起：公开面句柄化（create/open/stat/list），
+//        readRaw / locate 不再公开，list 返回 { header, ... } 快照。
+//        定位改用 stat 快照的 header；物理目录按 DSH 会话根目录布局
+//        `<root>/<项目目录>/<会话 id>/` 扫描（locateSessionDirById，
+//        目录名精确匹配、不复制上游编码算法）。定位失败或后端类型
+//        无法回收时**直接中止删除**（报错、不改动任何数据）——绝不
+//        退化为「逻辑删除」（只移账本不动日志会让会话残留在列表/
+//        「未分组」桶，2026-09-07 0.1.3-alpha.1 实测定界）。
+//   2. 删除顺序：先移动物理目录（必须成功，失败即中止）→ 移除工作区
+//      账本槽位 → 登记回收站清单 → 仅内存驻留（live）会话加入官方
+//      归档集合隐藏（上游无卸载 API，见第 5 步）→ 记入已删除集合。
+//      任何一步失败都保持现状并报告错误，绝不留下「列表已删但日志
+//      还在原地」或「日志已删但列表还显示」的中间态。
 //   3. 活跃会话：只有「正在运行」的会话拒绝删除（边写日志边移动文件
 //      不安全）。已打开但空闲的会话允许删除：先 cancel（kind 'hook'，
 //      同官方「用户取消」语义）清空待处理消息，等待 whenIdle 收敛，再
 //      移走日志目录。日志写盘完全由 session/event 驱动，空闲会话不落盘，
 //      因此移走文件后不会「复活」；删除后内存 agent 仍驻留（上游没有按
-//      id 卸载 live agent 的公开 API），但会话已从列表/账本移除，正常
-//      用户流程不会再次访问它。
+//      id 卸载 live agent 的公开 API），由归档集合隐藏，正常用户流程
+//      不会再次访问它。
 //   4. 所有副作用随 Fiber 可逆：路由注销、监听器移除、定时器清理。
 //   5. 回收站清单：由本文件维护的内存清单 + 每项的唯一 token，通过
 //      路由 /dsh-zh/api 提供给网页（列表/恢复）。清单在进程重启后
@@ -38,8 +45,9 @@
 //      端点级缓存，服务消失即清）；POST /dsh-zh/api/service-monitor/open
 //      按已缓存归属在文件管理器中定位监听进程目录（路径不接受请求传入）。
 
-import { dirname } from 'node:path'
-import { rm } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
+import { readdir, rm, stat as fsStat } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { PKG } from '../bin/dsh-zh.mjs'
 import { ZH_SETTINGS_NS } from './constants.js'
@@ -129,7 +137,9 @@ async function pruneDeletedSessionIds(deps: DeleteDeps): Promise<void> {
   if (deletedSetPruned) return
   deletedSetPruned = true
   const persistence = deps.sessionPersistence
-  if (persistence === undefined || typeof persistence.readRaw !== 'function') return
+  // 0.1.2-rc.1 用 readRaw、0.1.3-alpha.1 起用 stat（句柄模型），任一可用即可对账。
+  if (persistence === undefined
+    || (typeof persistence.readRaw !== 'function' && typeof persistence.stat !== 'function')) return
   const storage = deps.storageDomain
   if (storage === undefined || typeof storage.get !== 'function') return
   let archived: readonly string[] = []
@@ -149,7 +159,11 @@ async function pruneDeletedSessionIds(deps: DeleteDeps): Promise<void> {
     if (deletedSessionIds.has(id)) continue
     let raw: unknown
     try {
-      raw = await persistence.readRaw(id)
+      if (typeof persistence.readRaw === 'function') {
+        raw = await persistence.readRaw(id)
+      } else {
+        raw = await persistence.stat!(id)
+      }
     } catch {
       raw = undefined
     }
@@ -195,9 +209,17 @@ interface DeleteDeps {
     get(id: string): unknown
   }
   sessionPersistence?: {
-    list?(): Promise<Array<{ id: string; cwd?: string }>>
+    list?(): Promise<Array<{ id: string; cwd?: string } | { header?: { id: string; cwd?: string } }>>
+    /** DSH 0.1.2-rc.1 公开面：读取 artifact（返回 meta）与定位物理路径。 */
     locate?(meta: { id: string; cwd?: string }): { kind: string; path: string } | undefined
     readRaw?(id: string): Promise<{ meta: { id: string; cwd?: string } } | undefined>
+    /**
+     * DSH 0.1.3-alpha.1 起的新公开面：`readRaw`/`locate` 不再公开，
+     * 改用 create/open/stat/list 句柄模型。stat 返回快照（含 header），
+     * 但不提供物理路径——物理目录由 {@link locateSessionDirById} 按
+     * `~/.dsh/sessions/<项目>/<会话 id>` 布局扫描定位。
+     */
+    stat?(id: string): Promise<{ header?: { id: string; cwd?: string }; meta?: { id: string; cwd?: string } } | undefined>
   }
   workspaceRegistry?: {
     list(): Array<{
@@ -233,6 +255,8 @@ function routeErrorMessage(code: string): string {
   switch (code) {
     case 'session-busy': return '该会话正在运行，请先停止或等待其结束。'
     case 'trash-failed': return '移入回收站失败，请稍后重试。'
+    case 'locate-failed': return '无法定位会话日志目录，已中止删除（未改动任何数据）。'
+    case 'unsupported-backend': return '该会话的日志后端不支持移入系统回收站，已中止删除（未改动任何数据）。'
     case 'reattach-failed': return '恢复未完成，请稍后重试。'
     case 'restore-failed': return '恢复失败，请稍后重试。'
     case 'unarchive-failed': return '取消归档失败，请稍后重试。'
@@ -293,8 +317,54 @@ let unarchiveWarningIssued = false
     }
   }
 /**
+ * DSH 会话存储根目录：`DSH_HOME/sessions`（默认 `~/.dsh/sessions`），与
+ * `dshHomePath('sessions')` 的部署约定一致。0.1.3-alpha.1 起公开服务面
+ * 不再提供物理路径，删除回收依赖它做目录扫描。
+ */
+function sessionRootDir(): string {
+  const home = process.env.DSH_HOME !== undefined && process.env.DSH_HOME !== ''
+    ? process.env.DSH_HOME
+    : join(homedir(), '.dsh')
+  return join(home, 'sessions')
+}
+
+/**
+ * 按会话 id 扫描定位物理日志目录：`<root>/<项目目录>/<会话 id>/`。
+ * 会话 id 是安全字符（`[A-Za-z0-9_-]`，编码后目录名等于原 id），项目目录
+ * 名由 DSH 私有编码生成（不复制该算法），因此直接枚举根下项目目录并按
+ * 目录名精确匹配——对 DSH 布局算法变化免疫。目录存在即视为该会话私有
+ * 目录（可含未来的会话私有工件）；找不到返回 null（删除退化为逻辑删除）。
+ */
+async function locateSessionDirById(sessionId: string): Promise<string | null> {
+  const root = sessionRootDir()
+  let projects: string[] = []
+  try {
+    const entries = await readdir(root, { withFileTypes: true })
+    projects = entries
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name)
+  } catch {
+    return null // 根不存在（无会话）或不可读：不视为可定位。
+  }
+  for (const project of projects) {
+    const candidate = join(root, project, sessionId)
+    try {
+      const info = await fsStat(candidate)
+      if (info.isDirectory()) return candidate
+    } catch {
+      // 该项目下无此会话，继续。
+    }
+  }
+  return null
+}
+
+/**
  * 定位会话的物理日志目录（绝对路径）与展示信息。
  * 返回 null 表示无法定位（后端不提供 locate / 日志从未落盘）。
+ *
+ * 契约演进：0.1.2-rc.1 公开 `readRaw`/`locate`（locate 给出物理路径）；
+ * 0.1.3-alpha.1 起句柄化（create/open/stat/list），公开面不再提供
+ * 物理路径，改由 {@link locateSessionDirById} 按布局扫描补齐。
  */
 async function resolveSessionTarget(
   deps: DeleteDeps,
@@ -304,7 +374,7 @@ async function resolveSessionTarget(
   if (persistence === undefined) return null
 
   let header: { id: string; cwd?: string } | undefined
-  // 1) 通过 readRaw 读 artifact（内容包含 header），避免扫描全部会话。
+  // 1) 旧契约：readRaw 读 artifact（内容包含 header），避免扫描全部会话。
   if (typeof persistence.readRaw === 'function') {
     try {
       const artifact = await persistence.readRaw(sessionId)
@@ -315,19 +385,39 @@ async function resolveSessionTarget(
       header = undefined
     }
   }
-  // 2) 兜底：list() 扫描 header。
+  // 2) 新契约：stat 返回快照（header 在快照上），不再需要读全量日志。
+  if (header === undefined && typeof persistence.stat === 'function') {
+    try {
+      const snapshot = await persistence.stat(sessionId) as
+        | { header?: { id: string; cwd?: string } | undefined }
+        | undefined
+      if (snapshot !== undefined && snapshot !== null && snapshot.header !== undefined) {
+        header = snapshot.header
+      }
+    } catch {
+      header = undefined
+    }
+  }
+  // 3) 兜底：list() 扫描 header（兼容旧 `{id,cwd}` 数组与新 `{header}` 快照）。
   if (header === undefined && typeof persistence.list === 'function') {
     try {
       const headers = await persistence.list()
-      const match = headers.find(candidate => String(candidate.id) === sessionId)
-      if (match !== undefined) header = match
+      const match = headers.find(candidate => {
+        const candidateId = (candidate as { id?: string }).id
+          ?? (candidate as { header?: { id?: string } }).header?.id
+        return String(candidateId) === sessionId
+      })
+      if (match !== undefined) {
+        header = (match as { header?: { id: string; cwd?: string } }).header
+          ?? (match as { id: string; cwd?: string })
+      }
     } catch {
       header = undefined
     }
   }
   if (header === undefined) return null
 
-  // 3) locate() 给出物理路径；取父目录作为会话私有目录。
+  // 4) 旧契约：locate() 给出物理路径；取父目录作为会话私有目录。
   let dir: string | null = null
     let kind: string | null = null
     if (typeof persistence.locate === 'function') {
@@ -343,7 +433,13 @@ async function resolveSessionTarget(
       } catch {
         dir = null
       }
-    }
+  }
+  // 5) 新契约：无 locate 且 kind 未确认（确认过的非 JSONL kind 不扫描）时，
+  //    按目录布局扫描（JSONL 后端目录存在即可回收）。
+  if (dir === null && kind === null) {
+    dir = await locateSessionDirById(sessionId)
+    if (dir !== null) kind = 'jsonl'
+  }
     return { header, dir, kind }
 }
 
@@ -389,31 +485,49 @@ export async function deleteSession(
     }
   }
 
-  // 1) 定位物理目录。
+  // 1) 定位物理目录。定位失败（服务面拿不到 header / 目录扫描无结果）时
+  //    直接中止：绝不退化为「假删除」——先 detach 账本会把已删除的会话
+  //    丢进官方「未分组」桶而日志仍在原地（2026-09-07 DSH 0.1.3-alpha.1
+  //    实测定界：sessionPersistence 公开面句柄化后 locate/readRaw 消失）。
   const target = await resolveSessionTarget(deps, sessionId)
-  const cwd = target === null ? '' : (target.header as { cwd?: string }).cwd ?? ''
+  if (target === null) {
+    warnRouteFailure(`删除会话 ${sessionId} 中止：无法定位会话日志目录`, new Error('not-located'))
+    return {
+      ok: false,
+      code: 'locate-failed',
+      message: '无法定位会话日志目录，已中止删除（未改动任何数据）。',
+    }
+  }
+  const cwd = target.header.cwd ?? ''
   const title = options.title !== undefined && options.title !== '' ? options.title : sessionId
 
-  // 2) 物理移动：失败则中止（不留下「列表已删但日志还在」的中间态）。
+  // 2) 物理移动：目标目录/后端类型不可回收（非 JSONL）时同样中止——
+  //    绝不执行「逻辑删除」（只移账本、不动日志会把会话留在列表/未分组）。
+  if (target.dir === null || target.kind === null || !CONFIRMED_JSONL_KINDS.has(target.kind)) {
+    warnRouteFailure(`删除会话 ${sessionId} 中止：后端类型不支持移入回收站`, new Error(`kind=${String(target.kind)}`))
+    return {
+      ok: false,
+      code: 'unsupported-backend',
+      message: '该会话的日志后端不支持移入系统回收站，已中止删除（未改动任何数据）。',
+    }
+  }
   let trashLocation = ''
   let dirRemoved = false
-    if (target !== null && target.dir !== null && target.kind !== null && CONFIRMED_JSONL_KINDS.has(target.kind)) {
-    try {
-      if (options.trash) {
-        const result = await trashItem(target.dir)
-        trashLocation = result.location
-      } else {
-        await rm(target.dir, { recursive: true, force: true })
-        trashLocation = target.dir
-      }
-      dirRemoved = true
-    } catch (error) {
-        warnRouteFailure(`删除会话 ${sessionId} 的物理目录失败`, error)
-      return {
-        ok: false,
-        code: 'trash-failed',
-          message: '移入回收站失败，请稍后重试。',
-      }
+  try {
+    if (options.trash) {
+      const result = await trashItem(target.dir)
+      trashLocation = result.location
+    } else {
+      await rm(target.dir, { recursive: true, force: true })
+      trashLocation = target.dir
+    }
+    dirRemoved = true
+  } catch (error) {
+    warnRouteFailure(`删除会话 ${sessionId} 的物理目录失败`, error)
+    return {
+      ok: false,
+      code: 'trash-failed',
+      message: '移入回收站失败，请稍后重试。',
     }
   }
 
@@ -445,11 +559,14 @@ export async function deleteSession(
     })
   }
 
-  // 5) 内存驻留的会话无法从 registry 卸载（上游没有按 id 卸载 live
-  //    agent/session 的公开 API），删除后 `ctx.sessions.list()` 仍会把它
-  //    交给列表，造成「删除后还在列表里（只是无法对话）」。这里用官方
-  //    归档集合（archivedSessionIds，官方语义：在所有分组不可见）把它
-  //    隐藏，保证删除后从列表消失。
+  // 5) 内存驻留（live）的会话无法从会话存储移除（上游没有按 id 卸载
+  //    live agent/session 的公开 API），删除后官方列表数据源仍会合并它
+  //    （session-query corpus = 持久化 ∪ 内存会话），造成「删除后还在
+  //    列表里（只是无法对话）」。仅这类会话用官方归档集合
+  //    （archivedSessionIds，官方语义：在所有分组不可见）隐藏——这是
+  //    上游限制下唯一能让它从列表消失的手段；归档视图按主机已删除
+  //    集合过滤，用户不会在归档里看到它。冷会话（无内存驻留）删除后
+  //    持久化数据源不再包含它，不触碰归档集合。
   const liveAfter = deps.sessions?.get(sessionId)
   if (liveAfter !== undefined && registry !== undefined
     && typeof registry.archiveSession === 'function') {
@@ -464,9 +581,6 @@ export async function deleteSession(
   return {
     ok: true,
     trashed: dirRemoved && options.trash,
-      ...(target !== null && (target.dir === null || target.kind === null || !CONFIRMED_JSONL_KINDS.has(target.kind))
-        ? { hint: target?.kind !== null && target?.kind !== undefined && !CONFIRMED_JSONL_KINDS.has(target.kind) ? '该会话后端类型未确认，已逻辑删除（未触碰物理目录）。' : '该会话日志无法定位，已从列表移除（后端不支持回收）。' }
-      : {}),
   }
 }
 
