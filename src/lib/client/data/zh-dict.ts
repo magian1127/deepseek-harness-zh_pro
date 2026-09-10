@@ -2,13 +2,27 @@
 // 仅保留「必须改写整句」的键；能只换个别词的键一律放 ZH_PARTIAL。
 // DSH 0.1.2 起统计与消息键属 chat 命名空间（ui-chat 包），
 // conversation 命名空间只保留 access/ask 等骨架键（ui-conversation 包）。
+// DSH 0.1.5 对齐：
+//  - settings.transcript.normal/compact 已由上游本地化（标准/紧凑），删除；
+//  - chat.stats.* 系列键已从上游移除（统计行改为 composer-dock StatsPills +
+//    TurnUsagePanel，消息键 message.* 保留），对应覆盖删除；
+//  - 斜杠命令描述由 ui-commands command 命名空间本地化（6 条），
+//    DOM 文本层覆盖已失效，迁移为键级整句覆盖（保留用户自定义叫法）。
 const ZH = {
   chat: {
     // 重试倒计时的 lookup 兜底；正常路径在 translate 里整句拼装。
     'message.retry.status': '{label}（{retry}/{maximum}） · {seconds}秒',
-    // 上游新增「对话显示」设置行的两档未翻译：Normal/Compact。
-    'settings.transcript.normal': '标准',
-    'settings.transcript.compact': '紧凑',
+  },
+  command: {
+    // 0.1.5 起斜杠命令描述走 command 命名空间（ui-commands），上游 zh 已
+    // 本地化（description.xxx）；此处保留本插件的既定叫法（与上游措辞
+    // 不同），按键级覆盖。
+    'description.compact': '压缩较早的对话历史',
+    'description.export': '将会话日志下载为 ZIP 压缩包',
+    'description.feedback': '记录对本会话的反馈',
+    'description.goal': '设置或查看长期任务的目标',
+    'description.permission': '切换权限预设（沙箱模式 + 审批策略）',
+    // description.plan 与上游「进入或退出计划模式」叫法一致，无需覆盖。
   },
   cordis: {
     // 上游 zh 词典漏翻：Cordis 面板按钮标题与运行数量。
@@ -21,18 +35,24 @@ const ZH = {
       presetPtcName: '程序模式',
       presetPtcDescription: '具备标准模式的全部能力，并通过程序模式开发包呈现工具，让模型用一个 TypeScript 程序组合多步操作。',
     },
+  trajectory: {
+    // 0.1.5 轨迹视图完全词典化（trajectory 命名空间）。上游 zh 值仍夹带
+    // 英文残留（Round/token/tok/tok-s/Schema），整句覆盖仅处理无法用术语
+    // 替换修正的键；其余走 ZH_PARTIAL。
+    // source.goalRound 上游 zh 为「目标 · Round {round}」：术语替换无法
+    // 重排语序，整句覆盖为「目标 · 第 {round} 轮」。
+    'source.goalRound': '目标 · 第 {round} 轮',
+  },
   '*': {
-    retry: '重试', submit: '提交', submitting: '正在提交', save: '保存', cancel: '取消',
-    close: '关闭', copy: '复制', copied: '复制成功', delete: '删除', edit: '编辑',
-    open: '打开', search: '搜索', settings: '设置', none: '无', unknown: '未知',
-    done: '已完成', failed: '失败', running: '运行中', stopped: '已停止',
-    completed: '已完成', pending: '待处理', idle: '空闲', error: '错误', ok: '确定',
-    back: '返回', next: '下一步', previous: '上一步', more: '更多', expand: '展开',
-    collapse: '收起', truncated: '已截断', loading: '加载中', 'load.failed': '加载失败',
-    empty: '空', warning: '警告', success: '成功', confirm: '确认', apply: '应用',
-    reset: '重置', remove: '移除', add: '添加', rename: '重命名', refresh: '刷新',
-    reload: '重新加载', view: '查看', preview: '预览', details: '详情', status: '状态',
-    options: '选项', general: '通用设置', language: '语言', appearance: '外观',
+    // 与上游 common 命名空间等价的通用词已被上游本地化（DSH 0.1.5 补齐），
+    // 不再需要本插件覆盖；此处只保留 common 未收录、仍有兜底价值的词。
+    open: '打开', settings: '设置', done: '已完成', failed: '失败', running: '运行中',
+    stopped: '已停止', completed: '已完成', pending: '待处理', idle: '空闲',
+    error: '错误', empty: '空', warning: '警告', success: '成功', confirm: '确认',
+    apply: '应用', reset: '重置', remove: '移除', add: '添加', rename: '重命名',
+    refresh: '刷新', reload: '重新加载', view: '查看', preview: '预览',
+    details: '详情', status: '状态', options: '选项', general: '通用设置',
+    language: '语言', appearance: '外观',
   },
 }
 
@@ -42,10 +62,6 @@ const ZH = {
 // 条目可以是术语名（查 TERMS），也可以是 [原文, 译文] 字面对（仅此键使用）。
 const ZH_PARTIAL = {
   chat: {
-    'stats.llm': ['llm'],
-    'stats.ttftAverage': ['token'],
-    'stats.tokensPerSecond': ['tokPerSec'],
-    'stats.tokens': ['tok'],
     'message.compaction.completed': ['token'],
     'message.unknownSurface': ['surface'],
     'message.maxTokens': ['token'],
@@ -58,6 +74,21 @@ const ZH_PARTIAL = {
     // 上游新增的轮次过程摘要行：'{count} 个 subagent'。
     'message.turnProcess.subagents.one': ['subagent'],
     'message.turnProcess.subagents.other': ['subagent'],
+    // 0.1.5 StatsPills 统计对话框（stats.dialog.*）：zh 值仍夹带英文。
+    'stats.dialog.usageTitle': [['Token', '词元']],
+    'stats.dialog.ttft': ['token'],
+  },
+  trajectory: {
+    // 0.1.5 轨迹视图词典化后 zh 值仍夹带英文残留，术语层修正：
+    'unit.tokens': ['tok'],
+    'unit.tokensPerSecond': ['tokPerSec'],
+    'usage.tokens': [['Token', '词元']],
+    'tab.schema': [['Schema', '模式']],
+    'record.schemaUnavailable': [['Schema', '模式']],
+    'timing.firstTokenUnavailable': ['token'],
+    'timing.outputTokensUnavailable': ['token'],
+    'timing.ttft': ['token'],
+    'timeline.ttftDecoding': ['token'],
   },
   'settings.models': {
     intro: ['api'],
@@ -116,7 +147,9 @@ const ZH_PARTIAL = {
     presetStandardDescription: ['agentLabel', 'shell', 'skills'],
     // presetPtcName/presetPtcDescription（旧名 presetCodeName/presetCodeDescription）：
     // 上游 0.1.2 已补全中文（「PTC 模式」/完整中文说明），不再需要本插件覆盖。
-    presetMinimalDescription: ['bash', 'strReplaceEditor', 'agentLabel'],
+    // 0.1.5 minimal 描述为「仅提供持久 shell 的单工具编码 Agent.」，
+    // 已不含 bash / str_replace_editor 字面量，仅 Agent 术语仍生效。
+    presetMinimalDescription: ['agentLabel'],
     presetCordisDescription: ['agentLabel', 'preset'],
   },
   plan: {
@@ -141,5 +174,7 @@ const ZH_PARTIAL = {
     'dialog.successDescription': ['session'],
     'dialog.errorTitle': ['session'],
     'dialog.commandFailed': ['session'],
+    // 0.1.5 上游新增的菜单项（下载 Session 日志）仍夹带英文。
+    'menu.download': ['session'],
   },
 }

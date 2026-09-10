@@ -125,7 +125,10 @@ export function installChinesePrompt(ctx: HostContext): void {
         assembly.sections[index] = section
         return
       }
-      const personaIndex = assembly.sections.findIndex(function (entry) { return entry?.name === 'deployment:persona' })
+      // DSH 0.1.5 起 persona 拆分为 deployment:persona-prefix（order 0）与
+      // deployment:persona-suffix（order 10200）。提示仍插在 persona 之前，
+      // 因此以 prefix 段定位；suffix 段（cwd 句）渲染在全段最后，不受影响。
+      const personaIndex = assembly.sections.findIndex(function (entry) { return entry?.name === 'deployment:persona-prefix' })
       if (personaIndex >= 0) assembly.sections.splice(personaIndex, 0, section)
       else assembly.sections.push(section)
     }

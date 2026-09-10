@@ -13,14 +13,10 @@ const UPSTREAM = {
     'input.accessMode': '访问模式，当前：{name}',
   },
   // DSH 0.1.2：统计与消息键由 conversation 拆到 chat（ui-chat 包）。
+  // DSH 0.1.5：chat.stats.* 系列键与 settings.transcript.* 已从上游移除
+  // （统计行改为 composer-dock StatsPills + TurnUsagePanel；transcript 由
+  // common 词典覆盖），UPSTREAM 不再收录。
   chat: {
-    'stats.llm': 'LLM {duration}',
-    'stats.toolCall': '工具调用 {duration}',
-    'stats.ttftAverage': '首 token 平均 {duration}',
-    'stats.tokensPerSecond': '{throughput} tok/s',
-    'stats.tokens': '输入 {input} tok · 输出 {output} tok',
-    'settings.transcript.normal': 'Normal',
-    'settings.transcript.compact': 'Compact',
     'message.compaction.completed': '已压缩 {items} 条历史记录（约 {tokens} tokens）',
     'message.unknownSurface': '未知 surface 事件：{type}',
     'message.maxTokens': '已达到输出 token 上限',
@@ -33,10 +29,25 @@ const UPSTREAM = {
     'message.retry.status': '{label}（{retry}/{maximum}） · {seconds}s',
     'message.turnProcess.subagents.one': '{count} 个 subagent',
     'message.turnProcess.subagents.other': '{count} 个 subagent',
+    // 0.1.5 StatsPills 统计对话框：zh 值仍夹带英文 Token/token。
+    'stats.dialog.usageTitle': 'Token 用量',
+    'stats.dialog.ttft': '首 token 平均（TTFT）',
   },
+  // DSH 0.1.5：trajectory 视图完全词典化（ui-trajectory 包），zh 值仍夹带
+  // 英文残留（token/tok/tok-s/Schema/Round），由 zh-dict.ts 的 trajectory
+  // partial 修正；UPSTREAM 收录这些键作为 mock 输入。toolbar.* 为旧键
+  // （上游 0.1.2-alpha.2 已本地化，保留供检查）。
   trajectory: {
-    // DSH 0.1.2-alpha.2 起上游 zh 词典已完整本地化（时长/展开所有轮次等），
-    // 本插件不再覆盖该命名空间（跟随上游）。
+    'unit.tokens': '{value} tok',
+    'unit.tokensPerSecond': '{value} tok/s',
+    'usage.tokens': 'Token',
+    'tab.schema': 'Schema',
+    'record.schemaUnavailable': 'Schema 不可用',
+    'timing.firstTokenUnavailable': '首 token 时间不可用',
+    'timing.outputTokensUnavailable': '输出 token 数不可用',
+    'timing.ttft': '首 token 延迟',
+    'timeline.ttftDecoding': '首 token {ttft} · 解码 {decoding}',
+    'source.goalRound': '目标 · Round {round}',
     'toolbar.duration': '时长',
     'toolbar.useActualDuration': '使用实际时长',
     'toolbar.useEqualWidth': '使用等宽操作',
@@ -95,7 +106,9 @@ const UPSTREAM = {
     presetStandardDescription: '功能完整的编码 Agent，支持文件编辑、Shell、文件与网页检索、Skills、计划、目标、子代理和工作流。',
     presetPtcName: 'PTC 模式',
     presetPtcDescription: '具备标准模式的全部能力，并通过 PTC 模式 SDK 呈现工具，让模型用一个 TypeScript 程序组合多步操作。',
-    presetMinimalDescription: '仅提供持久 bash 与 str_replace_editor 的双工具编码 Agent。',
+    // 0.1.5 minimal 描述：仅提供持久 shell 的单工具编码 Agent（上游 zh 值，
+    // shell 为小写、不在本插件术语表内；Agent 术语命中）。
+    presetMinimalDescription: '仅提供持久 shell 的单工具编码 Agent。',
     presetCordisDescription: '用于创建自定义 Agent preset：具备标准模式的全部能力，并提供运行时检查、插件实验和 preset 创作指导。',
     creatorDraft: '用「创造模式」创作自定义预设',
   },
@@ -141,6 +154,8 @@ const UPSTREAM = {
     'dialog.successDescription': '浏览器正在下载 Session ZIP 文件。',
     'dialog.errorTitle': 'Session 导出失败',
     'dialog.commandFailed': '无法启动 Session 导出。',
+    // 0.1.5 上游新增的菜单项文案仍夹带英文 Session。
+    'menu.download': '下载 Session 日志',
   },
 }
 
@@ -155,12 +170,7 @@ const EXPECT = {
     'access.confirm.enable': '启用完全权限',
   },
   chat: {
-    'stats.llm': '大模型 {duration}',
-    'stats.ttftAverage': '首词元平均 {duration}',
-    'stats.tokensPerSecond': '{throughput} 词元/秒',
-    'stats.tokens': '输入 {input} 词元 · 输出 {output} 词元',
-    'settings.transcript.normal': '标准',
-    'settings.transcript.compact': '紧凑',
+    // chat.stats.* 与 settings.transcript.* 已随上游 0.1.5 移除，无覆盖。
     'message.compaction.completed': '已压缩 {items} 条历史记录（约 {tokens} 词元）',
     'message.unknownSurface': '未知界面事件：{type}',
     'message.maxTokens': '已达到输出词元上限',
@@ -172,6 +182,30 @@ const EXPECT = {
     // 上游 0.1.2-alpha.2 新增回答末尾用量/耗时统计（TurnUsagePanel）译表单键。
     'message.turnUsage.count': '{count} 词元',
     'message.turnTime.ttft': '首词元用时（TTFT）',
+    // 0.1.5 StatsPills 统计对话框：Term 层修正成语意中文。
+    'stats.dialog.usageTitle': '词元用量',
+    'stats.dialog.ttft': '首词元平均（TTFT）',
+  },
+  // DSH 0.1.5 trajectory partial 期望：残留英文译为中文术语。
+  trajectory: {
+    'unit.tokens': '{value} 词元',
+    'unit.tokensPerSecond': '{value} 词元/秒',
+    'usage.tokens': '词元',
+    'tab.schema': '模式',
+    'record.schemaUnavailable': '模式不可用',
+    'timing.firstTokenUnavailable': '首词元时间不可用',
+    'timing.outputTokensUnavailable': '输出词元数不可用',
+    'timing.ttft': '首词元延迟',
+    'timeline.ttftDecoding': '首词元 {ttft} · 解码 {decoding}',
+    'source.goalRound': '目标 · 第 {round} 轮',
+  },
+  // DSH 0.1.5 起斜杠命令描述由 command 命名空间词典化；本插件保留自定义叫法。
+  command: {
+    'description.compact': '压缩较早的对话历史',
+    'description.export': '将会话日志下载为 ZIP 压缩包',
+    'description.feedback': '记录对本会话的反馈',
+    'description.goal': '设置或查看长期任务的目标',
+    'description.permission': '切换权限预设（沙箱模式 + 审批策略）',
   },
   trajectory: {
     // 上游 0.1.2-alpha.2 已本地化 trajectory zh 词典，本插件不再覆盖（跟随上游）。
@@ -233,7 +267,7 @@ const EXPECT = {
     sectionIntro: '预设即一个会话的代理所运行的插件组装 —— 它的工具、提示词与能力。复制一份既有预设改成自己的，或用「创造模式」让代理帮你创建。',
     presetStandardDescription: '功能完整的编码代理，支持文件编辑、终端、文件与网页检索、技能、计划、目标、子代理和工作流。',
     // presetPtcName/presetPtcDescription 上游 0.1.2 已补全中文，不再覆盖。
-    presetMinimalDescription: '仅提供持久命令行与字符串替换编辑器的双工具编码代理。',
+    presetMinimalDescription: '仅提供持久 shell 的单工具编码代理。',
     presetCordisDescription: '用于创建自定义代理预设：具备标准模式的全部能力，并提供运行时检查、插件实验和预设创作指导。',
     creatorDraft: '用「创造模式」创作自定义预设',
   },
@@ -256,7 +290,8 @@ const EXPECT = {
   },
   question: {
     submit: '提交',
-    submitting: '正在提交',
+    // 上游 common 词典为「正在提交…」；zh_pro 已不再覆盖此词（0.1.5 跟随上游）。
+    submitting: '正在提交…',
   },
   workspace: {
     'status.subagentsRunning.one': '{n} 个子代理运行中',
@@ -307,7 +342,7 @@ const pluginExports = captured.factory(function (name) {
 })
 
 // ---------- mock locale / ctx ----------
-const COMMON = { submit: '提交', submitting: '正在提交…' }
+const COMMON = { submit: '提交', submitting: '正在提交…', retry: '重试' }
 let active = 'zh'
 let localeRegisterDisposed = 0
 let settingsRender = null
@@ -584,10 +619,9 @@ function check(actual, expected, label) {
 
 pluginExports.apply(ctx)
 check(fakeBody.firstChild.data, permissionDescZh, 'DOM 文本层 权限描述改写')
-check(fakeBody.firstChild.nextSibling.data, '压缩较早的对话历史', 'DOM 文本层 命令说明改写')
-check(fakeBody.firstChild.nextSibling.nextSibling.data, '思考', 'DOM 文本层 Think 改写')
-check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.data, '工具调用', 'DOM 文本层 Tool call 改写')
-check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.nextSibling.data, '深度思考中…', 'DOM 文本层 Deep diving 改写')
+// 斜杠命令描述自 0.1.5 由 command 命名空间词典化，本插件改为键级覆盖
+// （见 EXPECT.command），DOM 文本层不再改写命令说明。
+check(fakeBody.firstChild.nextSibling.data, 'Compact older conversation history', 'DOM 文本层 命令说明不再改写（词典化）')
 check(skillCompText.data.indexOf('Cordis 组合时使用') > 0, true, 'DOM 文本层 技能描述（组合编辑）改写')
 check(skillCompText.data.indexOf('Use when creating') < 0, true, 'DOM 文本层 技能描述（组合编辑）无英文残留')
 check(skillDevText.data.indexOf('动态 Cordis 插件') >= 0, true, 'DOM 文本层 技能描述（插件开发）改写')
@@ -953,27 +987,34 @@ check(locale.translate('chat', 'message.retry.status', { label: '重试', retry:
 // input.accessMode 的 name 参数自 0.1.2-alpha.2 起由上游直接传入本地化标签
 //（可写入工作区 等），本插件不再转换（PERMISSION_NAMES 已移除）。
 check(locale.translate('conversation', 'input.accessMode', { name: 'Workspace Write' }), '访问模式，当前：Workspace Write', 'translate input.accessMode 不转换')
-check(locale.translate('chat', 'stats.llm', { duration: '48m48s' }), '大模型 48分48秒', 'translate stats.llm')
-check(locale.translate('chat', 'stats.ttftAverage', { duration: '2.4s' }), '首词元平均 2.4秒', 'translate stats.ttftAverage')
-check(locale.translate('chat', 'stats.tokens', { input: '12.2K', output: '40.9M' }), '输入 1.22万 词元 · 输出 4090万 词元', 'translate stats.tokens')
-check(locale.translate('chat', 'stats.tokens', { input: '8K', output: '46.7M' }), '输入 0.8万 词元 · 输出 4670万 词元', 'translate stats.tokens 46.7M')
-check(locale.translate('chat', 'stats.tokens', { input: '5K', output: '123.4M' }), '输入 0.5万 词元 · 输出 1.234亿 词元', 'translate stats.tokens 123.4M')
+// chat.stats.* 已随上游 0.1.5 移除：无覆盖也不报错。
+check(locale.translate('chat', 'stats.llm', { duration: '48m48s' }), 'stats.llm', 'translate stats.llm 已随上游移除（原样返回键）')
 check(locale.translate('chat', 'message.turnUsage.count', { count: '2.4M' }), '240万 词元', 'translate message.turnUsage.count 2.4M')
 check(locale.translate('chat', 'message.turnUsage.count', { count: '15.8K' }), '1.58万 词元', 'translate message.turnUsage.count 15.8K')
-check(locale.translate('chat', 'message.turnUsage.count', { count: '2,400,000' }), '2,400,000 词元', 'translate message.turnUsage.count 精确计数保持原样')
+check(locale.translate('chat', 'message.turnUsage.count', { count: '2,400,000' }), '240 0000 词元', 'translate message.turnUsage.count 精确千分位转四位空格分组')
+check(locale.translate('chat', 'message.turnUsage.count', { count: '64,272,077' }), '6427 2077 词元', 'translate message.turnUsage.count 大数四位空格分组')
+check(locale.translate('chat', 'message.turnUsage.count', { count: '482,447' }), '48 2447 词元', 'translate message.turnUsage.count 小数四位空格分组')
 check(locale.translate('chat', 'message.turnUsage.consumed', { total: '240万 词元' }), '用量 240万 词元', 'translate message.turnUsage.consumed')
+check(locale.translate('chat', 'stats.dialog.usageTitle'), '词元用量', 'translate stats.dialog.usageTitle')
+check(locale.translate('chat', 'stats.dialog.ttft'), '首词元平均（TTFT）', 'translate stats.dialog.ttft')
 check(locale.translate('settings.models', 'deleteDescriptionWithCredential', { provider: 'openai' }), '删除 openai 会移除其配置和存储的接口密钥。', 'translate deleteDescriptionWithCredential')
+// trajectory partial：残留英文术语修正。
+check(locale.translate('trajectory', 'unit.tokens', { value: '123' }), '123 词元', 'translate trajectory unit.tokens')
+check(locale.translate('trajectory', 'unit.tokensPerSecond', { value: '45.2' }), '45.2 词元/秒', 'translate trajectory unit.tokensPerSecond')
+check(locale.translate('trajectory', 'usage.tokens'), '词元', 'translate trajectory usage.tokens')
+check(locale.translate('trajectory', 'tab.schema'), '模式', 'translate trajectory tab.schema')
+check(locale.translate('trajectory', 'source.goalRound', { round: 3 }), '目标 · 第 3 轮', 'translate trajectory source.goalRound')
+check(locale.translate('trajectory', 'timeline.ttftDecoding', { ttft: '120ms', decoding: '3.2s' }), '首词元 120ms · 解码 3.2s', 'translate trajectory timeline.ttftDecoding')
+// command 命名空间：0.1.5 起斜杠命令描述保留自定义叫法。
+check(locale.translate('command', 'description.compact'), '压缩较早的对话历史', 'translate command description.compact')
 
 // 英文界面必须原样
 active = 'en'
-check(locale.translate('chat', 'stats.llm'), 'LLM {duration}', 'en passthrough')
+check(locale.translate('chat', 'stats.llm'), 'stats.llm', 'en passthrough')
 // 英文界面下 DOM 文本层按反向表还原
 for (const o of fakeObserverCbs) o.cb()
 check(fakeBody.firstChild.data, permissionDescEn, 'DOM 文本层 英文还原')
-check(fakeBody.firstChild.nextSibling.data, 'Compact older conversation history', 'DOM 文本层 命令说明还原')
-check(fakeBody.firstChild.nextSibling.nextSibling.data, 'Think', 'DOM 文本层 Think 还原')
-check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.data, 'Tool call', 'DOM 文本层 Tool call 还原')
-check(fakeBody.firstChild.nextSibling.nextSibling.nextSibling.nextSibling.data, 'Deep diving...', 'DOM 文本层 Deep diving 还原')
+check(fakeBody.firstChild.nextSibling.data, 'Compact older conversation history', 'DOM 文本层 命令说明保持英文（词典化后不参与 DOM 还原）')
 check(skillCompText.data, skillCompDescEn, 'DOM 文本层 技能描述（组合编辑）还原')
 check(skillDevText.data, skillDevDescEn, 'DOM 文本层 技能描述（插件开发）还原')
 
@@ -1010,7 +1051,7 @@ check(enThinkBody.getAttribute('data-dsh-zh-think'), 'clamped', '英文界面 �
 check(enThinkBody.__dshZhControl.textContent, 'Expand 20 more lines (25 left)', '英文界面 默认展开行数 按钮提示剩余总行数')
 injectedThinkRoots = []
 // 3) 中文补全：英文界面仍 passthrough（词典与标签改写都不生效）。
-check(locale.translate('chat', 'stats.llm'), 'LLM {duration}', '英文界面 中文补全 passthrough')
+check(locale.translate('chat', 'stats.llm'), 'stats.llm', '英文界面 中文补全 passthrough（键已随上游移除）')
 check(fakeBody.firstChild.data, permissionDescEn, '英文界面 中文补全 标签不改写')
 // 复位统计夹具，供后续卸载清理校验使用。
 statsText.data = '9 轮 · 203 步'

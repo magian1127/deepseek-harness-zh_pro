@@ -21,18 +21,27 @@ import { log, warn } from './util.js'
 import type { HostContext } from './types.js'
 
 // ============ 默认代理与 Open Design runtime 的 persona 中文版 ============
-// 键为 assemble 后 sections 里 deployment:persona 的精确文本（原文逐字，
-// 含 {{model}}/{{cwd}}；standard 与 code 原文相同共用一个键）。
+// DSH 0.1.5 起 persona 拆分为两个 section：deployment:persona-prefix（order 0）
+// 与 deployment:persona-suffix（order 10200，渲染在全段最后）；旧单一
+// deployment:persona 已不存在（拆分提交 40792330c0，presets 的 `text` 配置
+// 改为 `prefix` + `suffix`）。匹配键按 prefix / suffix 两个 section 的精确
+// 文本分别维护；complete 模式的 minimal 只保留 prefix 一个 section
+// （assemble 对 completeSection 只还原该段，无 suffix 键）。
+// 键为 assemble 后 sections 里对应 section 的精确文本（原文逐字，含
+// {{model}}/{{cwd}}；standard 与 ptc 原文相同共用一个键）。
 // 译文保留全部代码标识符、命令名与占位符，只翻译叙述性文字。
-const STANDARD_PERSONA_EN = 'You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.'
-const MINIMAL_PERSONA_EN = 'You are a helpful software engineer assistant.'
+const STANDARD_PERSONA_PREFIX_EN = 'You are a coding agent powered by the {{model}} model.'
+const MINIMAL_PERSONA_PREFIX_EN = 'You are a helpful software engineer assistant.'
 const OPEN_DESIGN_PERSONA_EN = 'You are a coding and design agent running for OpenDesign. Follow the complete task and project context supplied in the current user message.'
 const OPEN_DESIGN_PERSONA_ZH = '你是一个为 OpenDesign 运行的编码与设计代理。请遵循当前用户消息中提供的完整任务与项目上下文。'
+// 所有 preset 的 persona suffix 原文一致（cwd 句被移动到独立 suffix section）。
+const PERSONA_SUFFIX_EN = 'Your working directory is {{cwd}}.'
+const PERSONA_SUFFIX_ZH = '你的工作目录是 {{cwd}}。'
 // 匹配键不得带尾部换行（shipped yml 的块标量会剥掉末尾换行；曾因键多一个
 // \n 导致 cordis persona 整段失配保持英文）。运行时文本若带尾随空白，
 // 由 localizePersona 的 trim 兜底命中。CORDIS 两个常量导出供回归脚本核对。
-export const CORDIS_PERSONA_EN = [
-  'You are a coding agent powered by the {{model}} model, running on the DeepSeek Harness. Your working directory is {{cwd}}.',
+export const CORDIS_PERSONA_PREFIX_EN = [
+  'You are a coding agent powered by the {{model}} model, running on the DeepSeek Harness.',
   '',
   'You can read and modify the harness you run on. Its composition is Cordis: every capability is a plugin row in a `cordis.yml`, and an agent preset is one such file mounted for a single session.',
   '',
@@ -43,8 +52,8 @@ export const CORDIS_PERSONA_EN = [
   'Load the `editing-cordis-compositions` skill before writing or changing a composition.',
 ].join('\n')
 
-export const CORDIS_PERSONA_ZH = [
-  '你是一个由 {{model}} 模型驱动的编码代理，运行在 DeepSeek Harness 上。你的工作目录是 {{cwd}}。',
+export const CORDIS_PERSONA_PREFIX_ZH = [
+  '你是一个由 {{model}} 模型驱动的编码代理，运行在 DeepSeek Harness 上。',
   '',
   '你可以读取并修改你所运行的这个 harness。它的组合方式基于 Cordis：每个能力都是 `cordis.yml` 中的一行插件，而 agent preset 就是为单个会话挂载的这样一个文件。',
   '',
@@ -55,10 +64,10 @@ export const CORDIS_PERSONA_ZH = [
   '在编写或修改组合（composition）之前，先加载 `editing-cordis-compositions` skill。',
 ].join('\n')
 
-const PERSONA_ZH: Record<string, string> = {
-  [STANDARD_PERSONA_EN]: '你是一个由 {{model}} 模型驱动的编码代理。你的工作目录是 {{cwd}}。',
-  [MINIMAL_PERSONA_EN]: '你是一位乐于助人的软件工程师助手。',
-  [CORDIS_PERSONA_EN]: CORDIS_PERSONA_ZH,
+const PERSONA_PREFIX_ZH: Record<string, string> = {
+  [STANDARD_PERSONA_PREFIX_EN]: '你是一个由 {{model}} 模型驱动的编码代理。',
+  [MINIMAL_PERSONA_PREFIX_EN]: '你是一位乐于助人的软件工程师助手。',
+  [CORDIS_PERSONA_PREFIX_EN]: CORDIS_PERSONA_PREFIX_ZH,
   [OPEN_DESIGN_PERSONA_EN]: OPEN_DESIGN_PERSONA_ZH,
 }
 
@@ -86,7 +95,7 @@ const TOOL_DESC_ZH: Record<string, string> = {
   skill: '加载一个可用 skill 的完整说明。在处理命名或明显匹配该 skill 的任务之前，先从会话 skill 目录中取出确切的 skill 名称并调用本工具。',
   read_image: '读取 PNG/JPEG/WebP/GIF 文件并返回图像本身。Harness 会在下一次模型请求前验证并缩小大型受支持图像，因此请直接使用本工具，而不要安装图像库或仅为检查图像而创建缩略图。独立文件可小批量并发读取。要求当前模型接受图像输入。',
   exit_plan_mode: '仅在计划模式中使用。提交你的计划供用户审阅，经批准后离开计划模式。以 # 标题开头的 markdown 形式发送完整计划。用户可能批准（从你的下一步开始执行计划）或继续规划——他们的反馈会回到工具结果中；修改后再提交。',
-  send_message: '按子代理 id 向后台子代理发送消息，延续同一段对话。它成为子代理的下一轮：如果它仍在工作，消息会等它当前这一轮结束后再送达，因此无法重定向已在进行中的工作。此调用不返回子代理的答案——只确认消息已送达——所以用它可以给它更多工作。失败意味着消息未被送达。',
+  send_message: '按子代理 id 向直接可继续子代理发送消息。如果你是常驻可继续子代理，也可以发给直接父代理。如果目标仍在工作，消息会引导它最近的一步；如果它空闲，消息会开启新一轮。此调用不返回子代理的答案——只确认消息已送达。失败意味着消息未被送达。',
   interrupt_agent: '按 agent id 请求取消后台代理当前的一轮。目标可以是你的直接子代理或在你之下创建的更深的代理。只有当前这一轮停止：已排队等待该代理的消息会保留到之后的 send_message，它启动的代理继续运行，代理本身对后续消息仍然可用。一旦停止请求被接受，此调用即返回，因此目标可能还会短暂运行；中断一个已完成的代理是接受的空操作。',
   list_agents: '按持久 id 与标签列出你的可继续后台子代理。用它回忆你启动过哪些，而不是轮询完成情况——你会在某个代理完成时收到通知。状态来自实时注册表：running 表示该代理正在工作，idle 表示已加载但在轮次之间（可能在等待它启动的代理），ready 表示它只存在于存储中——可恢复、非终止、也不是等待收集的结果；`send_message` 会在同一对话上启动新一轮，直接子代理在每种状态下都是 `send_message` 的候选。快照不是投递承诺——`send_message` 会执行权威检查，仍可能失败。无法读取的子代理会作为诊断报告，而不是被静默丢弃。范围 `descendants` 以稳定前序走完你之下的整棵树，为每个条目标注其持久直接父会话 id 与深度。你只能对 depth-1 条目使用 `send_message`；更深条目只能是 `interrupt_agent` 的候选。',
   subagent: '将自包含的任务委派给子代理（在自身上下文中工作的独立代理），以卸载专注、独立的工作——研究、范围明确的实现、分析——使其不消耗本对话的上下文。子代理返回其结果而非中间步骤。给它一个完整、独立的提示词：它看不到本对话。此工具默认后台运行，立即返回持久子代理 id，并保留子对话供后续轮次使用。当运行结束时，运行时向父级发送包含其结果与任何最终助手消息的通知；`send_message` 会在同一子对话中启动新一轮。仅当你的下一步依赖其结果时设置 `run_in_background: false`。',
@@ -100,6 +109,7 @@ const TOOL_DESC_ZH: Record<string, string> = {
   cordis_run: '激活某个动态 Plugin 的一个确切 Package。首次激活、重启 currentPackageId 或回滚使用 mode:"run"；当 current 存在时，使用 mode:"update" 切换到不同的 Package，即使 Plugin 当前已停止。未授权的 Client Package 会创建审批请求并返回 awaiting-approval；已授权的 Package 返回 starting 并在浏览器中异步继续。两个结果都不会在工具内部等待最终结果。currentPackageId 仅在完全成功后改变；失败时旧的 current 与目标 next 保持不变。异步成功、拒绝或技术失败通过状态与 steering 报告。技术失败后读取 cordis_inspect_self 的诊断，修正同一个 Plugin 并自主重试。用户拒绝后不要再次请求批准。',
   cordis_stop: '停止某个动态 Plugin 的当前 Run，并取消未完成的审批或激活请求。保留 Plugin、每个不可变 Package、授权、currentPackageId 与 nextPackageId，以便之后直接运行或更新。停止已停止的 Plugin 幂等成功。要用此工具临时禁用效果；永久移除用 cordis_undefine。',
   cordis_undefine: '永久移除当前 Session 拥有的动态 Plugin。如果它正在运行或等待审批，先停止它并取消请求，然后删除每个 Package、授权与版本指针。返回后，其 pluginId、packageIds、@ 引用与 Package 业务视图均失效；历史卡片仅保留一条 "Plugin removed" 记录。当版本必须保留以便重启或回滚时不要调用此工具；改用 cordis_stop。',
+  present: '声明可通过会话文件系统访问的现有文件为最终交付物。当你创建或更新的文件是用户要求接收的输出时，必须在写入之后、最终回复之前调用 present，包括通过 Bash 或代码执行创建的文件。在回复中提及路径并不能替代此调用。文件必须已经存在。用户打开的正是当前源码文件；其内容不会被复制或保留。',
 }
 
 // ============ 官方描述特征片段 ============
@@ -115,6 +125,8 @@ const TOOL_MATCH: Record<string, string> = {
   read_image: 'Read a PNG/JPEG/WebP/GIF file and return the image itself',
   glob: 'Find files whose paths match a glob pattern',
   grep: 'Search file contents with a ripgrep regular expression',
+  // 0.1.5 起 standard 预设新增 present 工具（交付文件声明）。
+  present: 'Declare existing files accessible through the Session filesystem as final deliverables',
   job_output: 'Read a background job',
   job_list: 'List your background jobs',
   job_kill: 'Request cancellation of a running background job',
@@ -127,7 +139,7 @@ const TOOL_MATCH: Record<string, string> = {
   web_fetch: 'Fetch the content of a specific HTTP(S) URL',
   skill: 'Load the full instructions for an available skill',
   exit_plan_mode: 'Use only in plan mode',
-  send_message: 'Send a message to a background subagent',
+  send_message: 'Send a message to a direct continuable child',
   interrupt_agent: 'Request cancellation of a background agent',
   list_agents: 'List your continuable background subagents',
   subagent: 'Delegate a self-contained task to a subagent',
@@ -175,12 +187,15 @@ const TOOL_FLAVOR_DESC_ZH: Record<string, ReadonlyArray<{ match: string; zh: str
       zh: '在一个持久的 bash shell 中运行命令。状态（包括当前目录与已导出的环境变量）在该 Agent 的各次调用间保留。',
     },
     {
-      // minimal 预设对 persistent bash 的 config.description 覆盖文本。
+      // minimal 预设对 persistent bash 的 config.description 覆盖文本
+      // （0.1.5 起两条旧子弹合并为一条网络访问说明：原文「You don't have
+      // access to the internet…」+「mirror … via apt and pip」已被替换为
+      // 「Network access depends on the task environment. Prefer configured
+      // mirrors/proxies when they are available.」）。
       match: 'Run commands in a bash shell',
       zh: '在 bash shell 中运行命令\n'
         + '* 调用本工具时，"command" 参数的内容不需要做 XML 转义。\n'
-        + '* 本工具无法访问互联网。\n'
-        + '* 你可以通过 apt 与 pip 访问常用 linux 与 python 包的镜像。\n'
+        + '* 网络访问取决于任务环境。可用时优先使用配置的镜像/代理。\n'
         + '* 状态在命令调用与用户讨论之间保持。\n'
         + "* 查看文件某一行范围（如第 10-25 行）可试 'sed -n 10,25p /path/to/the/file'。\n"
         + '* 请避免可能产生大量输出的命令。\n'
@@ -471,7 +486,9 @@ export function regimeOf(agent: unknown): 'zh' | 'en' {
   return regime
 }
 
-/** 把 deployment:persona 换成四个默认代理的中文版本（精确文本匹配）。
+/** 把 deployment:persona-prefix / deployment:persona-suffix 换成中文版本（精确文本匹配）。
+ * DSH 0.1.5 起 persona 拆成两个 section：prefix（order 0）与 suffix（order 10200，
+ * 渲染在全段最后）；minimal 的 complete 模式只有 prefix 一个 section。
  * 匹配键不带尾部换行；先按原文整串查，失败再按去首尾空白后查，
  * 兼容不同 YAML 块标量 chomping（cordis persona 曾因键多一个尾部
  * 换行而整段失配保持英文）。 */
@@ -481,12 +498,20 @@ function localizePersona(assembly: unknown): void {
   for (const section of sections) {
     if (section === null || typeof section !== 'object') continue
     const entry = section as { name?: unknown; text?: unknown }
-    if (entry.name !== 'deployment:persona') continue
-    if (typeof entry.text !== 'string') continue
-    const zh = PERSONA_ZH[entry.text] ?? PERSONA_ZH[entry.text.trim()]
-    if (zh === undefined) continue
-    entry.text = zh
-    return
+    if (entry.name === 'deployment:persona-prefix') {
+      if (typeof entry.text !== 'string') continue
+      const zh = PERSONA_PREFIX_ZH[entry.text] ?? PERSONA_PREFIX_ZH[entry.text.trim()]
+      if (zh === undefined) continue
+      entry.text = zh
+      continue
+    }
+    if (entry.name === 'deployment:persona-suffix') {
+      if (typeof entry.text !== 'string') continue
+      const trimmed = entry.text.trim()
+      if (trimmed !== PERSONA_SUFFIX_EN) continue
+      entry.text = PERSONA_SUFFIX_ZH
+      continue
+    }
   }
 }
 
@@ -519,7 +544,9 @@ function localizeSections(assembly: unknown): void {
         continue
       }
       if ('en' in rule) {
-        if (text === rule.en) entry.text = rule.zh
+        // 0.1.5 起 plan:policy 预设使用 `|` 字面块，解析后文本以单个
+        // '\n' 结尾；旧预设用 `>-` 折叠无尾换行。两种 chomping 都兼容。
+        if (text === rule.en || text === rule.en + '\n') entry.text = rule.zh
         continue
       }
       if (!text.includes(rule.match)) continue

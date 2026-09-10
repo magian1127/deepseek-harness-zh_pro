@@ -7,15 +7,9 @@ const PERMISSION_DESCRIPTIONS = {
   'Full file access without approval prompts.': '完全文件访问，无需批准提示。',
   'Current sandbox and approval settings do not match a preset.': '当前沙箱与审批设置不匹配任何预设。',
 }
-// 斜杠命令（/compact 等）的菜单说明：主机命令注册表下发的英文数据，同样词典管不到。
-const COMMAND_DESCRIPTIONS = {
-  'Compact older conversation history': '压缩较早的对话历史',
-  'set or view the goal for a long-running task': '设置或查看长期任务的目标',
-  'record feedback about this session': '记录对本会话的反馈',
-  'Enter or leave plan mode': '进入或退出计划模式',
-  'Switch the permission preset (sandbox mode + approval policy)': '切换权限预设（沙箱模式 + 审批策略）',
-  'Download this Session log as a ZIP archive': '将会话日志下载为 ZIP 压缩包',
-}
+// 斜杠命令（/compact 等）的菜单说明：DSH 0.1.5 起由 ui-commands 的 command
+// 命名空间本地化，DOM 文本层覆盖已失效；本插件的自定义叫法见 zh-dict.ts 的
+// ZH.command（description.* 键级覆盖），此表删除。
 // 斜杠菜单「技能来源」（ui-skill / 菜单候选）里的技能描述：来自 shipped
 // SKILL.md frontmatter 的英文 description（skills/list 下发）。技能名是
 // 标识符、保持英文；只映射 DSH 官方随预设/部署分发的技能描述原文，
@@ -24,136 +18,16 @@ const SKILL_DESCRIPTIONS = {
   'Use when creating, changing, or validating a Cordis composition for this harness — writing or editing an agent preset, adding or removing a plugin row, deciding whether something belongs to the host composition or to one session, checking whether a preset you authored actually mounts, or diagnosing a row that mounted but contributed nothing.': '当创建、修改或校验本 harness 的 Cordis 组合时使用——编写或编辑 agent preset、增删插件行、判断内容属于 host 组合还是单个会话、检查你创作的 preset 能否真正挂载，或诊断已挂载却没有贡献任何内容的行。',
   'Create, modify, debug, or extend dynamic Cordis Plugins, including Host Services and Events, Client Slot and theme UI, Package-private Client-to-Host calls, dynamic Tools, version updates, approval failures, and runtime diagnostics. Use this Skill to route a user request to the correct platform and Inspect Provider, then define, run, repair, or roll back the Plugin.': '创建、修改、调试或扩展动态 Cordis 插件，包括 Host 服务与事件、Client Slot 与主题 UI、Package 私有的 Client→Host 调用、动态工具、版本更新、审批失败与运行时诊断。用本 Skill 把用户请求路由到正确的平台与 Inspect Provider，然后定义、运行、修复或回滚插件。',
 }
-// 聊天区的状态/行标题 + 轨迹视图（时间线/账本/详情面板）的静态标签：
-// 组件里写死的设计字面量（Think、工具行标题、轨迹列表头、KIND_LABEL、
-// 详情面板标签、状态文本等）。以上四张表合并后按「整段精确匹配」改写，
-// 英文界面按反向表还原；反向表按对象键顺序构建、译文重复时首个定义者生效
-// （还原到更常见的英文写法），因此除刻意共用译文（如 TOOL/Compaction 都译
-// 「压缩」、Tool call/Tool Call 都译「工具调用」）外仍尽量两两不同。
+// 聊天区仍由组件字面量/词典残留渲染的英文标签。DSH 0.1.5 轨迹视图已完全
+// 词典化（trajectory 命名空间，zh 值中文化），其剩余英文残留（tok/tok-s/
+// Round/Schema 等）由 zh-dict.ts 的 trajectory partial 在 translate 层修正，
+// 不再需要 DOM 层改写；此处只保留仍以字面量形式出现在 DOM 的标签：
+// - 'Bash' / 'Pwsh'：conversation.tool.title.bash / tool.title.pwsh 的上游
+//   zh 值仍为英文（工具行标题），DOM 层改写；
+// - 'Schema'：trajectory.tab.schema 上游 zh 值仍为 'Schema'；
+// 以上三个条目按「整段精确匹配」改写，英文界面按反向表还原。
 const CHAT_LABELS = {
-  'Think': '思考',
-  'Thinking': '思考中',
-  'Deep diving...': '深度思考中…',
-  'Edit': '编辑',
-  'Write': '写入',
-  'Read': '读取',
-  'Search': '搜索',
   'Bash': '命令行',
-  'Code': '代码',
-  'Tool call': '工具调用',
-  'tool-call': '工具调用',
-  'Inspect': '检查',
-  'Run Cordis Plugin': '运行 Cordis 插件',
-  'Stop Cordis Plugin': '停止 Cordis 插件',
-  'Remove Cordis Plugin': '移除 Cordis 插件',
-  'Input': '输入',
-  'Output': '输出',
-  'Time': '时间',
-  // —— 轨迹视图：KIND_LABEL 类型标签（时间线 tooltip 首行与账本行标签共用）——
-  'SYSTEM': '系统',
-  'USER': '用户',
-  'CONTEXT': '上下文',
-  'COMPACTED': '压缩',
-  'ASSISTANT': '助手',
-  'TOOL': '工具',
-  'SUBTOOL': '子工具',
-  // —— 轨迹视图：组/节/详情面板标签 ——
-  'Message': '消息',
-  'Between turns': '轮次之间',
-  'System Prompt': '系统提示',
-  'Tools': '工具',
-  'Diff': '差异',
-  'Summary': '摘要',
-  'Preview': '预览',
-  'Raw': '原始',
-  'Raw Output': '原始输出',
-  'Source': '来源',
-  'Payload': '负载',
-  'Result': '结果',
+  'Pwsh': 'PowerShell',
   'Schema': '模式',
-  'Timing': '计时',
-  'Usage': '用量',
-  'Options': '选项',
-  'Status': '状态',
-  'Purpose': '用途',
-  'Provider': '提供方',
-  'Model': '模型',
-  'Tool calls': '工具调用次数',
-  'Subtool calls': '子工具调用次数',
-  'Error': '错误',
-  'Retry': '重试',
-  'Retry delay': '重试延迟',
-  'Hierarchy': '层级',
-  'Duration': '时长',
-  'Tokens': '词元',
-  'Reasoning': '推理',
-  'Content': '内容',
-  'Cached': '已缓存',
-  'Cache created': '新建缓存',
-  'Other': '其他',
-  'This request': '本次请求',
-  'Session cumulative': '会话累计',
-  'Started': '开始时间',
-  'Total duration': '总时长',
-  'TTFT': '首词元时间',
-  'Generation': '生成',
-  'Throughput': '吞吐率',
-  'Timing source': '计时来源',
-  'Session timestamps': '会话时间戳',
-  'Session timestamps (running)': '会话时间戳（运行中）',
-  'Compaction': '压缩',
-  'Compacted': '已压缩',
-  'Assistant Message': '助手消息',
-  'Tool Call': '工具调用',
-  'User': '用户',
-  'Unknown': '未知',
-  // —— 轨迹视图：状态与空状态 ——
-  'Failed': '失败',
-  'Pending': '待处理',
-  'Completed': '已完成',
-  'Not available': '不可用',
-  'Not recorded': '未记录',
-  'Step start unavailable': '步骤开始时间不可用',
-  'First token unavailable': '首词元时间不可用',
-  'Usage unavailable': '用量不可用',
-  'Output tokens unavailable': '输出词元不可用',
-  'Duration too short': '时长过短',
-  'Usage not reported': '未报告用量',
-  'Options not recorded': '未记录选项',
-  'Source not recorded': '未记录来源',
-  'Schema unavailable': '模式不可用',
-  'No payload captured': '未捕获负载',
-  'No result captured': '未捕获结果',
-  'No tools in this request': '此请求无工具',
-  'No system prompt in this request': '此请求无系统提示',
-  'Tool call only': '仅工具调用',
-  '(tool call only)': '（仅工具调用）',
-  'No content': '无内容',
-  'No output': '无输出',
-  'No timing data': '暂无计时数据',
-  'Loading trajectory…': '正在加载轨迹…',
-  'Loading earlier history…': '正在加载更早的历史…',
-  'Load earlier history': '加载更早的历史',
-  'Click to load earlier history': '点击加载更早的历史',
-  // —— 会话头部：Session log 导出按钮（dsh-session-log-export HeaderAction） ——
-  'Session log': '会话日志',
-  // —— 轨迹视图：操作提示（title/aria-label）与系统提示变更标签 ——
-  'Event details': '事件详情',
-  'Resize event details': '调整事件详情大小',
-  'Drag to resize. Double-click to reset.': '拖动调整大小，双击重置。',
-  'Close details': '关闭详情',
-  'Open image': '打开图片',
-  'Open tool call summary': '打开工具调用摘要',
-  'Show local time': '显示本地时间',
-  'Show Unix timestamp': '显示 Unix 时间戳',
-  'Trajectory timeline': '轨迹时间线',
-  'Request options JSON': '请求选项 JSON',
-  'Message source JSON': '消息来源 JSON',
-  'Initial System Prompt': '初始系统提示',
-  'System Prompt Updated': '系统提示已更新',
-  'Tools Updated': '工具已更新',
-  'System Prompt and Tools Updated': '系统提示与工具已更新',
-  'Compacting context…': '正在压缩上下文…',
-  'Compaction failed': '压缩失败',
-  'Context compacted': '上下文已压缩',
 }

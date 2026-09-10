@@ -79,16 +79,16 @@ function installChineseEnhance(ctx) {
     // 与本插件按百分比覆盖 --dsh-chat-content-width 的做法冲突，让位给上游。
     let autoThinkTarget = null
     if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined') {
-      const forward = Object.assign({}, PERMISSION_DESCRIPTIONS, COMMAND_DESCRIPTIONS, SKILL_DESCRIPTIONS, CHAT_LABELS)
+      const forward = Object.assign({}, PERMISSION_DESCRIPTIONS, SKILL_DESCRIPTIONS, CHAT_LABELS)
       const reverse = {}
       // 译文重复时首个定义者生效（还原到更常见的英文写法，如 Tool call/TOOL/USER）
       for (const k of Object.keys(forward)) {
         if (reverse[forward[k]] === undefined) reverse[forward[k]] = k
       }
-      // 统计行「9 轮 · 203 步 | LLM …」（英文为「9 turns · 203 steps」）默认
-      // 单行截断（white-space:nowrap + overflow:hidden + text-overflow:ellipsis）。
-      // 统计全显示：让统计行保持单行、不换行、不省略——先放宽到输入区全宽，再按宽度
-      // 自动缩小字号适配；极端超长仍放不下时改为同一行横向滚动。与界面语言无关。
+      // 统计行「9 轮 203 步」（0.1.5 StatsPills；旧版为「9 轮 · 203 步」，兼容）
+      // 默认单行截断（label 带 ellipsis）。统计全显示：让统计行保持单行、不换行、
+      // 不省略——先放宽到输入区全宽，再按宽度自动缩小字号适配；极端超长仍放不下
+      // 时改为同一行横向滚动。与界面语言无关。
       const STATS_FULL_KEY = 'data-dsh-zh-stats-full'
       const STATS_FULL_STYLES = [
         ['white-space', 'nowrap'],
@@ -99,10 +99,18 @@ function installChineseEnhance(ctx) {
         ['height', 'auto'],
         ['min-height', '0'],
       ]
+      // 0.1.5 StatsPills 的 pill（button/span）样式子集：不强行拉满宽度，
+      // 只放开省略号并保持单行，让 fit 字号逻辑基于 label 内容宽度工作。
+      const STATS_PILL_STYLES = [
+        ['white-space', 'nowrap'],
+        ['overflow', 'hidden'],
+        ['text-overflow', 'clip'],
+        ['max-width', 'none'],
+      ]
       const STATS_BASE_FONT = 12
       const STATS_MIN_FONT = 9
-      const STATS_COUNTS_ZH = /^\s*\d+\s*轮\s*·\s*\d+\s*步\s*$/
-      const STATS_COUNTS_EN = /^\s*\d+\s*turns?\s*·\s*\d+\s*steps?\s*$/
+      const STATS_COUNTS_ZH = /^\s*\d+\s*轮(?:\s*·\s*|\s+)\d+\s*步\s*$/
+      const STATS_COUNTS_EN = /^\s*\d+\s*turns?(?:\s*·\s*|\s+)\d+\s*steps?\s*$/
       const isStatsCounts = function (text) {
         return STATS_COUNTS_ZH.test(String(text)) || STATS_COUNTS_EN.test(String(text))
       }
@@ -127,7 +135,22 @@ function installChineseEnhance(ctx) {
         if (settingsStore.getSnapshot().statsFull !== true) return
         if (!isStatsCounts(textNode.data)) return
         const group = textNode.parentElement
-        if (group === null || group.nodeType !== 1 || group.tagName !== 'SPAN') return
+        if (group === null || group.nodeType !== 1) return
+        // 0.1.5 StatsPills：计数组 span[class*="label"] 位于 button/span[class*="pill"]。
+        if (group.tagName === 'SPAN' && typeof group.getAttribute === 'function'
+          && (group.getAttribute('class') || '').indexOf('label') !== -1
+          && group.parentElement !== null && group.parentElement.nodeType === 1
+          && (group.parentElement.tagName === 'BUTTON' || group.parentElement.tagName === 'SPAN')) {
+          const pill = group.parentElement
+          if (pill.getAttribute(STATS_FULL_KEY) === null) {
+            for (const pair of STATS_PILL_STYLES) pill.style.setProperty(pair[0], pair[1], 'important')
+            pill.setAttribute(STATS_FULL_KEY, '')
+          }
+          fitStatsRow(pill)
+          return
+        }
+        // 旧版 StatsLine：DIV 行 > 首个 SPAN 计数组（0.1.4 及之前的结构）。
+        if (group.tagName !== 'SPAN') return
         const row = group.parentElement
         if (row === null || row.nodeType !== 1 || row.tagName !== 'DIV') return
         if (row.firstElementChild !== group) return

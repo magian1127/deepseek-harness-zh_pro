@@ -117,6 +117,21 @@ function formatCompactNumberToZh(raw) {
   return trimNumber(value / 10000) + '万'
 }
 
+/** 把带千分位逗号的精确整数转成中文四位分级、空格分隔（64,272,077 -> 6427 2077、
+ * 482,447 -> 48 2447、2,400,000 -> 240 0000、123,456,789 -> 1 2345 6789）。
+ * 按用户要求用空格代替逗号按万级分组，不换算万/亿单位、保持精确；
+ * 非千分位格式原样返回。 */
+function formatExactNumberToZh(raw) {
+  const s = String(raw)
+  if (!/^\d{1,3}(,\d{3})+$/.test(s)) return s
+  const digits = s.replace(/,/g, '')
+  const groups = []
+  for (let end = digits.length; end > 0; end -= 4) {
+    groups.unshift(digits.slice(Math.max(0, end - 4), end))
+  }
+  return groups.join(' ')
+}
+
 /** 数字最多保留 3 位小数并去掉尾零（1.234 -> 1.234、1.2 -> 1.2、2 -> 2）。 */
 function trimNumber(x) {
   let s = String(Math.round(x * 1000) / 1000)
@@ -135,15 +150,20 @@ function interpolateZh(template, params) {
 /** 参数需要转换的键（ns -> key -> 参数名 -> 转换函数）。
  * DSH 0.1.2 起统计与消息键从 conversation 拆到 chat 命名空间
  * （ui-chat 包）；input.accessMode 的 name 参数自 0.1.2-alpha.2 起由上游
- * 直接传入本地化标签，本插件不再转换（PERMISSION_NAMES 已移除）。 */
+ * 直接传入本地化标签，本插件不再转换（PERMISSION_NAMES 已移除）。
+ * DSH 0.1.5 起 chat.stats.* 系列键已从上游移除（统计行改为 composer-dock
+ * StatsPills + TurnUsagePanel），对应参数转换一并删除。 */
 const PARAM_TRANSFORMS = {
   chat: {
-    'stats.llm': { duration: formatEnDurationToZh },
-    'stats.toolCall': { duration: formatEnDurationToZh },
-    'stats.ttftAverage': { duration: formatEnDurationToZh },
-    'stats.tokens': { input: formatCompactNumberToZh, output: formatCompactNumberToZh },
-    // TurnUsagePanel 用量 pill：{count} 携带 K/M 缩写（如 2.4M/15.8K）；
-    // 详细面板的精确计数（2,400,000，带千分位）不匹配 K/M 正则，原样保留。
-    'message.turnUsage.count': { count: formatCompactNumberToZh },
+    // TurnUsagePanel / StatsPills 用量计数：可能携带 K/M 缩写（如 2.4M/
+    // 15.8K），也可能是精确整数（千分位逗号分组，如 2,400,000）——两者都
+    // 转成中文分级读数，保持精确、不舍入。
+    'message.turnUsage.count': {
+      count: function (raw) {
+        const compact = formatCompactNumberToZh(raw)
+        if (compact !== String(raw)) return compact
+        return formatExactNumberToZh(raw)
+      },
+    },
   },
 }

@@ -5,7 +5,7 @@
 **语言 / Language:** [中文](README.md) · [English](README.en.md)
 
 <p align="center">
-  <img alt="Version 0.9.2" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.9.2-5965d8">
+    <img alt="Version 0.9.3" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.9.3-5965d8">
   <img alt="Interface Chinese" src="https://img.shields.io/badge/%E7%95%8C%E9%9D%A2-%E4%B8%AD%E6%96%87-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -46,7 +46,7 @@ for full interaction, data, and safety boundaries.
 
 ## Requirements
 
-- DeepSeek Harness ≥ `0.1.2-rc.1`; full UI uses `web`, Open Design stdio uses `open-design`, and DSH one-shot tasks may use `headless`
+- DeepSeek Harness ≥ `0.1.5-rc.1`; full UI uses `web`, Open Design stdio uses `open-design`, and DSH one-shot tasks may use `headless`
 - Node.js `^22.19.0 || >=24.0.0`
 
 ## Installation
