@@ -2,12 +2,15 @@
 // chatWidthEnabled/chatWidth 已随「对话宽度」功能移除（DSH 0.1.2 上游原生支持
 // 宽度调节）；localStorage 里残留的旧字段读取时被忽略。
 // 服务监控相关：serviceMonitorEnabled 总开关（**默认关**：进程归属/定位能力
-// 按平台尽力而为，非所有环境都可用，用户显式开启才工作）、serviceMonitorIntervalSec 面板
+// 按平台尽力而为，非所有环境都可用，用户显式开启才工作）、
+// serviceMonitorPanelEnabled 左栏常驻面板开关（默认开）、
+// serviceMonitorTabEnabled 右栏 tab 开关（默认开）——两个子开关仅在总开关
+// 开启时生效、serviceMonitorIntervalSec 面板
 // 刷新间隔（秒）、serviceMonitorTargets 自定义监控项（{ name, host, port }，
 // 常驻面板显示在线/离线）、serviceMonitorSettingsOpen 设置页分组折叠态。
 const SETTINGS_KEY = 'deepseek-harness-zh_pro:enhancements'
-const SETTINGS_DEFAULTS = { zhComplete: true, statsFull: true, thinkingAuto: true, thinkMaxLines: 20, thinkMaxLinesFrom: 'latest', thinkMode: 'button', deleteSessionEnabled: true, batchOpsEnabled: true, archiveViewEnabled: true, styleSettingsOpen: false, listSettingsOpen: false, serviceMonitorEnabled: false, serviceMonitorIntervalSec: 10, serviceMonitorTargets: [], serviceMonitorSettingsOpen: false }
 const SETTINGS_NS = 'dsh-zh-settings'
+const SETTINGS_DEFAULTS = { zhComplete: true, statsFull: true, thinkingAuto: true, thinkMaxLines: 20, thinkMaxLinesFrom: 'latest', thinkMode: 'button', deleteSessionEnabled: true, batchOpsEnabled: true, archiveViewEnabled: true, styleSettingsOpen: false, listSettingsOpen: false, serviceMonitorEnabled: false, serviceMonitorPanelEnabled: true, serviceMonitorTabEnabled: true, serviceMonitorIntervalSec: 10, serviceMonitorTargets: [], serviceMonitorSettingsOpen: false }
 // 自定义监控项归一化：结构合法的 { name, host, port } 才保留（防手改 localStorage 注入脏数据）。
 function normalizeServiceTargets(value) {
   if (!Array.isArray(value)) return []
@@ -40,7 +43,9 @@ let settingsSnapshot = (function () {
         archiveViewEnabled: parsed.archiveViewEnabled !== false,
         styleSettingsOpen: parsed.styleSettingsOpen === true,
         listSettingsOpen: parsed.listSettingsOpen === true,
-        serviceMonitorEnabled: parsed.serviceMonitorEnabled === true,
+          serviceMonitorEnabled: parsed.serviceMonitorEnabled === true,
+          serviceMonitorPanelEnabled: parsed.serviceMonitorPanelEnabled !== false,
+          serviceMonitorTabEnabled: parsed.serviceMonitorTabEnabled !== false,
         serviceMonitorIntervalSec: typeof parsed.serviceMonitorIntervalSec === 'number' ? Math.max(2, Math.min(300, Math.round(parsed.serviceMonitorIntervalSec))) : SETTINGS_DEFAULTS.serviceMonitorIntervalSec,
         serviceMonitorTargets: normalizeServiceTargets(parsed.serviceMonitorTargets),
         serviceMonitorSettingsOpen: parsed.serviceMonitorSettingsOpen === true,

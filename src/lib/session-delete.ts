@@ -53,7 +53,7 @@ import { PKG } from '../bin/dsh-zh.mjs'
 import { ZH_SETTINGS_NS } from './constants.js'
 import { log, warn } from './util.js'
 import { trashItem, restoreItem } from './trash.js'
-import { ensureFreshScan, getServiceMonitorSnapshot, openServiceOwnerDirectory, probeTargets, resolveServiceOwner } from './service-monitor.js'
+import { ensureFreshScan, getServiceMonitorSnapshot, openServiceOwnerDirectory, probeTargets, resolveServiceOwner, unbaselineEndpoint } from './service-monitor.js'
 import type { HostContext } from './types.js'
 
 // 会话 id 校验：形如 /^[A-Za-z0-9_-]{1,128}$/ 的字符串，防御路径注入。
@@ -748,7 +748,27 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
 
         try {
         if (await handleServiceMonitorRoutes(req, res, pathname, payload, url)) return
-        if (pathname === '/dsh-zh/api/service-monitor/resolve') {
+          if (pathname === '/dsh-zh/api/service-monitor/unbaseline') {
+            // 把基线端点移出基线（右栏 tab「基线端口」区点击恢复监控）：
+            // 请求体 { address, port }；命中基线则立即入监控列表并返回
+            // 新快照，未命中（已监控中/已停止监听）返回 404 语义。
+            const address = typeof payload.address === 'string' ? payload.address : ''
+            const port = typeof payload.port === 'number' && Number.isFinite(payload.port) ? Math.round(payload.port) : 0
+            if (address === '' || port < 1 || port > 65535) {
+              writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'address/port required' } })
+              return
+            }
+            const restored = unbaselineEndpoint(address, port, Date.now())
+            if (!restored) {
+              writeJson(res, 404, { ok: false, error: { code: 'not-in-baseline', message: '端点不在基线中（可能已在监控或已停止监听）' } })
+              return
+            }
+            writeJson(res, 200, { ok: true, value: Object.assign(getServiceMonitorSnapshot(), {
+              targets: await probeTargets(payload.targets).catch(() => []),
+            }) })
+            return
+          }
+          if (pathname === '/dsh-zh/api/service-monitor/resolve') {
           // 按需解析监听进程归属（悬停触发）：请求体 { address, port }，
           // 端点级缓存；服务停止监听后缓存由扫描清运，重现后重新解析。
           // 目标不是本机监听时 value.owner 为 null（不缓存，不报错）。

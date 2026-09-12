@@ -56,7 +56,15 @@ export interface MonitorEndpoint {
   port: number
   /** 首次观察到该端点监听的时间戳（ms，单调于挂钟）。 */
   since: number
+  /** true = 用户从「基线端口」区主动恢复监控（右栏 tab 点击）；since 取恢复时刻。 */
+  fromBaseline?: boolean
 }
+
+/** 基线端点（用户可在右栏 tab 的「基线端口」区点击恢复监控）。 */
+export interface BaselineEndpoint {
+  address: string
+  port: number
+  }
 
 function endpointKey(address: string, port: number): string {
   return `${address}|${port}`
@@ -367,21 +375,25 @@ function parseLocalAddress(local: string, dotPort: boolean): { address: string; 
 /**
  * 由基线、上次条目与本次扫描键集合计算新的受监控条目。
  *
- * 规则：基线中的端口永不显示；本次仍在监听的旧条目保留原 since；
+ * 规则：基线中的端口永不显示（除非在 unbaseline 集合里——用户从「基线
+ * 端口」区点击恢复监控，此时该端点以 now 为 since、fromBaseline = true
+ * 入列，基线同步移除）；本次仍在监听的旧条目保留原 since；
  * 本次新出现（不在基线、不在上次条目）的端点以 now 作为 since；
- * 上次有、本次没有的端点（已停止监听）被移除。
+ * 上次有、本次没有的端点（已停止监听）被移除（fromBaseline 条目停止
+ * 后同样移除；若仍在 unbaseline 集合且重新监听，会再次入列）。
  */
 export function computeMonitoredEndpoints(
   baselineKeys: ReadonlySet<string>,
   previousItems: ReadonlyArray<MonitorEndpoint>,
   currentKeys: ReadonlySet<string>,
   now: number,
+  unbaselineKeys?: ReadonlySet<string>,
 ): MonitorEndpoint[] {
   const previousByKey = new Map<string, MonitorEndpoint>()
   for (const item of previousItems) previousByKey.set(endpointKey(item.address, item.port), item)
   const next: MonitorEndpoint[] = []
   for (const key of currentKeys) {
-    if (baselineKeys.has(key)) continue
+    if (baselineKeys.has(key) && unbaselineKeys?.has(key) !== true) continue
     const previous = previousByKey.get(key)
     if (previous !== undefined) {
       next.push(previous)
@@ -392,11 +404,32 @@ export function computeMonitoredEndpoints(
     const address = key.slice(0, separator)
     const port = Number.parseInt(key.slice(separator + 1), 10)
     if (!Number.isInteger(port) || port < 1 || port > 65535) continue
-    next.push({ address, port, since: now })
+    // 从基线恢复的端点：标记来源（仅在 true 时设置字段，保持序列化兼容）。
+    const fromBaseline = unbaselineKeys?.has(key) === true
+    const entry: MonitorEndpoint = { address, port, since: now }
+    if (fromBaseline) entry.fromBaseline = true
+    next.push(entry)
   }
   // 最新启动的排在最前（面板从上往下 = 从新到旧）。
   next.sort((a, b) => b.since - a.since || a.port - b.port)
   return next.slice(0, MAX_ENDPOINTS)
+}
+
+/**
+ * 把一个端点移出基线（用户在右栏 tab「基线端口」区点击恢复监控）。
+ * 同步把它加入受监控条目（since = now，fromBaseline = true），下一轮扫描
+ * 由 computeMonitoredEndpoints 的 unbaseline 集合维持。端点不在基线时返回
+ * false（可能是已监控中或已停止监听，客户端提示相应文案）。
+ */
+export function unbaselineEndpoint(address: string, port: number, now: number): boolean {
+  const key = endpointKey(address, port)
+  if (!monitorState.baseline.has(key)) return false
+  monitorState.baseline.delete(key)
+  if (!monitorState.unbaseline.has(key)) monitorState.unbaseline.add(key)
+  monitorState.items = monitorState.items
+    .filter((item) => endpointKey(item.address, item.port) !== key)
+    .concat([{ address, port, since: now, fromBaseline: true }])
+  return true
 }
 
 /**
@@ -456,11 +489,26 @@ interface RawEndpoint {
   pid: number | null
 }
 
-/** 当前监控状态快照（供 /dsh-zh/api 路由序列化，路由层负责 ok 包装）。 */
-export function getServiceMonitorSnapshot(): { generatedAt: number; items: MonitorEndpoint[] } {
+/**
+ * 当前监控状态快照（供 /dsh-zh/api 路由序列化，路由层负责 ok 包装）。
+ * baseline = 基线端点列表（用户可在右栏 tab「基线端口」区点击恢复监控），
+ * 按端口升序稳定排列。
+ */
+export function getServiceMonitorSnapshot(): { generatedAt: number; items: MonitorEndpoint[]; baseline: BaselineEndpoint[] } {
+  const baseline: BaselineEndpoint[] = []
+  for (const key of monitorState.baseline) {
+    const separator = key.lastIndexOf('|')
+    if (separator <= 0 || separator === key.length - 1) continue
+    const address = key.slice(0, separator)
+    const port = Number.parseInt(key.slice(separator + 1), 10)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) continue
+    baseline.push({ address, port })
+  }
+  baseline.sort((a, b) => a.port - b.port || a.address.localeCompare(b.address))
   return {
     generatedAt: monitorState.generatedAt,
     items: monitorState.items.slice(),
+    baseline,
   }
 }
 
@@ -714,12 +762,15 @@ function spawnRevealProcess(file: string, args: string[]): Promise<void> {
 
 const monitorState: {
   baseline: Set<string>
+  /** 用户从「基线端口」区恢复监控的键集合：这些端点豁免基线过滤。 */
+  unbaseline: Set<string>
   items: MonitorEndpoint[]
   lastRaw: RawEndpoint[]
   generatedAt: number
   scanFailed: boolean
 } = {
   baseline: new Set<string>(),
+  unbaseline: new Set<string>(),
   items: [],
   lastRaw: [],
   generatedAt: 0,
@@ -762,7 +813,7 @@ export function ensureFreshScan(platform: NodeJS.Platform, maxAgeMs: number): Pr
       if (monitorState.baseline.size === 0 && monitorState.items.length === 0 && monitorState.generatedAt === 0) {
         monitorState.baseline = currentKeys
       }
-      monitorState.items = computeMonitoredEndpoints(monitorState.baseline, monitorState.items, currentKeys, now)
+        monitorState.items = computeMonitoredEndpoints(monitorState.baseline, monitorState.items, currentKeys, now, monitorState.unbaseline)
       monitorState.generatedAt = now
       sweepOwnerCache()
       if (monitorState.scanFailed) {

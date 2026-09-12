@@ -1,9 +1,9 @@
-// 服务监控面板（浏览器半边）：左侧会话列表与底部设置之间注入一段监控区。
+// 服务监控面板（浏览器半边）：注册为右侧边栏 tab 类型，正文复用纯 DOM 面板。
 //
 // 行为（docs/behavior.md「服务监控」）：
-//   - 主机半边（lib/service-monitor.js）定期扫描本机 TCP 监听端口，与
+//   - 主机半边（lib/service-monitor.js）按需扫描本机 TCP 监听端口，与
 //     插件启动时的基线对比；基线之外新出现的监听即「会话期间启动的服务」。
-//   - 本模块按「刷新间隔」（serviceMonitorIntervalSec，默认 10 秒，2–300）
+//   - 共享轮询器按「刷新间隔」（serviceMonitorIntervalSec，默认 10 秒，2–300）
 //     轮询 POST /dsh-zh/api/service-monitor：请求体携带「自定义监控项」
 //     （serviceMonitorTargets，设置页折叠分组里维护），主机对每项做 TCP
 //     连接探活后与自动发现条目一并返回。
@@ -17,15 +17,20 @@
 //   - 面板条目排序：自动发现条目（绿点 + 地址 + 存活时长，按启动时间
 //     新→旧）排最上——新服务一出现即在顶部；自定义在线条目排其后；
 //     离线的自定义条目自动沉底。
-//   - 无任何条目（无自定义项且无自动发现）时面板整体隐藏。
+//   - 无任何条目（无自定义项且无自动发现）时列表区显示空态提示。
 //   - 由「服务监控」开关（serviceMonitorEnabled，localStorage，默认关——
-//     归属/定位按平台尽力而为）
-//     控制；关闭时完全卸载全部副作用（面板、样式、观察器、定时器、提示层）。
+//     归属/定位按平台尽力而为）控制；关闭时注销 tab 类型并停止轮询，
+//     全部副作用（面板、样式、观察器、定时器、提示层）随 Fiber 清理。
 //
-// 实现要点（与 archive-view.ts 共用注入约定，独立安装）：
-//   - 注入点是纯 DOM 兄弟节点（footArea 之前），不修改官方 React 组件，
-//     不使用槽位；React 不会删除它不认识的外来兄弟节点，MutationObserver
-//     仅用于侧栏重挂后重新定位（面板自身 isConnected 检查开销极小）。
+// 实现要点（tab 正文是 React 组件，面板本体是纯 DOM）：
+//   - 两阶段注册（见 logic/service-monitor-tab.ts）：阶段一 sidebarRightTabs
+//     注册页面类型（无地址 pattern，guide 页入口胶囊）；阶段二 keyed 槽位
+//     sidebar.right.pane.tab 按 id 分发 React 容器组件；容器组件在 useEffect
+//     里把 mountServiceMonitorPanel 创建的 DOM 面板挂进自己的 ref 节点，
+//     卸载即清理——React 只负责生命周期，不重写 500 行 DOM 面板逻辑。
+//   - 共享轮询器（ensureServiceMonitorLoop）：同一时刻只有一个轮询循环
+//     和一个面板实例；tab 未打开时轮询保持轻量运行（保持基线数据新鲜，
+//     打开即显示，不再每次从冷启动扫描），面板挂载时渲染当前快照。
 //   - 条目行按键复用：轮询只做就地属性/文本更新，不重建按钮（重建会使
 //     mousedown/mouseup 目标不一致，浏览器不派发 click）；悬停提示是
 //     文档级的单个自绘浮层（原生 title 不会在显示期间刷新内容），行为
@@ -38,19 +43,26 @@
 //     bundle 作用域内的 function 声明，运行时互相可见）。
 
 const SERVICE_MONITOR_CSS = [
+  // 基础（左栏形态默认）：插入会话列表与设置之间，无服务整体隐藏、rail 折叠隐藏。
   '[data-dsh-zh-service-monitor]{flex:none;display:flex;flex-direction:column;',
   'margin:0 var(--dsh-sidebar-inline-padding,12px) 6px;padding:8px 0 2px;',
   'border-top:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,0.28));',
   'font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,inherit)}',
   '[data-dsh-zh-service-monitor][data-hidden="true"]{display:none}',
   '[data-dsh-zh-service-monitor][data-rail="true"]{display:none!important}',
+  // tab 形态：撑满 React 容器、解除限高，不受 data-hidden/data-rail 影响（不设这两个属性）。
+  '[data-dsh-zh-service-monitor][data-mount="tab"]{flex:1 1 auto;min-height:0;margin:0;',
+  'padding:10px 4px 6px;border-top:0}',
+  '[data-dsh-zh-service-monitor][data-mount="tab"] [data-dsh-zh-sm-list]{flex:1 1 auto;min-height:0;max-height:none}',
   '[data-dsh-zh-sm-head]{display:flex;align-items:center;gap:6px;padding:2px 6px 6px;',
   'color:var(--dsw-alias-label-tertiary,#666);font-weight:600;user-select:none}',
   '[data-dsh-zh-sm-count]{margin-left:auto;flex:none;min-width:18px;text-align:center;',
   'padding:0 5px;border-radius:9px;font-weight:500;font-variant-numeric:tabular-nums;',
   'background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,0.14))}',
-  '[data-dsh-zh-sm-list]{display:flex;flex-direction:column;max-height:190px;overflow-y:auto;overscroll-behavior:contain}',
-  '[data-dsh-zh-sm-item]{display:flex;align-items:center;gap:8px;padding:5px 6px;margin:0;',
+  '[data-dsh-zh-sm-list]{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:1px;',
+  'overflow-y:auto;overscroll-behavior:contain}',
+  '[data-dsh-zh-sm-empty]{padding:18px 12px;color:var(--dsw-alias-label-tertiary,#666);font-size:12px;line-height:1.7}',
+  '[data-dsh-zh-sm-item]{display:flex;align-items:center;gap:8px;padding:5px 8px;margin:0;',
   'border:0;border-radius:8px;background:transparent;cursor:pointer;font:inherit;',
   'font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary,inherit);text-align:left}',
   '[data-dsh-zh-sm-item]:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,0.12))}',
@@ -69,6 +81,18 @@ const SERVICE_MONITOR_CSS = [
   '[data-dsh-zh-sm-addr]{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
   'font-variant-numeric:tabular-nums}',
   '[data-dsh-zh-sm-time]{margin-left:auto;flex:none;color:var(--dsw-alias-label-tertiary,#666);font-size:11px}',
+  '[data-dsh-zh-sm-baseline]{margin-top:12px;padding-top:8px;border-top:1px dashed var(--dsw-alias-border-l2,rgba(127,127,127,0.28))}',
+  '[data-dsh-zh-sm-baseline-head]{display:flex;align-items:center;gap:6px;padding:0 6px 6px;',
+  'color:var(--dsw-alias-label-tertiary,#666);font-weight:600;user-select:none}',
+  '[data-dsh-zh-sm-baseline-hint]{margin-left:auto;font-weight:400}',
+  '[data-dsh-zh-sm-baseline-list]{display:flex;flex-wrap:wrap;gap:4px;padding:0 4px}',
+  '[data-dsh-zh-sm-baseline-item]{border:0;border-radius:6px;background:transparent;cursor:pointer;font:inherit;',
+  'font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,inherit);padding:3px 8px;font-variant-numeric:tabular-nums}',
+  '[data-dsh-zh-sm-baseline-item]:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,0.12));color:var(--dsw-alias-label-primary,inherit)}',
+  '[data-dsh-zh-sm-baseline-item]:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#4D6BFE);outline-offset:-2px}',
+  '[data-dsh-zh-sm-baseline-more]{align-self:flex-start;border:0;background:transparent;cursor:pointer;font:inherit;',
+  'font-size:11px;color:var(--dsw-alias-state-business-primary,#4D6BFE);padding:3px 8px}',
+  '[data-dsh-zh-sm-baseline-more]:hover{text-decoration:underline}',
   '[data-dsh-zh-sm-tooltip]{position:fixed;z-index:2147483000;display:none;max-width:460px;padding:7px 10px;',
   'border-radius:8px;background:rgba(26,27,32,0.96);color:#f2f3f5;font-size:12px;line-height:19px;',
   'white-space:pre-line;text-align:left;pointer-events:none;box-shadow:0 6px 20px rgba(0,0,0,0.28);',
@@ -82,6 +106,12 @@ const SERVICE_MONITOR_COPY = {
   zh: {
     title: '服务监控',
     autoTitle: '{addr} · 监听 {time}',
+    emptyHint: '暂无监控中的服务。对话中启动的本地监听服务会出现在这里；也可在设置里添加自定义监控项。',
+    guideDesc: '监控对话中启动的本地服务与自定义监控项',
+    baselineHead: '基线端口',
+    baselineHint: '点击恢复监控该端口',
+    baselineMore: '显示更多',
+    baselineRestore: '恢复监控 {addr}',
     ownerLine: '{name}（PID {pid}）',
     ownerCmd: '命令行：{cmd}',
     ownerHttpSys: '经 http.sys 内核队列定位',
@@ -102,6 +132,12 @@ const SERVICE_MONITOR_COPY = {
   en: {
     title: 'Service monitor',
     autoTitle: '{addr} · listening {time}',
+    emptyHint: 'No services being watched. Local listeners started during the conversation appear here; add custom watch entries in Settings.',
+    guideDesc: 'Watch locally started services and custom watch entries',
+    baselineHead: 'Baseline ports',
+    baselineHint: 'Click to monitor this port',
+    baselineMore: 'Show more',
+    baselineRestore: 'Monitor {addr}',
     ownerLine: '{name} (PID {pid})',
     ownerCmd: 'Command line: {cmd}',
     ownerHttpSys: 'resolved via http.sys kernel queue',
@@ -123,7 +159,9 @@ const SERVICE_MONITOR_COPY = {
 
 // 轮询默认间隔（秒）：设置缺失或非法时回退，与设置页默认 10 秒一致。
 const SERVICE_POLL_DEFAULT_SEC = 10
-// 侧栏列宽低于该值视为折叠 rail（rail 宽 56px，展开宽 ≥200px）。
+// 「基线端口」区每页显示的端点数（点击「显示更多」追加一页；仅右栏 tab）。
+const SERVICE_BASELINE_PAGE = 10
+// 左栏列宽低于该值视为折叠 rail（rail 宽 56px，展开宽 ≥200px；仅左栏形态）。
 const SERVICE_RAIL_WIDTH_PX = 120
 // 面板最多显示的条目数（主机同上限；自定义项另计，上限见设置存储）。
 const SERVICE_MAX_ITEMS = 50
@@ -248,114 +286,236 @@ function openServiceOwnerDirectory(address, port) {
   } catch { /* fetch 同步抛出：静默 */ }
 }
 
-// ---------- 安装（开关驱动的动态装卸，同 archive-view 模式） ----------
+// ---------- 安装（开关驱动：开 = 共享轮询循环 + 右栏 tab 类型） ----------
 
-function installServiceMonitor(ctx) {
-  let activeDispose = null
-  const stopServiceMonitor = function () {
-    if (activeDispose === null) return
-    const dispose = activeDispose
-    activeDispose = null
-    try { dispose() } catch { /* 清理失败不阻断 */ }
+// 语言服务引用（install 时捕获；面板与 tab 标题共用，随语言切换重渲染）。
+var smLocale = null
+
+function smActiveIsZh() {
+  try {
+    return smLocale !== undefined && smLocale !== null
+      && typeof smLocale.getLocale === 'function'
+      && smLocale.getLocale().active === 'zh'
+  } catch {
+    return false
   }
-  const syncEnabled = function () {
-    const on = typeof settingsStore !== 'undefined' && settingsStore !== null
-      && settingsStore.getSnapshot().serviceMonitorEnabled === true
-    if (on) {
-      if (activeDispose === null) activeDispose = runServiceMonitor(ctx)
-    } else {
-      stopServiceMonitor()
-    }
-  }
-  ctx.effect(function () {
-    syncEnabled()
-    const unsub = typeof settingsStore !== 'undefined' && settingsStore !== null
-      && typeof settingsStore.subscribe === 'function'
-      ? settingsStore.subscribe(syncEnabled)
-      : null
-    return function () {
-      if (unsub !== null && typeof unsub === 'function') unsub()
-      stopServiceMonitor()
-    }
-  }, 'dsh-zh: 服务监控开关')
 }
 
-// 完整注册（仅在 serviceMonitorEnabled 开启时被调用）：返回清理函数。
-function runServiceMonitor(ctx) {
-  if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return function () {}
-  if (typeof document.body === 'undefined' || document.body === null) return function () {}
-  if (typeof document.querySelector !== 'function') return function () {}
+// ---------- 共享轮询循环（开关开启期间常驻；tab 正文订阅渲染） ----------
+// 同一时刻只有一个循环和一个数据源；多个会话各自打开 tab 时共享同一份
+// 快照（服务监控是机器级事实，不是会话级）。循环未启动时面板渲染空态。
+var smLoop = null
 
-  const localeService = ctx.get('locale')
-  const activeIsZh = function () {
-    try {
-      return localeService !== undefined && localeService !== null
-        && typeof localeService.getLocale === 'function'
-        && localeService.getLocale().active === 'zh'
-    } catch {
-      return false
+function smReadIntervalSec() {
+  const sec = typeof settingsStore !== 'undefined' && settingsStore !== null
+    ? settingsStore.getSnapshot().serviceMonitorIntervalSec
+    : undefined
+  if (typeof sec !== 'number' || !Number.isFinite(sec)) return SERVICE_POLL_DEFAULT_SEC
+  return Math.max(SERVICE_INTERVAL_MIN_SEC, Math.min(SERVICE_INTERVAL_MAX_SEC, Math.round(sec)))
+}
+
+// 样式注入（跟随循环生命周期，data-plugin 标签定位，随停止移除）。
+var smStyleEl = null
+function smEnsureStyles() {
+  if (typeof document === 'undefined' || document === null) return
+  if (typeof document.head === 'undefined' || document.head === null) return
+  try {
+    if (smStyleEl !== null && document.head.contains(smStyleEl)) return
+    smStyleEl = document.createElement('style')
+    smStyleEl.setAttribute('data-plugin', 'deepseek-harness-zh_pro')
+    smStyleEl.setAttribute('data-plugin-css', 'dsh-zh/service-monitor.css')
+    smStyleEl.textContent = SERVICE_MONITOR_CSS
+    document.head.appendChild(smStyleEl)
+  } catch { /* 样式注入失败不影响数据轮询 */ }
+}
+function smRemoveStyles() {
+  if (smStyleEl !== null && smStyleEl.parentNode !== null) smStyleEl.parentNode.removeChild(smStyleEl)
+  smStyleEl = null
+}
+
+function startSmLoop() {
+  if (smLoop !== null) return
+  const loop = { lastValue: null, listeners: [], disposed: false, pollTimer: null, polling: false, requestController: null }
+  smLoop = loop
+  const scheduleTick = function () {
+    if (loop.disposed || loop.pollTimer !== null) return
+    loop.pollTimer = setTimeout(function () {
+      loop.pollTimer = null
+      if (loop.disposed) return
+      tick()
+    }, smReadIntervalSec() * 1000)
+  }
+  const tick = function () {
+    if (loop.disposed) return
+    if (loop.polling) { scheduleTick(); return }
+    // 页面不可见时跳过本轮（回到前台后下一轮立即补上）。
+    if (typeof document !== 'undefined' && document !== null
+      && typeof document.hidden === 'boolean' && document.hidden) { scheduleTick(); return }
+    loop.polling = true
+    const finish = function () {
+      if (loop.disposed) return
+      loop.polling = false
+      loop.requestController = null
+      scheduleTick()
     }
-  }
-  const resolveCopy = function () { return SERVICE_MONITOR_COPY[activeIsZh() ? 'zh' : 'en'] }
-  let lastValue = null
-  const localeUnsubscribe = localeService !== undefined && localeService !== null
-    && typeof localeService.subscribe === 'function'
-    ? localeService.subscribe(function () { render(lastValue) })
-    : null
-
-  // ------- 样式注入（data-plugin 标签定位，随清理移除） -------
-  let styleEl = null
-  const ensureStyles = function () {
-    if (typeof document.head === 'undefined' || document.head === null) return
+    let pending = null
     try {
-      if (styleEl !== null && document.head.contains(styleEl)) return
-      styleEl = document.createElement('style')
-      styleEl.setAttribute('data-plugin', 'deepseek-harness-zh_pro')
-      styleEl.setAttribute('data-plugin-css', 'dsh-zh/service-monitor.css')
-      styleEl.textContent = SERVICE_MONITOR_CSS
-      document.head.appendChild(styleEl)
-    } catch { /* 样式注入失败不影响数据轮询 */ }
-  }
-
-  // ------- 定位注入点：settings 座位 → settingsArea → footArea -------
-  // [data-slot] 锚由官方 SlotOutlet 渲染（display:contents，稳定存在）；
-  // 面板插在 footArea 之前 = 会话列表区与底部设置区之间。
-  const findFootArea = function () {
-    try {
-      const seat = document.querySelector('[data-slot="sidebar.settings"]')
-      if (seat === null || seat.parentElement === null) return null
-      const settingsArea = seat.parentElement
-      const footArea = settingsArea.parentElement
-      if (footArea === null || footArea.parentNode === null) return null
-      return footArea
+      const controller = new AbortController()
+      loop.requestController = controller
+      const targets = (typeof settingsStore !== 'undefined' && settingsStore !== null
+        && Array.isArray(settingsStore.getSnapshot().serviceMonitorTargets)
+        ? settingsStore.getSnapshot().serviceMonitorTargets
+        : []).map(function (item) {
+        return { name: item.name, host: item.host, port: item.port }
+      })
+      pending = fetch('/dsh-zh/api/service-monitor', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        // intervalSec = 本页当前的刷新间隔：主机用它判定扫描缓存是否
+        // 仍然新鲜（超过一个间隔才重扫，否则直接返回缓存结果）。
+        body: JSON.stringify({ targets: targets, intervalSec: smReadIntervalSec() }),
+        signal: controller.signal,
+      })
     } catch {
-      return null
+      // 旧运行时/异常环境：fetch 同步抛出时静默等下一轮。
+      finish()
+      return
     }
+    pending.then(function (response) {
+      if (loop.disposed) return
+      if (!response.ok) throw new Error('HTTP ' + response.status)
+      return response.json()
+    }).then(function (parsed) {
+      if (loop.disposed) return
+      if (parsed !== null && typeof parsed === 'object' && parsed.ok === true
+        && parsed.value !== null && typeof parsed.value === 'object') {
+        loop.lastValue = parsed.value
+        for (const listener of loop.listeners.slice()) listener(parsed.value)
+      }
+      finish()
+    }).catch(function () {
+      if (loop.disposed) return
+      finish()
+    })
   }
+  // 立即拉第一轮（与旧版面板行为一致：开启即扫描，不等一个间隔）。
+  smEnsureStyles()
+  tick()
+}
+
+function stopSmLoop() {
+  if (smLoop === null) return
+  const loop = smLoop
+  smLoop = null
+  loop.disposed = true
+  if (loop.pollTimer !== null) { clearTimeout(loop.pollTimer); loop.pollTimer = null }
+  if (loop.requestController !== null) {
+    loop.requestController.abort()
+    loop.requestController = null
+  }
+  loop.listeners.length = 0
+  loop.lastValue = null
+  smRemoveStyles()
+}
+
+// 面板订阅：返回取消函数（循环未启动时返回 null，面板保持空态）。
+function smLoopSubscribe(listener) {
+  if (smLoop === null) return null
+  const listeners = smLoop.listeners
+  listeners.push(listener)
+  return function () {
+    const i = listeners.indexOf(listener)
+    if (i !== -1) listeners.splice(i, 1)
+  }
+}
+
+function smLoopLastValue() {
+  return smLoop !== null ? smLoop.lastValue : null
+}
+
+// ---------- 面板挂载（两种形态共享同一份轮询快照） ----------
+// mode = 'tab'：React 容器（右栏 tab 正文容器的 useEffect 调用），空态显示提示；
+// mode = 'sidebar'：左栏会话列表与设置之间（footArea 之前）的 DOM 注入面板，
+//   无服务时整体隐藏（data-hidden）、rail 折叠隐藏、MutationObserver 保活重插。
+// 两种形态各挂一个面板实例，都订阅共享轮询循环；返回清理函数，
+// container 无效时返回 null（调用方按无面板处理）。仅 sidebar 模式需要 container
+// 为可选（自身定位注入点）。
+function mountServiceMonitorPanel(mode, container) {
+  if (typeof document === 'undefined' || document === null) return null
+  if (typeof document.createElement !== 'function') return null
+  if (typeof document.querySelector !== 'function') return null
+  const isTab = mode === 'tab'
+  if (!isTab && container === undefined) container = null
+  if (isTab && (container === null || typeof container !== 'object')) return null
+  // 左栏形态需要真实 body（挂载 tip 浮层）；测试/无 DOM 环境返回 null 静默跳过。
+  if (!isTab && (typeof document.body === 'undefined' || document.body === null)) return null
+  if (!isTab && typeof MutationObserver === 'undefined') return null
+
+  const resolveCopy = function () { return SERVICE_MONITOR_COPY[smActiveIsZh() ? 'zh' : 'en'] }
+  let lastRendered = null
 
   // ------- 面板骨架（一次性创建，条目行按键复用） -------
-  let panel = null
-  let listEl = null
-  let countEl = null
-  let titleEl = null
-  let railObserver = null
-  const buildPanel = function () {
-    panel = document.createElement('div')
-    panel.setAttribute('data-dsh-zh-service-monitor', '')
-    panel.setAttribute('data-hidden', 'true')
-    const head = document.createElement('div')
-    head.setAttribute('data-dsh-zh-sm-head', '')
-    titleEl = document.createElement('span')
-    head.appendChild(titleEl)
-    countEl = document.createElement('span')
-    countEl.setAttribute('data-dsh-zh-sm-count', '')
-    head.appendChild(countEl)
-    listEl = document.createElement('div')
+  const panel = document.createElement('div')
+  panel.setAttribute('data-dsh-zh-service-monitor', '')
+  const head = document.createElement('div')
+  head.setAttribute('data-dsh-zh-sm-head', '')
+  const titleEl = document.createElement('span')
+  head.appendChild(titleEl)
+  const countEl = document.createElement('span')
+  countEl.setAttribute('data-dsh-zh-sm-count', '')
+  head.appendChild(countEl)
+    const listEl = document.createElement('div')
     listEl.setAttribute('data-dsh-zh-sm-list', '')
     panel.appendChild(head)
     panel.appendChild(listEl)
+    // 空态提示与基线端口区都仅右栏 tab 形态创建：左栏空态 = 面板整体隐藏
+    // （data-hidden），不需要这两个块；误建会在左栏面板尾部留下空白块。
+    let emptyEl = null
+    // 基线端口区（仅右栏 tab）：基线端点分页列表，点击恢复监控；左栏形态不建。
+    let baselineWrap = null
+    let baselineListEl = null
+    let baselineMoreEl = null
+    let baselineTitleEl = null
+    let baselineHintEl = null
+    let baselineShown = SERVICE_BASELINE_PAGE
+    if (isTab) {
+      baselineWrap = document.createElement('div')
+      baselineWrap.setAttribute('data-dsh-zh-sm-baseline', '')
+      baselineWrap.style.display = 'none'
+      const baselineHead = document.createElement('div')
+      baselineHead.setAttribute('data-dsh-zh-sm-baseline-head', '')
+      baselineTitleEl = document.createElement('span')
+      baselineHead.appendChild(baselineTitleEl)
+      baselineHintEl = document.createElement('span')
+      baselineHintEl.setAttribute('data-dsh-zh-sm-baseline-hint', '')
+      baselineHead.appendChild(baselineHintEl)
+      baselineListEl = document.createElement('div')
+      baselineListEl.setAttribute('data-dsh-zh-sm-baseline-list', '')
+      baselineMoreEl = document.createElement('button')
+      baselineMoreEl.type = 'button'
+      baselineMoreEl.setAttribute('data-dsh-zh-sm-baseline-more', '')
+      baselineMoreEl.style.display = 'none'
+      baselineMoreEl.addEventListener('click', function () {
+        baselineShown += SERVICE_BASELINE_PAGE
+        renderBaseline(baselineOf(lastRendered))
+      })
+      emptyEl = document.createElement('div')
+      emptyEl.setAttribute('data-dsh-zh-sm-empty', '')
+      panel.appendChild(emptyEl)
+      baselineWrap.appendChild(baselineHead)
+      baselineWrap.appendChild(baselineListEl)
+      baselineWrap.appendChild(baselineMoreEl)
+      panel.appendChild(baselineWrap)
+    }
     listEl.addEventListener('scroll', function () { hideTip() }, { passive: true })
-  }
+    if (isTab) {
+      // tab 形态：挂入 React 容器，标记 data-mount 隔离两套布局规则。
+      panel.setAttribute('data-mount', 'tab')
+      container.appendChild(panel)
+    } else {
+      // 左栏形态：初始隐藏，由 ensureMounted 定位注入点后再显示（见下方挂载段）。
+      panel.setAttribute('data-hidden', 'true')
+    }
 
   // ------- 条目行按键复用 + 悬停提示（见文件头「实现要点」） -------
   // 行为数据按 key 存表，行元素与监听器长驻；每轮只就地更新文本/属性。
@@ -407,7 +567,7 @@ function runServiceMonitor(ctx) {
     return row
   }
 
-  // 悬停提示浮层：文档级单例，内容可原位替换（原生 title 做不到）。
+  // 悬停提示浮层：文档级单例（本面板实例私有），内容可原位替换（原生 title 做不到）。
   const ensureTip = function () {
     if (tipEl !== null && tipEl.parentNode !== null) return
     tipEl = document.createElement('div')
@@ -544,8 +704,77 @@ function runServiceMonitor(ctx) {
     }
   }
 
-  const render = function (value) {
-    if (panel === null || listEl === null || titleEl === null || countEl === null) return
+    // ------- 基线端口区（仅右栏 tab）：分页列表 + 点击恢复监控 -------
+    const baselineOf = function (value) {
+      return value !== null && typeof value === 'object' && Array.isArray(value.baseline) ? value.baseline : []
+    }
+    // 点击基线端点 → 主机移出基线并返回新快照，就地渲染（不等下一轮轮询）。
+    const restoreBaseline = function (address, port) {
+      let pending = null
+      try {
+        const targets = (typeof settingsStore !== 'undefined' && settingsStore !== null
+          && Array.isArray(settingsStore.getSnapshot().serviceMonitorTargets)
+          ? settingsStore.getSnapshot().serviceMonitorTargets
+          : []).map(function (item) {
+          return { name: item.name, host: item.host, port: item.port }
+        })
+        pending = fetch('/dsh-zh/api/service-monitor/unbaseline', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ address: address, port: port, targets: targets }),
+        })
+      } catch { return }
+      pending.then(function (response) {
+        if (!response.ok) return null
+        return response.json()
+      }).then(function (parsed) {
+        if (parsed !== null && typeof parsed === 'object' && parsed.ok === true
+          && parsed.value !== null && typeof parsed.value === 'object') {
+          render(parsed.value)
+        }
+      }).catch(function () { /* 路由未就绪/旧版本主机：静默 */ })
+    }
+    const renderBaseline = function (list) {
+      if (baselineWrap === null || baselineListEl === null || baselineMoreEl === null) return
+      const copy = resolveCopy()
+      baselineTitleEl.textContent = copy.baselineHead
+      baselineHintEl.textContent = copy.baselineHint
+      if (!Array.isArray(list) || list.length === 0) {
+        baselineWrap.style.display = 'none'
+        baselineListEl.textContent = ''
+        baselineMoreEl.style.display = 'none'
+        return
+      }
+      baselineWrap.style.display = ''
+      if (baselineShown > list.length) baselineShown = list.length
+      if (baselineShown < SERVICE_BASELINE_PAGE) baselineShown = SERVICE_BASELINE_PAGE
+      baselineListEl.textContent = ''
+      for (let i = 0; i < baselineShown && i < list.length; i += 1) {
+        const endpoint = list[i]
+        const address = typeof endpoint.address === 'string' ? endpoint.address : ''
+        const port = typeof endpoint.port === 'number' ? Math.round(endpoint.port) : 0
+        if (address === '' || port < 1 || port > 65535) continue
+        const addrText = address + ':' + port
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.setAttribute('data-dsh-zh-sm-baseline-item', '')
+        button.textContent = addrText
+        button.setAttribute('aria-label', copy.baselineRestore.replace('{addr}', addrText))
+        button.title = copy.baselineHint
+        button.addEventListener('click', function () {
+          restoreBaseline(address, port)
+        })
+        baselineListEl.appendChild(button)
+      }
+      if (list.length > baselineShown) {
+        baselineMoreEl.style.display = ''
+        baselineMoreEl.textContent = copy.baselineMore + '（' + String(list.length - baselineShown) + '）'
+      } else {
+        baselineMoreEl.style.display = 'none'
+      }
+    }
+
+    const render = function (value) {
     const copy = resolveCopy()
     const items = value !== null && typeof value === 'object' && Array.isArray(value.items)
       ? value.items.slice(0, SERVICE_MAX_ITEMS)
@@ -553,19 +782,36 @@ function runServiceMonitor(ctx) {
     const targets = value !== null && typeof value === 'object' && Array.isArray(value.targets)
       ? value.targets.slice(0, 100)
       : []
-    titleEl.textContent = copy.title
-    if (items.length === 0 && targets.length === 0) {
-      panel.setAttribute('data-hidden', 'true')
-      if (listEl.firstChild !== null) listEl.textContent = ''
-      rowByKey.clear()
-      rowClickHandlers.clear()
-      rowMeta.clear()
-      ownerStates.clear()
-      hideTip()
-      return
-    }
-    panel.setAttribute('data-hidden', 'false')
-    countEl.textContent = String(items.length + targets.length)
+      lastRendered = value
+      titleEl.textContent = copy.title
+      if (items.length === 0 && targets.length === 0) {
+        if (isTab) {
+          // tab 空态：列表隐藏，提示常驻（tab 正文不整体隐藏，由用户显式开关控制）。
+          countEl.textContent = '0'
+          if (emptyEl.style.display !== '') emptyEl.style.display = ''
+          if (listEl.style.display !== 'none') listEl.style.display = 'none'
+          if (listEl.firstChild !== null) listEl.textContent = ''
+          emptyEl.textContent = copy.emptyHint
+        } else {
+          // 左栏空态：整体隐藏（无服务时不占侧栏空间，原行为）。
+          panel.setAttribute('data-hidden', 'true')
+          if (listEl.firstChild !== null) listEl.textContent = ''
+        }
+        rowByKey.clear()
+        rowClickHandlers.clear()
+        rowMeta.clear()
+        ownerStates.clear()
+        hideTip()
+        if (isTab) renderBaseline(baselineOf(value))
+        return
+      }
+      if (isTab) {
+        if (emptyEl.style.display !== 'none') emptyEl.style.display = 'none'
+        if (listEl.style.display !== '') listEl.style.display = ''
+      } else {
+        panel.setAttribute('data-hidden', 'false')
+      }
+      countEl.textContent = String(items.length + targets.length)
     const now = Date.now()
     // 排序：自动发现（新→旧）在最上，自定义在线随后，离线沉底。
     // 悬停查询归属；点击定位进程目录。
@@ -640,146 +886,135 @@ function runServiceMonitor(ctx) {
     for (const key of Array.from(ownerStates.keys())) {
       if (!keep.has(key)) ownerStates.delete(key)
     }
-    syncRows(desired)
-  }
+      syncRows(desired)
+      if (isTab) renderBaseline(baselineOf(value))
+    }
 
-  // ------- rail 检测：观察侧栏根列宽度，折叠时隐藏面板 -------
-  const watchRail = function () {
-    if (railObserver !== null) return
-    if (typeof ResizeObserver !== 'function' || panel === null || panel.parentNode === null) return
-    railObserver = new ResizeObserver(function (entries) {
-      if (panel === null || entries.length === 0) return
-      const width = entries[entries.length - 1].contentRect.width
-      if (width > 0 && width < SERVICE_RAIL_WIDTH_PX) panel.setAttribute('data-rail', 'true')
-      else panel.setAttribute('data-rail', 'false')
-    })
-    railObserver.observe(panel.parentNode)
-  }
-
-  // ------- 保活：面板被官方重挂挤出 DOM 时重新插入 -------
-  const ensureMounted = function () {
-    try {
-      if (panel === null) return
-      if (panel.parentNode !== null) return
-      const footArea = findFootArea()
-      if (footArea !== null) {
-        footArea.parentNode.insertBefore(panel, footArea)
-        watchRail()
+    // ------- 左栏形态专属：定位注入点、rail 检测、保活重插 -------
+    // [data-slot] 锚由官方 SlotOutlet 渲染（display:contents，稳定存在）；
+    // 面板插在 footArea 之前 = 会话列表区与底部设置区之间。
+    let railObserver = null
+    const findFootArea = function () {
+      try {
+        const seat = document.querySelector('[data-slot="sidebar.settings"]')
+        if (seat === null || seat.parentElement === null) return null
+        const settingsArea = seat.parentElement
+        const footArea = settingsArea.parentElement
+        if (footArea === null || footArea.parentNode === null) return null
+        return footArea
+      } catch {
+        return null
       }
-    } catch { /* 定位失败等下一轮 DOM 变化 */ }
-  }
-  const keepAlive = new MutationObserver(function () {
-    // 面板自身仍在文档中即无需动作（面板内部更新也走这里，开销可忽略）。
-    if (panel !== null && panel.isConnected === true) return
-    ensureMounted()
-  })
-  keepAlive.observe(document.documentElement, { childList: true, subtree: true })
-
-  // ------- 轮询主机快照（setTimeout 自循环：间隔每轮读设置，即时生效） -------
-  let pollTimer = null
-  let polling = false
-  let disposed = false
-  let requestController = null
-  const readIntervalSec = function () {
-    const sec = typeof settingsStore !== 'undefined' && settingsStore !== null
-      ? settingsStore.getSnapshot().serviceMonitorIntervalSec
-      : undefined
-    if (typeof sec !== 'number' || !Number.isFinite(sec)) return SERVICE_POLL_DEFAULT_SEC
-    return Math.max(SERVICE_INTERVAL_MIN_SEC, Math.min(SERVICE_INTERVAL_MAX_SEC, Math.round(sec)))
-  }
-  const scheduleTick = function () {
-    if (disposed || pollTimer !== null) return
-    pollTimer = setTimeout(function () {
-      pollTimer = null
-      if (disposed) return
-      tick()
-    }, readIntervalSec() * 1000)
-  }
-  const tick = function () {
-    if (disposed) return
-    if (polling) { scheduleTick(); return }
-    // 页面不可见时跳过本轮（回到前台后下一轮立即补上）。
-    if (typeof document.hidden === 'boolean' && document.hidden) { scheduleTick(); return }
-    polling = true
-    const finish = function () {
-      if (disposed) return
-      polling = false
-      requestController = null
-      scheduleTick()
     }
-    let pending = null
-    try {
-      const controller = new AbortController()
-      requestController = controller
-      const targets = (typeof settingsStore !== 'undefined' && settingsStore !== null
-        && Array.isArray(settingsStore.getSnapshot().serviceMonitorTargets)
-        ? settingsStore.getSnapshot().serviceMonitorTargets
-        : []).map(function (item) {
-        return { name: item.name, host: item.host, port: item.port }
+    // rail 检测：观察侧栏根列宽度，折叠时隐藏面板（仅左栏形态）。
+    const watchRail = function () {
+      if (railObserver !== null) return
+      if (typeof ResizeObserver !== 'function' || panel.parentNode === null) return
+      railObserver = new ResizeObserver(function (entries) {
+        if (entries.length === 0) return
+        const width = entries[entries.length - 1].contentRect.width
+        if (width > 0 && width < SERVICE_RAIL_WIDTH_PX) panel.setAttribute('data-rail', 'true')
+        else panel.setAttribute('data-rail', 'false')
       })
-      pending = fetch('/dsh-zh/api/service-monitor', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        // intervalSec = 本页当前的刷新间隔：主机用它判定扫描缓存是否
-        // 仍然新鲜（超过一个间隔才重扫，否则直接返回缓存结果）。
-        body: JSON.stringify({ targets: targets, intervalSec: readIntervalSec() }),
-        signal: controller.signal,
+      railObserver.observe(panel.parentNode)
+    }
+    // 保活：面板被官方重挂挤出 DOM 时重新插入（React 不会删除它不认识的外来兄弟节点，
+    // 但官方侧栏重挂会；仅左栏形态需要）。
+    const ensureMounted = function () {
+      try {
+        if (panel.parentNode !== null) return
+        const footArea = findFootArea()
+        if (footArea !== null) {
+          footArea.parentNode.insertBefore(panel, footArea)
+          watchRail()
+        }
+      } catch { /* 定位失败等下一轮 DOM 变化 */ }
+    }
+    let keepAlive = null
+    if (!isTab) {
+      ensureMounted()
+      keepAlive = new MutationObserver(function () {
+        // 面板自身仍在文档中即无需动作（面板内部更新也走这里，开销可忽略）。
+        if (panel.isConnected === true) return
+        ensureMounted()
       })
-    } catch {
-      // 旧运行时/异常环境：fetch 同步抛出时静默等下一轮。
-      finish()
-      return
+      keepAlive.observe(document.documentElement, { childList: true, subtree: true })
     }
-    pending.then(function (response) {
-      if (disposed) return
-      if (!response.ok) throw new Error('HTTP ' + response.status)
-      return response.json()
-    }).then(function (parsed) {
-      if (disposed) return
-      if (parsed !== null && typeof parsed === 'object' && parsed.ok === true
-        && parsed.value !== null && typeof parsed.value === 'object') {
-        lastValue = parsed.value
-        render(lastValue)
-      }
-      finish()
-    }).catch(function () {
-      if (disposed) return
-      finish()
-    })
-  }
 
-  // ------- 启动 -------
-  ensureStyles()
-  ensureTip()
-  buildPanel()
-  ensureMounted()
-  tick()
+    // ------- 订阅共享循环 + 语言切换重渲染，挂载即渲染当前快照 -------
+    ensureTip()
+    const unsubscribeLoop = smLoopSubscribe(render)
+    const localeUnsubscribe = smLocale !== null && typeof smLocale.subscribe === 'function'
+      ? smLocale.subscribe(function () { render(lastRendered) })
+      : null
+    render(smLoopLastValue())
 
-  return function () {
-    disposed = true
-    if (pollTimer !== null) { clearTimeout(pollTimer); pollTimer = null }
-    if (requestController !== null) {
-      requestController.abort()
-      requestController = null
-    }
-    if (keepAlive !== null) { keepAlive.disconnect() }
-    if (railObserver !== null) { railObserver.disconnect(); railObserver = null }
-    if (localeUnsubscribe !== null && typeof localeUnsubscribe === 'function') localeUnsubscribe()
-    hideTip()
+    return function () {
+      if (unsubscribeLoop !== null) unsubscribeLoop()
+      if (localeUnsubscribe !== null && typeof localeUnsubscribe === 'function') localeUnsubscribe()
+      if (keepAlive !== null) keepAlive.disconnect()
+      if (railObserver !== null) { railObserver.disconnect(); railObserver = null }
+      hideTip()
     if (tipEl !== null && tipEl.parentNode !== null) tipEl.parentNode.removeChild(tipEl)
     tipEl = null
-    if (panel !== null && panel.parentNode !== null) panel.parentNode.removeChild(panel)
-    panel = null
-    listEl = null
-    countEl = null
-    titleEl = null
-    if (styleEl !== null && styleEl.parentNode !== null) styleEl.parentNode.removeChild(styleEl)
-    styleEl = null
+    if (panel.parentNode !== null) panel.parentNode.removeChild(panel)
     rowByKey.clear()
     rowClickHandlers.clear()
     rowMeta.clear()
     ownerStates.clear()
-    lastValue = null
+    lastRendered = null
   }
+}
 
+function installServiceMonitor(ctx) {
+  smLocale = ctx.get('locale')
+  let tabDispose = null
+  let sidebarDispose = null
+  const stopTab = function () {
+    if (tabDispose === null) return
+    const dispose = tabDispose
+    tabDispose = null
+    try { dispose() } catch { /* 清理失败不阻断 */ }
+  }
+  const stopSidebar = function () {
+    if (sidebarDispose === null) return
+    const dispose = sidebarDispose
+    sidebarDispose = null
+    try { dispose() } catch { /* 清理失败不阻断 */ }
+  }
+  const switchOn = function (key) {
+    return typeof settingsStore !== 'undefined' && settingsStore !== null
+      && settingsStore.getSnapshot()[key] === true
+  }
+  const syncEnabled = function () {
+    // 总开关主控；两个子开关分别控制左栏面板与右栏 tab（总关 = 全部拆卸、
+    // 停轮询；两子开关全关也无 UI，同样停轮询零开销）。
+    const panelOn = switchOn('serviceMonitorEnabled') && switchOn('serviceMonitorPanelEnabled')
+    const tabOn = switchOn('serviceMonitorEnabled') && switchOn('serviceMonitorTabEnabled')
+    if (panelOn || tabOn) startSmLoop()
+    if (panelOn) {
+      if (sidebarDispose === null) sidebarDispose = mountServiceMonitorPanel('sidebar', null)
+    } else {
+      stopSidebar()
+    }
+    if (tabOn) {
+      if (tabDispose === null) tabDispose = registerServiceMonitorTab(ctx)
+    } else {
+      stopTab()
+    }
+    if (!panelOn && !tabOn) stopSmLoop()
+  }
+  ctx.effect(function () {
+    syncEnabled()
+    const unsub = typeof settingsStore !== 'undefined' && settingsStore !== null
+      && typeof settingsStore.subscribe === 'function'
+      ? settingsStore.subscribe(syncEnabled)
+      : null
+    return function () {
+      if (unsub !== null && typeof unsub === 'function') unsub()
+      stopTab()
+      stopSidebar()
+      stopSmLoop()
+    }
+  }, 'dsh-zh: 服务监控开关')
 }

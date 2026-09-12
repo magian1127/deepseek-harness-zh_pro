@@ -515,6 +515,17 @@ const ZhSettingsSection = function (props) {
                 settingsStore.set('serviceMonitorEnabled', !snapshot.serviceMonitorEnabled)
               }, false, t('serviceMonitor')),
               true),
+              // 双形态子开关：仅在总开关开启时生效（总关 = 全部隐藏、零开销）。
+            row('serviceMonitorPanel', t('serviceMonitorPanel'), t('serviceMonitorPanelDesc'),
+              toggle(snapshot.serviceMonitorPanelEnabled, function () {
+                settingsStore.set('serviceMonitorPanelEnabled', !snapshot.serviceMonitorPanelEnabled)
+              }, false, t('serviceMonitorPanel')),
+              true),
+            row('serviceMonitorTab', t('serviceMonitorTab'), t('serviceMonitorTabDesc'),
+              toggle(snapshot.serviceMonitorTabEnabled, function () {
+                settingsStore.set('serviceMonitorTabEnabled', !snapshot.serviceMonitorTabEnabled)
+              }, false, t('serviceMonitorTab')),
+              true),
             row('serviceMonitorInterval', t('serviceMonitorInterval'), t('serviceMonitorIntervalDesc'),
               React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
                 React.createElement('input', {

@@ -1106,6 +1106,18 @@ try {
     ]), '服务监控 停止监听的端点移除且旧条目 since 保留')
     smItems = serviceMonitor.computeMonitoredEndpoints(smBaseline, smItems, new Set(['127.0.0.1|81', '[::1]|81']), smNow + 4000)
     check(smItems.length, 2, '服务监控 端口重现按新条目记录')
+    // 基线豁免（unbaseline 集合）：用户从「基线端口」区点击恢复监控的端点
+    // 即使在基线内也入列，带 fromBaseline 标记；未豁免的基线端口仍隐藏。
+    const smUnbaseline = new Set(['127.0.0.1|3080'])
+    const smUnbaselined = serviceMonitor.computeMonitoredEndpoints(smBaseline, [], new Set(['127.0.0.1|3080', '127.0.0.1|81']), smNow + 6000, smUnbaseline)
+    check(JSON.stringify(smUnbaselined), JSON.stringify([
+      { address: '127.0.0.1', port: 81, since: smNow + 6000 },
+      { address: '127.0.0.1', port: 3080, since: smNow + 6000, fromBaseline: true },
+    ]), '服务监控 基线豁免集内端点带 fromBaseline 标记入监控，其余基线端口仍隐藏')
+    const smWithoutFlag = serviceMonitor.computeMonitoredEndpoints(smBaseline, [], new Set(['127.0.0.1|81']), smNow + 8000)
+    check(JSON.stringify(smWithoutFlag), JSON.stringify([
+      { address: '127.0.0.1', port: 81, since: smNow + 8000 },
+    ]), '服务监控 未传豁免集时新条目不带 fromBaseline 字段（序列化兼容）')
     // ---- 服务监控：自定义监控项 TCP 探活（真实 listener 在线 / 关闭端口离线） ----
     const netModule = await import('node:net')
     const probeServer = netModule.createServer()

@@ -30,6 +30,9 @@ POST `/dsh-zh/api/service-monitor/open` 定位监听进程目录。主机没有�
 扫描结果带时间戳缓存，拉取时请求携带网页设置的刷新间隔，超过一个间隔才重扫
 （并发拉取共享同一次扫描；基线 = 第一次扫描时的监听集合），进程归属由悬停触发
 的 resolve 按需解析；目录路径由主机进程枚举得出，不接受请求传入。
+客户端侧服务监控以右栏 tab 呈现（`logic/service-monitor.ts` 共享轮询循环与纯 DOM 面板，
+`logic/service-monitor-tab.ts` 官方两阶段协议注册：`sidebarRightTabs` 页面类型 +
+keyed 槽位 `sidebar.right.pane.tab`/`.title` 按 id 分发 React 容器与活标题）。
 删除逻辑本身完全使用官方服务面：`sessionPersistence`（locate/readRaw/list）定位日志、
 `Workspace.detachSession` 移除账本槽位、`trash.ts` 把目录移入系统回收站。
 

@@ -65,7 +65,8 @@ npm test
 - `src/lib/client/logic/`：状态与逻辑（`settings-store.ts`、`prompt-store.ts`、`format-utils.ts`、
   `settings-section.ts` 设置页组件、`auto-archive.ts`、`register.ts`、`dom-enhance.ts`、
   `session-menu.ts` 会话删除菜单（含批量项注入与批量执行）、`session-batch.ts` 会话多选与批量操作
-  （行首复选框 + 多选状态）、`archive-view.ts` 归档视图、`service-monitor.ts` 服务监控面板、
+  （行首复选框 + 多选状态）、`archive-view.ts` 归档视图、`service-monitor.ts` 服务监控（共享轮询 + DOM 面板）、
+  `service-monitor-tab.ts` 右栏 tab 两阶段注册（React 容器 + keyed 槽位）、
   `apply.ts`）；
 - `src/lib/client/entry.ts`：客户端行为说明；`scripts/build-client.mjs` 负责生成包壳与导出，
   同时更新 `lib/client/` 下的旧路径生成快照，便于兼容既有审查工具。

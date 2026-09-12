@@ -387,8 +387,26 @@ const locale = {
 }
 const ctx = {
   locale: locale,
-  slots: {
-    inject: function (_name, setup) {
+  // 服务监控 tab 注册用的服务注入记录（sidebarRightTabs/slots 由 ctx.inject 等待；
+  // mock 立即回调并把注销函数压入 _effects，与真实生命周期同形）。
+  _injectCalls: [],
+  inject: function (names, callback) {
+    const record = { names: names, callback: callback, disposed: false }
+    ctx._injectCalls.push(record)
+    // 回调返回的清理函数由 seat.dispose 级联（与真实 Cordis 生命周期同形：
+    // 服务消失/seat 释放时先运行注入体内的清理，再标记记录）。
+    const cleanup = callback(ctx)
+    const seat = {
+      dispose: function () {
+        record.disposed = true
+        if (typeof cleanup === 'function') cleanup()
+        return undefined
+      },
+    }
+    return seat
+  },
+    slots: {
+      inject: function (_name, setup) {
       const dispose = setup()
       if (typeof dispose === 'function') ctx._effects.push(dispose)
     },
@@ -398,7 +416,17 @@ const ctx = {
     },
   },
   _effects: [],
-  get: function (name) { return name === 'locale' ? locale : undefined },
+  // 可选服务表：服务监控 tab 注册测试注入 sidebarRightTabs mock；真实代码用
+  // ctx.get 读取，mock 在此表命中时优先返回。
+    _services: {},
+    get: function (name) {
+      if (name === 'locale') return locale
+      if (Object.prototype.hasOwnProperty.call(ctx._services, name)) return ctx._services[name]
+      // 声明在 ctx 上的服务（slots 等）与 _services 同源可取：bundle 代码用
+      // ctx.get('slots') 读服务，mock 直接回退到自身属性。
+      if (Object.prototype.hasOwnProperty.call(ctx, name)) return ctx[name]
+      return undefined
+    },
   on: function () { return function () {} },
   off: function () {},
   effect: function (fn) {
@@ -1069,8 +1097,17 @@ check(settingsStoreUnderTest.getSnapshot().deleteSessionEnabled, true, '会话�
 
 // ---- 服务监控开关（设置 store 默认值与读写；归属/定位按平台尽力而为 → 默认关） ----
 check(settingsStoreUnderTest.getSnapshot().serviceMonitorEnabled, false, '服务监控 默认关闭')
+check(settingsStoreUnderTest.getSnapshot().serviceMonitorPanelEnabled, true, '服务监控 左栏面板子开关默认开启')
+check(settingsStoreUnderTest.getSnapshot().serviceMonitorTabEnabled, true, '服务监控 右栏 tab 子开关默认开启')
 settingsStoreUnderTest.set('serviceMonitorEnabled', true)
 check(settingsStoreUnderTest.getSnapshot().serviceMonitorEnabled, true, '服务监控 可开启')
+// 子开关独立于总开关存储（总开关开启时分别控制左栏面板与右栏 tab）。
+settingsStoreUnderTest.set('serviceMonitorPanelEnabled', false)
+check(settingsStoreUnderTest.getSnapshot().serviceMonitorPanelEnabled, false, '服务监控 左栏面板子开关可关闭')
+settingsStoreUnderTest.set('serviceMonitorPanelEnabled', true)
+settingsStoreUnderTest.set('serviceMonitorTabEnabled', false)
+check(settingsStoreUnderTest.getSnapshot().serviceMonitorTabEnabled, false, '服务监控 右栏 tab 子开关可关闭')
+settingsStoreUnderTest.set('serviceMonitorTabEnabled', true)
 settingsStoreUnderTest.set('serviceMonitorEnabled', false)
 check(settingsStoreUnderTest.getSnapshot().serviceMonitorEnabled, false, '服务监控 可再次关闭')
 
@@ -1164,6 +1201,77 @@ check(JSON.stringify(smOrdered.map(function (entry) {
   't:127.0.0.1:3000:on',
   't:127.0.0.1:1433:off',
 ]), '服务监控排序 自动发现最上（保持新→旧）、在线自定义随后、离线自定义沉底')
+
+// ---- 服务监控右栏 tab 注册（两阶段协议 + 开关驱动装卸） ----
+// mock sidebarRightTabs 记录 register 调用；bundle 硬依赖声明使 ctx.get
+// 直接读到 mock（见 ctx._services）。apply 时 serviceMonitorEnabled 为关，未注册；
+// 开启后应注册类型 + 两个 keyed 槽位；再关闭后全部注销。
+const smTabRegistrations = []
+const smTabDisposers = []
+// slots 探针：记录 inject 调用（须在首次开启前注入，注册才走探针）；
+// register 直接执行 setup、返回可注销 stub，与真实槽位同形。
+const smSlotCalls = []
+ctx._services.slots = {
+  inject: function (name, setup) {
+    smSlotCalls.push({ name: name })
+    const dispose = setup()
+    if (typeof dispose === 'function') ctx._effects.push(dispose)
+  },
+  register: function (_config, _component) {
+    return function () {}
+  },
+}
+ctx._services.sidebarRightTabs = {
+  register: function (definition) {
+    smTabRegistrations.push(definition)
+    const disposed = { value: false }
+    smTabDisposers.push(disposed)
+    return function () { disposed.value = true }
+  },
+}
+// 标题断言前回到中文（上方英文还原测试切到过 en）。
+active = 'zh'
+// apply 时开关默认关：无 tab 注册。
+check(smTabRegistrations.length, 0, '服务监控 tab 开关默认关时不注册类型')
+settingsStoreUnderTest.set('serviceMonitorEnabled', true)
+check(smTabRegistrations.length, 1, '服务监控 tab 开启后注册 tab 类型')
+const smTabDef = smTabRegistrations[0]
+check(smTabDef.id, 'deepseek-harness-zh_pro:service-monitor', '服务监控 tab 类型 id 全局唯一')
+check(smTabDef.kind, 'dsh-zh-service-monitor', '服务监控 tab kind 判别名')
+check(smTabDef.priority, 'extension', '服务监控 tab priority 缺省 extension 最高档')
+check(Array.isArray(smTabDef.patterns), false, '服务监控 tab 页面型不认领地址 patterns')
+check(typeof smTabDef.title, 'function', '服务监控 tab 标题为函数（随语言刷新）')
+check(smTabDef.title(), '服务监控', '服务监控 tab 标题中文文案')
+check(Array.isArray(smTabDef.guide) && smTabDef.guide.length, 1, '服务监控 tab guide 入口胶囊存在')
+check(smTabDef.guide[0].order, 20, '服务监控 tab guide 胶囊排在官方 files(10) 之后')
+check(typeof smTabDef.guide[0].description, 'function', '服务监控 tab guide 描述为函数（空时不传字段的官方约定）')
+// slots.inject 断言：探针已在首次开启前注入（见上方 ctx._services.slots），
+// 两个 keyed 槽位的注册调用已记录。
+check(smSlotCalls.filter(function (record) { return record.name === 'sidebar.right.pane.tab' }).length >= 1, true,
+  '服务监控 tab 注册 keyed 正文槽位 sidebar.right.pane.tab')
+check(smSlotCalls.filter(function (record) { return record.name === 'sidebar.right.pane.tab.title' }).length >= 1, true,
+  '服务监控 tab 注册活标题槽位 sidebar.right.pane.tab.title')
+// 开关再关：类型注销。
+settingsStoreUnderTest.set('serviceMonitorEnabled', false)
+check(smTabDisposers[0].value, true, '服务监控 tab 开关关闭后注销类型')
+// 再开一次验证可重入（HMR/开关循环）。
+smTabRegistrations.length = 0
+settingsStoreUnderTest.set('serviceMonitorEnabled', true)
+check(smTabRegistrations.length, 1, '服务监控 tab 可重新注册（开关循环）')
+// 左栏形态：mock document.body 无 appendChild，mountServiceMonitorPanel('sidebar')
+// 静默返回 null（不崩溃、不影响 tab 形态）；真实浏览器环境正常挂载。
+// 这里验证开关循环中双形态都安全。
+check(smTabRegistrations.length, 1, '服务监控 tab 可重新注册（开关循环）')
+// 子开关：tab 子开关关 → 总开关开也不注册；子开关重开（总开关已开）立即注册。
+settingsStoreUnderTest.set('serviceMonitorTabEnabled', false)
+smTabRegistrations.length = 0
+settingsStoreUnderTest.set('serviceMonitorEnabled', true)
+check(smTabRegistrations.length, 0, '服务监控 tab 子开关关闭时总开关开启也不注册')
+settingsStoreUnderTest.set('serviceMonitorTabEnabled', true)
+check(smTabRegistrations.length, 1, '服务监控 tab 子开关重开且总开关已开时立即注册')
+settingsStoreUnderTest.set('serviceMonitorTabEnabled', false)
+settingsStoreUnderTest.set('serviceMonitorEnabled', false)
+settingsStoreUnderTest.set('serviceMonitorTabEnabled', true)
 
 // ---- 查看已归档开关（设置 store 默认值与读写） ----
 check(settingsStoreUnderTest.getSnapshot().archiveViewEnabled, true, '查看已归档 默认开启')

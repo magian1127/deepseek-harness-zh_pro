@@ -31,8 +31,9 @@ const BODY_ORDER = [
   'logic/session-menu.ts',
   'logic/session-batch.ts',
   'logic/archive-view.ts',
-  'logic/service-monitor.ts',
-  'logic/register.ts',
+    'logic/service-monitor.ts',
+    'logic/service-monitor-tab.ts',
+    'logic/register.ts',
   'logic/dom-enhance.ts',
   'logic/apply.ts',
 ]
@@ -67,7 +68,7 @@ const wrapperStart = `window.__ModuleLoader__.load({
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
     var React = require('react');`
-const wrapperEnd = `    exports.inject = ['locale', 'slots'];
+const wrapperEnd = `    exports.inject = ['locale', 'slots', 'sidebarRightTabs'];
     exports.apply = apply;
     exports.settingsStore = settingsStore;
     exports.serviceMonitor = {
