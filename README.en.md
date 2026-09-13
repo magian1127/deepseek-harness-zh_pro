@@ -20,24 +20,24 @@ off by default.
 
 The rows below follow **DSH Settings → Enhancements** from top to bottom:
 
-| Settings location | Feature | Default | Description |
-| --- | --- | --- | --- |
-| Flat row | Chinese completion | On | Chinese UI only: fixes confirmed leftover English and normalizes tokens, API keys, model IDs, durations, and count formats |
-| Flat row | Agent-role prompt localization | Off | Localizes the four built-in roles, the Open Design runtime persona, and confirmed system sections; locked on a new session's first request and never retrofitted into old sessions |
-| Flat row | Tool-description localization | Off | Localizes confirmed built-in DSH tool descriptions and guidance; tool names, parameter names, and third-party tools remain unchanged; new sessions only |
-| Flat row | Injected-context localization | Off | Replaces DSH-injected official context (workspace instruction frames, skill catalog frames, runtime context including its header line, approval/mode switch notices, dynamic-plugin notices, scheduled reminders, compaction checkpoint preambles) with Chinese before it enters session history; GUI and model requests stay consistent, new sessions only; translating the snapshot header makes DSH inject one replacement snapshot per step (slight session-log growth) |
-| Flat row | Prompt injection | Off | Injects editable text into subsequent requests; the default text asks for Chinese reasoning and replies, and the default target is the initial system prompt |
-| Chat display | Auto-expand latest thinking | On | Expands the newest streaming thinking block and collapses the previous block that the plugin auto-expanded; after a turn closes under the DSH v0.1.2 compact view it stays hidden with the official process fold (see the behavior contract) |
-| Chat display | Default expanded lines | 20 lines, latest N | Limits the initial visible region to 0–200 lines; 0 disables the limit, and the direction can be changed to earliest N |
-| Chat display | Expand mode | Button mode | Button mode reveals lines in batches; scroll mode uses a fixed-height scrolling viewport |
-| Chat display | Full stats line | On | Keeps the chat stats on one line, shrinking or scrolling horizontally when needed |
-| Session list | Auto-archive old sessions | 7 days | Archives inactive sessions when the New Session view opens; range 0–365, with 0 disabling it |
-| Session list | Archived-session view | On | Adds a workspace archive view (its button sits after the select-all button) whose rows can be restored, renamed, forked, or deleted, and can be multi-selected for batch unarchive or batch deletion |
-| Session list | Session delete button | On | Shows “Delete session” in row menus; the log moves to the OS recycle bin and no list restore slot is retained; deleted sessions never appear in the archive view |
-| Session list | Session multi-select | On | Lets idle rows be selected for batch deletion or archiving; running, pending-interaction, and unread-completion rows are not selectable. Archived-session rows in the archive view are selectable too, with batch unarchive and batch deletion; a select-all button on each workspace row checks every selectable session of that workspace at once (click again to clear) |
-| Service monitor | Service monitor | Off | Dual form: keeps the original panel between the session list and Settings in the left sidebar, and adds a "Service monitor" tab in the right sidebar (entry on the guide page); shows local listening services started during the conversation; hover resolves the process on demand and click reveals its location; the tab's "Baseline ports" section lets you bring a baseline port back into monitoring with a click; right-pane entries have three action buttons after the uptime — Exclude (move back to baseline, no confirmation), Always watch (add to custom watch entries in Settings, confirmation required), Kill process (try to terminate with normal privileges, confirmation required); the left panel has no buttons |
-| Service monitor | Refresh interval | 10 seconds | Range 2–300 seconds; polling pauses while the page is hidden |
-| Service monitor | Custom watch entries | Empty | Entries can be added or edited and remain visible as online/offline; maximum 100 |
+| Feature | Default | Description |
+| --- | --- | --- |
+| Chinese completion | On | Chinese UI only: fixes confirmed leftover English and normalizes tokens, API keys, model IDs, durations, and count formats |
+| Agent-role prompt localization | Off | Localizes the four built-in roles and confirmed system sections; locked on a new session's first request and never retrofitted into old sessions |
+| Tool-description localization | Off | Localizes confirmed built-in DSH tool descriptions and guidance; tool names, parameter names, and third-party tools remain unchanged; new sessions only |
+| Injected-context localization | Off | Replaces DSH-injected official context (workspace instruction frames, skill catalog frames, runtime context including its header line, approval/mode switch notices, dynamic-plugin notices, scheduled reminders, compaction checkpoint preambles) with Chinese before it enters session history; GUI and model requests stay consistent, new sessions only; translating the snapshot header makes DSH inject one replacement snapshot per step (slight session-log growth) |
+| Prompt injection | Off | Injects editable text into subsequent requests; the default text asks for Chinese reasoning and replies, and the default target is the initial system prompt |
+| Auto-expand latest thinking | On | Expands the newest streaming thinking block and collapses the previous block that the plugin auto-expanded; after a turn closes under the DSH v0.1.2 compact view it stays hidden with the official process fold (see the behavior contract) |
+| Default expanded lines | 20 lines, latest N | Limits the initial visible region to 0–200 lines; 0 disables the limit, and the direction can be changed to earliest N |
+| Expand mode | Button mode | Button mode reveals lines in batches; scroll mode uses a fixed-height scrolling viewport |
+| Full stats line | On | Keeps the chat stats on one line, shrinking or scrolling horizontally when needed |
+| Auto-archive old sessions | 7 days | Archives inactive sessions when the New Session view opens; range 0–365, with 0 disabling it |
+| Archived-session view | On | Adds a workspace archive view (its button sits after the select-all button) whose rows can be restored, renamed, forked, or deleted, and can be multi-selected for batch unarchive or batch deletion |
+| Session delete button | On | Shows “Delete session” in row menus; the log moves to the OS recycle bin and no list restore slot is retained; deleted sessions never appear in the archive view |
+| Session multi-select | On | Lets idle rows be selected for batch deletion or archiving; running, pending-interaction, and unread-completion rows are not selectable. Archived-session rows in the archive view are selectable too, with batch unarchive and batch deletion; a select-all button on each workspace row checks every selectable session of that workspace at once (click again to clear) |
+| Service monitor | Off | Dual form: keeps the original panel between the session list and Settings in the left sidebar, and adds a "Service monitor" tab in the right sidebar (entry on the guide page); shows local listening services started during the conversation; hover resolves the process on demand and click reveals its location; the tab's "Baseline ports" section lets you bring a baseline port back into monitoring with a click; right-pane entries have three action buttons after the uptime — Exclude (move back to baseline, no confirmation), Always watch (add to custom watch entries in Settings, confirmation required), Kill process (try to terminate with normal privileges, confirmation required); the left panel has no buttons |
+| Refresh interval | 10 seconds | Range 2–300 seconds; polling pauses while the page is hidden |
+| Custom watch entries | Empty | Entries can be added or edited and remain visible as online/offline; maximum 100 |
 
 Chat display, Session list, and Service monitor use the same collapsible plugin-card style. They
 start collapsed and remember their open state independently. See the
@@ -55,24 +55,20 @@ for full interaction, data, and safety boundaries.
 # Web GUI
 dsh plugin --profile web add deepseek-harness-zh_pro
 
-# Open Design's actual stdio profile
-dsh plugin --profile open-design add deepseek-harness-zh_pro
-
-# Optional: DSH's built-in headless profile
+# Headless mode
 dsh plugin --profile headless add deepseek-harness-zh_pro
 
 # Hot-install only into a running Web GUI
 npx -y deepseek-harness-zh_pro install --profile web
 ```
 
-Bundles are profile-scoped; Open Design actually runs `dsh --profile open-design --stdio`. Non-Web profiles run only the Host half, so browser enhancements cannot enter the Open Design UI. Because `open-design` reserves stdout for strict JSONL, informational logs go to stderr there.
+Bundles are profile-scoped. The headless profile runs only the Host half, with no browser enhancements.
 
 Local source development:
 
 ```powershell
 pnpm install
 node bin/dsh-zh.mjs install --profile web --link $PWD
-dsh plugin --profile open-design add "link:<project-path>"
 dsh plugin --profile headless add "link:<project-path>"
 ```
 
@@ -93,8 +89,6 @@ Check each profile independently:
 
 ```sh
 npx -y deepseek-harness-zh_pro status --profile web
-dsh plugin --profile open-design list
-dsh --profile open-design --dump-default-config
 dsh plugin --profile headless list
 ```
 
@@ -108,7 +102,6 @@ files hot-reload automatically while the DSH HMR service is available; otherwise
 
 ```sh
 dsh plugin --profile web remove deepseek-harness-zh_pro
-dsh plugin --profile open-design remove deepseek-harness-zh_pro
 dsh plugin --profile headless remove deepseek-harness-zh_pro
 # A running Web GUI can also use:
 npx -y deepseek-harness-zh_pro remove --profile web
@@ -132,7 +125,7 @@ as official behavior). Chinese completion only applies to the Chinese interface;
 other interface enhancements also apply to the English interface. Each model-request
 feature is controlled solely by its own toggle.
 
-Open Design and stock headless have no browser settings page but share `${DSH_HOME:-~/.dsh}/settings.yaml`. Configure the four Host toggles in Web; `open-design` / `headless` read the same namespace. The OpenDesign Charter is application-provided user content and is not translated.
+Headless mode has no browser settings page but shares `${DSH_HOME:-~/.dsh}/settings.yaml`. Configure the four Host toggles in Web; `headless` reads the same namespace.
 
 ## FAQ
 

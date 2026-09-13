@@ -5,9 +5,9 @@
 
 ## 适用范围
 
-- 支持 DeepSeek Harness ≥ 0.1.2-rc.1。完整浏览器增强运行在 `web`；Open Design 实际使用 `open-design` stdio profile，stock 一次性任务使用 `headless`，两者都需单独安装本 bundle。
-- profile 共用 `${DSH_HOME:-~/.dsh}/settings.yaml`，所以两个短进程遵循 Web 已保存的 `dsh-zh` Host 设置；它们没有 Client，浏览器增强不进入 Open Design UI。
-- `open-design` stdout 是严格 JSONL；Host 信息日志写 stderr。OpenDesign Charter 位于用户消息，不翻译；本插件只处理自己的提示注入、runtime persona、DSH 官方工具/上下文。
+- 支持 DeepSeek Harness ≥ 0.1.2-rc.1。完整浏览器增强运行在 `web`；一次性无头任务使用 `headless` profile，需单独安装本 bundle。
+- profile 共用 `${DSH_HOME:-~/.dsh}/settings.yaml`，所以无头模式遵循 Web 已保存的 `dsh-zh` Host 设置；它没有 Client，浏览器增强不进入无头模式。
+- 无头模式没有额外日志约束；本插件只处理自己的提示注入与 DSH 官方工具/上下文。
 - 本版本词典与 locale 契约按 DSH 0.1.2-rc.1 对齐，更旧的 DSH 上中文补全部分条目会失配。
 - Node.js 要求：`^22.19.0 || >=24.0.0`。
 - 中文补全只在 Web 中文界面生效；其余 Web 界面增强在中文和英文界面都生效，只受各自开关控制，文案随界面语言切换。
@@ -109,8 +109,8 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
 默认关闭，存于 `settings.yaml` 命名空间 `dsh-zh`，与界面语言无关（同「提示词注入」）。
 开启后只改写**发往模型的请求内容**，不写会话历史、不注册模型工具：
 
-- `zhAgentPrompt`：四个默认代理（standard / ptc / minimal / cordis）以及 `@open-design/dsh-runtime` 的官方 `deployment:persona` 在组装后按精确英文原文换成中文；保留 `{{model}}` / `{{cwd}}` 等动态占位符，自定义 persona 不匹配则原样保留。
-  同时替换系统级官方段落：`harness:identity`、`harness:source`、`app:web-surface`、`context:file-reference`、`ui:deliverable-file-references`。OpenDesign Charter 是应用放入 user message 的任务内容，不属于 persona，也不会被改写。
+- `zhAgentPrompt`：四个默认代理（standard / ptc / minimal / cordis）在组装后按精确英文原文换成中文；保留 `{{model}}` / `{{cwd}}` 等动态占位符，自定义 persona 不匹配则原样保留。
+  同时替换系统级官方段落：`harness:identity`、`harness:source`、`app:web-surface`、`context:file-reference`、`ui:deliverable-file-references`。
 - `zhToolDesc`：注入模型请求的工具说明按工具名替换为**DSH 官方工具**的中文版本，同时把
     system prompt 里的官方工具指引段落（`tool:*` sections）替换为中文。段落覆盖：
     `tool:read` / `tool:write` / `tool:edit` / `tool:glob` / `tool:grep` / `tool:pwsh` /
@@ -129,7 +129,7 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
     不会被按名盖回内置旧版。同一工具名的多种官方描述逐 flavor 翻译：极简模式的
     persistent `pwsh`/`bash`（包默认与 preset 覆盖两套文本）、`str_replace_editor`
     默认描述、PTC 模式 `run_code` 的 TypeScript/Python 两语言描述。
-    实测覆盖 standard / ptc / minimal / cordis 与 Open Design runtime persona；上述官方段落均按匹配规则换中文；minimal 的 complete persona 仍只含中文 persona。
+    实测覆盖 standard / ptc / minimal 与 cordis；上述官方段落均按匹配规则换中文；minimal 的 complete persona 仍只含中文 persona。
 
 **新会话生效、老会话不重新注入**：以会话是否产生过模型输出（`assistant/message`）
 判定新旧。会话首次模型请求时按当前开关状态锁定语言（中文或英文），锁定后开关翻转

@@ -1,6 +1,6 @@
 // 「模型请求中文化」：两个独立开关（settings 命名空间 dsh-zh）：
-//   1) zhAgentPrompt（代理角色提示中文化）：四个默认代理与 Open Design
-//      runtime 的 deployment:persona 系统提示词换成中文版本。
+//   1) zhAgentPrompt（代理角色提示中文化）：四个默认代理的
+//      deployment:persona 系统提示词换成中文版本。
 //      匹配键是 assemble 后的原英文 persona 文本（精确匹配，含 {{model}}/
 //      {{cwd}} 占位符——插值发生在 render 阶段，assemble 后仍是原形）。
 //      未收录的自定义 persona 原样保留。
@@ -20,7 +20,7 @@ import { CORDIS_SECTION_ZH } from './cordis-section-zh.js'
 import { log, warn } from './util.js'
 import type { HostContext } from './types.js'
 
-// ============ 默认代理与 Open Design runtime 的 persona 中文版 ============
+// ============ 默认代理的 persona 中文版 ============
 // DSH 0.1.5 起 persona 拆分为两个 section：deployment:persona-prefix（order 0）
 // 与 deployment:persona-suffix（order 10200，渲染在全段最后）；旧单一
 // deployment:persona 已不存在（拆分提交 40792330c0，presets 的 `text` 配置
@@ -32,8 +32,6 @@ import type { HostContext } from './types.js'
 // 译文保留全部代码标识符、命令名与占位符，只翻译叙述性文字。
 const STANDARD_PERSONA_PREFIX_EN = 'You are a coding agent powered by the {{model}} model.'
 const MINIMAL_PERSONA_PREFIX_EN = 'You are a helpful software engineer assistant.'
-const OPEN_DESIGN_PERSONA_EN = 'You are a coding and design agent running for OpenDesign. Follow the complete task and project context supplied in the current user message.'
-const OPEN_DESIGN_PERSONA_ZH = '你是一个为 OpenDesign 运行的编码与设计代理。请遵循当前用户消息中提供的完整任务与项目上下文。'
 // 所有 preset 的 persona suffix 原文一致（cwd 句被移动到独立 suffix section）。
 const PERSONA_SUFFIX_EN = 'Your working directory is {{cwd}}.'
 const PERSONA_SUFFIX_ZH = '你的工作目录是 {{cwd}}。'
@@ -68,7 +66,6 @@ const PERSONA_PREFIX_ZH: Record<string, string> = {
   [STANDARD_PERSONA_PREFIX_EN]: '你是一个由 {{model}} 模型驱动的编码代理。',
   [MINIMAL_PERSONA_PREFIX_EN]: '你是一位乐于助人的软件工程师助手。',
   [CORDIS_PERSONA_PREFIX_EN]: CORDIS_PERSONA_PREFIX_ZH,
-  [OPEN_DESIGN_PERSONA_EN]: OPEN_DESIGN_PERSONA_ZH,
 }
 
 // ============ 默认工具说明中文版 ============
