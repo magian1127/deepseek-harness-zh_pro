@@ -43,7 +43,11 @@
 //      端点。POST 同路径探活自定义监控项（与扫描并行）；POST
 //      /dsh-zh/api/service-monitor/resolve 按需解析监听进程归属（悬停触发，
 //      端点级缓存，服务消失即清）；POST /dsh-zh/api/service-monitor/open
-//      按已缓存归属在文件管理器中定位监听进程目录（路径不接受请求传入）。
+//      按已缓存归属在文件管理器中定位监听进程目录（路径不接受请求传入）；
+//      POST /dsh-zh/api/service-monitor/rebaseline 把端点重新放入基线
+//      （persist:true 时为「永久监控」主机半步）；POST
+//      /dsh-zh/api/service-monitor/kill 用普通权限尝试终止监听进程
+//      （PID 来自已缓存归属，不接受请求传入）。
 
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
@@ -53,7 +57,7 @@ import { PKG } from '../bin/dsh-zh.mjs'
 import { ZH_SETTINGS_NS } from './constants.js'
 import { log, warn } from './util.js'
 import { trashItem, restoreItem } from './trash.js'
-import { ensureFreshScan, getServiceMonitorSnapshot, openServiceOwnerDirectory, probeTargets, resolveServiceOwner, unbaselineEndpoint } from './service-monitor.js'
+import { ensureFreshScan, getServiceMonitorSnapshot, killServiceOwner, openServiceOwnerDirectory, persistEndpointToBaseline, probeTargets, rebaselineEndpoint, resolveServiceOwner, unbaselineEndpoint } from './service-monitor.js'
 import type { HostContext } from './types.js'
 
 // 会话 id 校验：形如 /^[A-Za-z0-9_-]{1,128}$/ 的字符串，防御路径注入。
@@ -797,6 +801,47 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
           }
           return
         }
+          if (pathname === '/dsh-zh/api/service-monitor/rebaseline') {
+            // 「排除监控」（右栏 tab 条目按钮）：请求体 { address, port }，
+            // persist:true 时为「永久监控」的主机半步（端点入基线 +
+            // 客户端把它写入设置的自定义监控项）。成功返回新快照，
+            // 未命中（已在基线/已停止监听）返回 404 语义。
+            const address = typeof payload.address === 'string' ? payload.address : ''
+            const port = typeof payload.port === 'number' && Number.isFinite(payload.port) ? Math.round(payload.port) : 0
+            if (address === '' || port < 1 || port > 65535) {
+              writeJson(res, 400, { ok: false, error: { code: 'bad-request', message: 'address/port required' } })
+              return
+            }
+            const changed = payload.persist === true
+              ? persistEndpointToBaseline(address, port)
+              : rebaselineEndpoint(address, port)
+            if (!changed) {
+              writeJson(res, 404, { ok: false, error: { code: 'not-monitored', message: '端点不在监控列表中（可能已在基线或已停止监听）' } })
+              return
+            }
+            writeJson(res, 200, { ok: true, value: Object.assign(getServiceMonitorSnapshot(), {
+              targets: await probeTargets(payload.targets).catch(() => []),
+            }) })
+            return
+          }
+          if (pathname === '/dsh-zh/api/service-monitor/kill') {
+            // 「终止进程」（右栏 tab 条目按钮）：请求体 { address, port }，
+            // 主机读取该端点**已缓存**的归属（悬停查询过才有）后用普通
+            // 权限执行平台终止命令；无缓存归属/PID 或命令失败返回 404。
+            // PID 永远来自主机进程枚举，绝不接受请求传入。
+            try {
+              const killed = await killServiceOwner(process.platform, payload.address, payload.port)
+              if (killed === null) {
+                writeJson(res, 404, { ok: false, error: { code: 'kill-unavailable', message: '未定位到可终止的监听进程，请先悬停条目解析归属' } })
+                return
+              }
+              writeJson(res, 200, { ok: true, value: killed })
+            } catch (error) {
+              warnRouteFailure('终止监听进程失败', error)
+              writeJson(res, 500, { ok: false, error: { code: 'kill-failed', message: '终止进程失败（权限不足或进程已退出），请稍后重试。' } })
+            }
+            return
+          }
           if (pathname === '/dsh-zh/api/session.deleted') {
             // 已删除会话集合（归档视图过滤用）：deleteSession 成功即记入，
             // 恢复成功移除；先做一次自愈对账（热更丢内存态时从归档集合 ×

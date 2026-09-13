@@ -14,6 +14,19 @@
 //     内容（进程名/PID、路径、命令行；内核 http.sys 端点标注来源）。
 //   - 点击在线且已定位到进程的条目调 POST /dsh-zh/api/service-monitor/open，
 //     由主机在文件管理器中定位进程文件所在目录；未定位到的条目不可点击。
+//   - 条目操作按钮（**仅右栏 tab 形态**，条目时间后面三个；左栏面板不提供）：
+//     ① 排除监控：点击即执行（无确认框），把端点重新放入基线（POST
+//        /dsh-zh/api/service-monitor/rebaseline）——条目立即消失、端口进入
+//        tab 底部「基线端口」区，可再点击恢复监控；自定义监控项条目的
+//        排除 = 从设置移除该项并放回基线端口。
+//     ② 永久监控：确认框后把端口加入设置「服务监控」的自定义监控项
+//        （localStorage，settingsStore.set），主机侧同时把端点放入基线
+//        （rebaseline persist:true）——自定义项永不因基线规则隐藏，达成
+//        「永久监控」；已存在同端口项时提示重复。
+//     ③ 终止进程：确认框（含进程名/PID）后由主机用普通权限尝试终止
+//        （POST /dsh-zh/api/service-monitor/kill，win32 taskkill /F、posix
+//        kill SIGTERM，均不提权）；未悬停解析过归属的条目先提示解析；
+//        结果 toast 反馈。
 //   - 面板条目排序：自动发现条目（绿点 + 地址 + 存活时长，按启动时间
 //     新→旧）排最上——新服务一出现即在顶部；自定义在线条目排其后；
 //     离线的自定义条目自动沉底。
@@ -81,6 +94,17 @@ const SERVICE_MONITOR_CSS = [
   '[data-dsh-zh-sm-addr]{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
   'font-variant-numeric:tabular-nums}',
   '[data-dsh-zh-sm-time]{margin-left:auto;flex:none;color:var(--dsw-alias-label-tertiary,#666);font-size:11px}',
+  // 条目操作按钮组（仅右栏 tab 条目行，时间后面）：hover 显示（触屏常显）。
+  '[data-dsh-zh-sm-acts]{flex:none;display:none;align-items:center;gap:2px}',
+  '[data-dsh-zh-sm-item]:hover [data-dsh-zh-sm-acts],[data-dsh-zh-sm-item]:focus-within [data-dsh-zh-sm-acts]{display:inline-flex}',
+  '@media (hover:none){[data-dsh-zh-sm-acts]{display:inline-flex}}',
+  '[data-dsh-zh-sm-act]{border:0;border-radius:6px;background:transparent;cursor:pointer;font:inherit;',
+  'font-size:11px;line-height:16px;padding:3px 7px;color:var(--dsw-alias-label-tertiary,#666);white-space:nowrap;',
+  'font-variant-numeric:tabular-nums}',
+  '[data-dsh-zh-sm-act]:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,0.16));color:var(--dsw-alias-label-primary,inherit)}',
+  '[data-dsh-zh-sm-act]:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#4D6BFE);outline-offset:-2px}',
+  '[data-dsh-zh-sm-act][data-kill="true"]{color:var(--dsh-zh-sm-kill,#c04040)}',
+  '[data-dsh-zh-sm-act][data-kill="true"]:hover{color:#e5484d;background:rgba(224,72,82,0.12)}',
   '[data-dsh-zh-sm-baseline]{margin-top:12px;padding-top:8px;border-top:1px dashed var(--dsw-alias-border-l2,rgba(127,127,127,0.28))}',
   '[data-dsh-zh-sm-baseline-head]{display:flex;align-items:center;gap:6px;padding:0 6px 6px;',
   'color:var(--dsw-alias-label-tertiary,#666);font-weight:600;user-select:none}',
@@ -99,6 +123,16 @@ const SERVICE_MONITOR_CSS = [
   'font-family:inherit;word-break:break-all}',
   '@keyframes dsh-zh-sm-pulse{0%,100%{box-shadow:0 0 0 3px rgba(34,197,94,0.16)}50%{box-shadow:0 0 0 5px rgba(34,197,94,0.05)}}',
   '@media (prefers-reduced-motion: reduce){[data-dsh-zh-sm-dot]{animation:none}}',
+  // 条目操作结果 toast（复用 session-menu 同名 class；键重复无害——两份
+  // 样式内容一致，任一在文档中即生效，本面板独立于删除会话开关工作）。
+  '.dsh-zh-toast{position:fixed;top:120px;left:50%;z-index:1100;pointer-events:none;',
+  'display:flex;align-items:center;gap:10px;max-width:min(560px,calc(100vw - 48px));',
+  'padding:12px 16px;border-radius:14px;background:var(--dsw-alias-button-contrast-fill);',
+  'color:var(--dsw-alias-label-primary-inverted);font-size:14px;line-height:22px;',
+  'box-shadow:var(--dsw-shadow-lv3);transform:translateX(-50%);',
+  'animation:dsh-zh-sm-toast-in 160ms ease-out,dsh-zh-sm-toast-fade 1000ms ease 3000ms forwards}',
+  '@keyframes dsh-zh-sm-toast-in{from{opacity:0;transform:translate(-50%,-6px)}to{opacity:1;transform:translate(-50%,0)}}',
+  '@keyframes dsh-zh-sm-toast-fade{to{opacity:0}}',
 ].join('')
 
 // 面板文案（中英文界面都显示，随界面语言切换；语言服务缺失时用中文）。
@@ -128,6 +162,30 @@ const SERVICE_MONITOR_COPY = {
     timeMinutes: '{n} 分钟',
     timeHours: '{n} 小时',
     timeDays: '{n} 天',
+    // 条目操作按钮（仅右栏 tab；时间后面三个）。
+    actExclude: '排除监控',
+    actExcludeHint: '重新放入基线端口，不再监控',
+    actExcludeAria: '排除监控 {addr}',
+    actExcludeDone: '已排除 {addr}',
+    actKeep: '永久监控',
+    actKeepHint: '把端口加入设置里的自定义监控项',
+    actKeepAria: '永久监控 {addr}',
+    actKeepTitle: '永久监控该端口',
+    actKeepDesc: '把 {addr} 加入设置「服务监控」的自定义监控项，加入基线后不再出现在自动发现列表；是否执行？',
+    actKeepOk: '加入',
+    actKeepDone: '已加入自定义监控项 {addr}',
+    actKeepDup: '{addr} 已在自定义监控项中',
+    actKill: '终止进程',
+    actKillHint: '使用普通权限尝试终止监听进程',
+    actKillAria: '终止进程 {addr}',
+    actKillTitle: '终止监听进程',
+    actKillDesc: '使用普通权限尝试终止 {addr} 的监听进程（{name}，PID {pid}）？他人或系统进程可能因权限不足失败。',
+    actKillOk: '终止',
+    actKillNoOwner: '请先悬停条目解析监听进程，再终止',
+    actKillDone: '已发送终止请求：{name}（PID {pid}）',
+    actKillFailed: '终止失败（权限不足或进程已退出）',
+    dialogCancel: '取消',
+    toastDone: '操作完成',
   },
   en: {
     title: 'Service monitor',
@@ -154,6 +212,30 @@ const SERVICE_MONITOR_COPY = {
     timeMinutes: '{n}min',
     timeHours: '{n}h',
     timeDays: '{n}d',
+    // 条目操作按钮（仅右栏 tab；时间后面三个）。
+    actExclude: 'Exclude',
+    actExcludeHint: 'Move this port back to the baseline and stop watching it',
+    actExcludeAria: 'Exclude {addr} from monitoring',
+    actExcludeDone: 'Excluded {addr}',
+    actKeep: 'Always watch',
+    actKeepHint: 'Add this port to the custom watch entries in Settings',
+    actKeepAria: 'Always watch {addr}',
+    actKeepTitle: 'Always watch this port',
+    actKeepDesc: 'Add {addr} to the custom watch entries of the "Service monitor" settings (it joins the baseline and leaves the auto-discovered list). Proceed?',
+    actKeepOk: 'Add',
+    actKeepDone: 'Added custom watch entry {addr}',
+    actKeepDup: '{addr} is already a custom watch entry',
+    actKill: 'Kill process',
+    actKillHint: 'Try to terminate the listening process with normal privileges',
+    actKillAria: 'Kill the process of {addr}',
+    actKillTitle: 'Kill the listening process',
+    actKillDesc: 'Try to terminate the listening process of {addr} ({name}, PID {pid}) with normal privileges? Other users\' or system processes may fail due to insufficient permissions.',
+    actKillOk: 'Kill',
+    actKillNoOwner: 'Hover the entry to resolve the listening process first, then kill',
+    actKillDone: 'Termination sent: {name} (PID {pid})',
+    actKillFailed: 'Failed to kill (insufficient permissions or the process already exited)',
+    dialogCancel: 'Cancel',
+    toastDone: 'Done',
   },
 }
 
@@ -284,6 +366,27 @@ function openServiceOwnerDirectory(address, port) {
       body: JSON.stringify({ address: address, port: port }),
     }).catch(function () { /* 路由未就绪/旧版本主机：静默 */ })
   } catch { /* fetch 同步抛出：静默 */ }
+}
+
+// 目标项 host 与监听地址 host 是否指向同一监听（localhost 归一化、
+// 0.0.0.0/[::] 通配，与主机 targetMatchesListen 客户端简化版一致）。
+// 「排除监控」对自定义监控项条目用它判定同端口项（纯函数，便于回归）。
+function serviceHostMatches(targetHost, listenHost) {
+  let target = String(targetHost).trim().toLowerCase()
+  let listen = String(listenHost).trim().toLowerCase()
+  if (target.startsWith('[')) {
+    const close = target.indexOf(']')
+    target = close === -1 ? target.slice(1) : target.slice(1, close)
+  }
+  if (listen.startsWith('[')) {
+    const close = listen.indexOf(']')
+    listen = close === -1 ? listen.slice(1) : listen.slice(1, close)
+  }
+  if (target === 'localhost') target = '127.0.0.1'
+  if (listen === 'localhost') listen = '127.0.0.1'
+  if (listen === '0.0.0.0') return !target.includes(':')
+  if (listen === '::') return target.includes(':')
+  return target === listen
 }
 
 // ---------- 安装（开关驱动：开 = 共享轮询循环 + 右栏 tab 类型） ----------
@@ -523,12 +626,18 @@ function mountServiceMonitorPanel(mode, container) {
   const rowClickHandlers = new Map()
   const rowMeta = new Map()
   const ownerStates = new Map()
+  // tab 形态的操作按钮组按 key 存表（makeRow 创建，syncRows 就地更新）。
+  const rowByKeyActs = new Map()
   let tipEl = null
   let tipForKey = null
 
   const makeRow = function (key) {
-    const row = document.createElement('button')
-    row.type = 'button'
+    // tab 形态行内嵌套操作按钮（HTML 禁止 button>button），行改用
+    // div[role=button]（键盘 Enter/Space 由下方 keydown 补齐）；左栏
+    // 形态无按钮，保持原 button 元素。
+    const row: HTMLElement = isTab ? document.createElement('div') : document.createElement('button')
+    if (isTab) row.setAttribute('role', 'button')
+    else (row as HTMLButtonElement).type = 'button'
     row.setAttribute('data-dsh-zh-sm-item', '')
     const dot = document.createElement('span')
     dot.setAttribute('data-dsh-zh-sm-dot', '')
@@ -545,6 +654,49 @@ function mountServiceMonitorPanel(mode, container) {
     row.appendChild(dot)
     row.appendChild(body)
     row.appendChild(time)
+    // 操作按钮组（仅右栏 tab）：时间后面三个——排除监控 / 永久监控 /
+    // 终止进程。按钮常驻创建，syncRows 按条目类型与在线态控制显示。
+    let actsEl = null
+    let actExcludeEl = null
+    let actKeepEl = null
+    let actKillEl = null
+    if (isTab) {
+      actsEl = document.createElement('span')
+      actsEl.setAttribute('data-dsh-zh-sm-acts', '')
+      actExcludeEl = document.createElement('button')
+      actExcludeEl.type = 'button'
+      actExcludeEl.setAttribute('data-dsh-zh-sm-act', '')
+      actExcludeEl.addEventListener('click', function (event) {
+        event.preventDefault()
+        event.stopPropagation()
+        excludeEntry(key)
+      }, false)
+      actExcludeEl.addEventListener('mousedown', function (event) { event.stopPropagation() }, false)
+      actsEl.appendChild(actExcludeEl)
+      actKeepEl = document.createElement('button')
+      actKeepEl.type = 'button'
+      actKeepEl.setAttribute('data-dsh-zh-sm-act', '')
+      actKeepEl.addEventListener('click', function (event) {
+        event.preventDefault()
+        event.stopPropagation()
+        keepEntryForever(key)
+      }, false)
+      actKeepEl.addEventListener('mousedown', function (event) { event.stopPropagation() }, false)
+      actsEl.appendChild(actKeepEl)
+      actKillEl = document.createElement('button')
+      actKillEl.type = 'button'
+      actKillEl.setAttribute('data-dsh-zh-sm-act', '')
+      actKillEl.setAttribute('data-kill', 'true')
+      actKillEl.addEventListener('click', function (event) {
+        event.preventDefault()
+        event.stopPropagation()
+        killEntryProcess(key)
+      }, false)
+      actKillEl.addEventListener('mousedown', function (event) { event.stopPropagation() }, false)
+      actsEl.appendChild(actKillEl)
+      row.appendChild(actsEl)
+      rowByKeyActs.set(key, { actsEl: actsEl, excludeEl: actExcludeEl, keepEl: actKeepEl, killEl: actKillEl })
+    }
     row.addEventListener('mouseenter', function () {
       const meta = rowMeta.get(key)
       if (meta === undefined || meta.online !== true) return
@@ -559,6 +711,16 @@ function mountServiceMonitorPanel(mode, container) {
       requestOwner(key)
     }, false)
     row.addEventListener('blur', function () { hideTip() }, false)
+    if (isTab) {
+      // div[role=button] 没有原生 Enter/Space 触发，补 keydown。
+      row.addEventListener('keydown', function (event) {
+        const keyText = (event as KeyboardEvent).key
+        if (keyText !== 'Enter' && keyText !== ' ') return
+        event.preventDefault()
+        const handler = rowClickHandlers.get(key)
+        if (typeof handler === 'function') handler()
+      }, false)
+    }
     row.addEventListener('click', function (event) {
       event.preventDefault()
       const handler = rowClickHandlers.get(key)
@@ -654,6 +816,202 @@ function mountServiceMonitorPanel(mode, container) {
     })
   }
 
+  // ------- 条目操作（仅右栏 tab：排除监控 / 永久监控 / 终止进程） -------
+  // 确认框与 toast（面板实例私有，随清理函数移除；样式对齐 session-menu
+  // 的官方风格确认框，非危险操作确认按钮走主题色）。
+  let actionConfirmEl = null
+  let toastEl = null
+  let toastTimer = null
+  const removeActionConfirm = function () {
+    if (actionConfirmEl !== null && actionConfirmEl.parentNode !== null) actionConfirmEl.parentNode.removeChild(actionConfirmEl)
+    actionConfirmEl = null
+  }
+  const showToast = function (text) {
+    try {
+      if (typeof document === 'undefined' || document.body === null) return
+      if (toastTimer !== null) { clearTimeout(toastTimer); toastTimer = null }
+      if (toastEl !== null && toastEl.parentNode !== null) toastEl.parentNode.removeChild(toastEl)
+      toastEl = document.createElement('div')
+      toastEl.className = 'dsh-zh-toast'
+      toastEl.setAttribute('role', 'status')
+      toastEl.textContent = text
+      document.body.appendChild(toastEl)
+      toastTimer = setTimeout(function () {
+        toastTimer = null
+        if (toastEl !== null && toastEl.parentNode !== null) toastEl.parentNode.removeChild(toastEl)
+        toastEl = null
+      }, 4000)
+    } catch { /* toast 失败不影响主流程 */ }
+  }
+  // 确认框（危险与否由调用方定）：okText / okDanger 控制确认按钮文案与
+  // 颜色；点遮罩/取消关闭；确认后执行 onOk。
+  const showActionConfirm = function (title, desc, okText, onOk) {
+    removeActionConfirm()
+    const overlay = document.createElement('div')
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:1200;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.35)'
+    const card = document.createElement('div')
+    card.style.cssText = [
+      'width:min(440px,calc(100vw - 48px));border-radius:16px;padding:20px;',
+      'background:var(--dsw-alias-surface-primary,#fff);',
+      'color:var(--dsw-alias-label-primary,#1f2329);',
+      'box-shadow:var(--dsw-shadow-lv3,0 8px 24px rgba(0,0,0,0.18))',
+    ].join('')
+    const titleEl = document.createElement('div')
+    titleEl.textContent = title
+    titleEl.style.cssText = 'font-size:16px;line-height:24px;font-weight:600;margin-bottom:10px'
+    const descEl = document.createElement('div')
+    descEl.textContent = desc
+    descEl.style.cssText = 'font-size:13px;line-height:20px;color:var(--dsw-alias-label-tertiary,#666);margin-bottom:18px;white-space:pre-line'
+    const actions = document.createElement('div')
+    actions.style.cssText = 'display:flex;justify-content:flex-end;gap:10px'
+    const cancel = document.createElement('button')
+    cancel.type = 'button'
+    cancel.textContent = resolveCopy().dialogCancel
+    cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:1px solid rgba(127,127,127,0.35);background:transparent;cursor:pointer;font:inherit;font-size:14px'
+    const ok = document.createElement('button')
+    ok.type = 'button'
+    ok.textContent = okText
+    ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-business-primary,#4D6BFE);color:var(--dsw-alias-label-primary-inverted,#fff);cursor:pointer;font:inherit;font-size:14px'
+    cancel.addEventListener('click', removeActionConfirm, false)
+    ok.addEventListener('click', function () {
+      removeActionConfirm()
+      onOk()
+    }, false)
+    actions.appendChild(cancel)
+    actions.appendChild(ok)
+    card.appendChild(titleEl)
+    card.appendChild(descEl)
+    card.appendChild(actions)
+    overlay.appendChild(card)
+    overlay.addEventListener('click', function (event) {
+      if (event.target === overlay) removeActionConfirm()
+    }, false)
+    document.body.appendChild(overlay)
+    actionConfirmEl = overlay
+  }
+  // 当前快照的自定义监控项（读取与轮询请求一致的 settingsStore 快照）。
+  const currentTargets = function () {
+    return (typeof settingsStore !== 'undefined' && settingsStore !== null
+      && Array.isArray(settingsStore.getSnapshot().serviceMonitorTargets)
+      ? settingsStore.getSnapshot().serviceMonitorTargets
+      : []).map(function (item) {
+      return { name: item.name, host: item.host, port: item.port }
+    })
+  }
+  // 排除监控：把端点重新放入基线（无确认框，点击即执行）。自定义监控项
+  // 条目也允许排除——此时先从设置移除该项再入基线（否则探活会让它复活）。
+  const excludeEntry = function (key) {
+    const meta = rowMeta.get(key)
+    if (meta === undefined) return
+    const host = meta.queryAddress
+    const port = meta.port
+    let targets = currentTargets()
+    const targetIndex = targets.findIndex(function (item) {
+      return item.port === port && (item.host === host || serviceHostMatches(item.host, host))
+    })
+    if (targetIndex !== -1) {
+      targets.splice(targetIndex, 1)
+      settingsStore.set('serviceMonitorTargets', targets)
+    }
+    postRebaseline(host, port, false, meta.addr)
+  }
+  // 永久监控（确认框）：把端口加入设置的自定义监控项 + 主机入基线。
+  const keepEntryForever = function (key) {
+    const meta = rowMeta.get(key)
+    if (meta === undefined) return
+    const copy = resolveCopy()
+    const host = meta.queryAddress
+    const port = meta.port
+    const targets = currentTargets()
+    const duplicate = targets.some(function (item) {
+      return item.port === port && serviceHostMatches(item.host, host)
+    })
+    if (duplicate) {
+      showToast(copy.actKeepDup.replace('{addr}', meta.addr))
+      return
+    }
+    showActionConfirm(
+      copy.actKeepTitle,
+      copy.actKeepDesc.replace('{addr}', meta.addr),
+      copy.actKeepOk,
+      function () {
+        const next = currentTargets().concat([{ name: '', host: host, port: port }])
+        settingsStore.set('serviceMonitorTargets', next)
+        postRebaseline(host, port, true, meta.addr)
+      })
+  }
+  // 终止进程（确认框）：普通权限尝试终止监听进程。
+  const killEntryProcess = function (key) {
+    const meta = rowMeta.get(key)
+    if (meta === undefined) return
+    const copy = resolveCopy()
+    const state = ownerStates.get(key)
+    if (state === undefined || state.state !== 'owner' || state.owner === null
+      || state.owner.pid === null || state.owner.pid === 4) {
+      showToast(copy.actKillNoOwner)
+      return
+    }
+    const owner = state.owner
+    showActionConfirm(
+      copy.actKillTitle,
+      copy.actKillDesc
+        .replace('{addr}', meta.addr)
+        .replace('{name}', typeof owner.name === 'string' && owner.name !== '' ? owner.name : '?')
+        .replace('{pid}', String(owner.pid)),
+      copy.actKillOk,
+      function () { postKill(meta.queryAddress, meta.port, owner) })
+  }
+  // 主机交互：排除/永久监控共用 rebaseline 路由，成功后就地渲染新快照。
+  const postRebaseline = function (host, port, persist, addrText) {
+    const copy = resolveCopy()
+    let pending = null
+    try {
+      pending = fetch('/dsh-zh/api/service-monitor/rebaseline', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ address: host, port: port, persist: persist === true, targets: currentTargets() }),
+      })
+    } catch { return }
+    pending.then(function (response) {
+      if (!response.ok) return null
+      return response.json()
+    }).then(function (parsed) {
+      if (parsed !== null && typeof parsed === 'object' && parsed.ok === true
+        && parsed.value !== null && typeof parsed.value === 'object') {
+        render(parsed.value)
+        if (persist !== true) showToast(copy.actExcludeDone.replace('{addr}', addrText))
+      }
+    }).catch(function () { /* 路由未就绪/旧版本主机：静默 */ })
+  }
+  // 主机交互：终止进程，结果用 toast 反馈。
+  const postKill = function (host, port, owner) {
+    const copy = resolveCopy()
+    let pending = null
+    try {
+      pending = fetch('/dsh-zh/api/service-monitor/kill', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ address: host, port: port }),
+      })
+    } catch {
+      showToast(copy.actKillFailed)
+      return
+    }
+    pending.then(function (response) {
+      if (!response.ok) return null
+      return response.json()
+    }).then(function (parsed) {
+      if (parsed !== null && typeof parsed === 'object' && parsed.ok === true
+        && parsed.value !== null && typeof parsed.value === 'object') {
+        showToast(copy.actKillDone
+          .replace('{name}', typeof parsed.value.name === 'string' && parsed.value.name !== '' ? parsed.value.name : '?')
+          .replace('{pid}', parsed.value.pid === null || parsed.value.pid === undefined ? '?' : String(parsed.value.pid)))
+      } else {
+        showToast(copy.actKillFailed)
+      }
+    }).catch(function () { showToast(copy.actKillFailed) })
+  }
+
   const syncRows = function (desired) {
     const keep = new Set()
     for (const spec of desired) keep.add(spec.key)
@@ -666,8 +1024,10 @@ function mountServiceMonitorPanel(mode, container) {
       rowClickHandlers.delete(key)
       rowMeta.delete(key)
       ownerStates.delete(key)
+      rowByKeyActs.delete(key)
       if (tipForKey === key) hideTip()
     }
+    const copy = resolveCopy()
     for (let i = 0; i < desired.length; i += 1) {
       const spec = desired[i]
       let row = rowByKey.get(spec.key)
@@ -694,6 +1054,27 @@ function mountServiceMonitorPanel(mode, container) {
         addrEl.style.display = spec.isTarget ? 'none' : ''
       }
       if (time !== null) time.textContent = spec.timeText
+      // 操作按钮组（仅右栏 tab）：三个按钮常驻，按条目类型与在线态控制。
+      //   - 自动发现条目：在线时三按钮全显；离线（快照间隙）全隐。
+      //   - 自定义监控项：排除监控（= 从设置移除该项并放回基线端口）；
+      //     永久监控/终止进程不适用（已在设置常驻）→ 隐藏。
+      const acts = rowByKeyActs.get(spec.key)
+      if (acts !== undefined) {
+        const onlineAuto = spec.online === true && spec.isTarget !== true
+        const onlineTarget = spec.online === true && spec.isTarget === true
+        acts.excludeEl.style.display = onlineAuto || onlineTarget ? '' : 'none'
+        acts.excludeEl.textContent = copy.actExclude
+        acts.excludeEl.title = copy.actExcludeHint
+        acts.excludeEl.setAttribute('aria-label', copy.actExcludeAria.replace('{addr}', spec.addr))
+        acts.keepEl.style.display = onlineAuto ? '' : 'none'
+        acts.keepEl.textContent = copy.actKeep
+        acts.keepEl.title = copy.actKeepHint
+        acts.keepEl.setAttribute('aria-label', copy.actKeepAria.replace('{addr}', spec.addr))
+        acts.killEl.style.display = onlineAuto || onlineTarget ? '' : 'none'
+        acts.killEl.textContent = copy.actKill
+        acts.killEl.title = copy.actKillHint
+        acts.killEl.setAttribute('aria-label', copy.actKillAria.replace('{addr}', spec.addr))
+      }
       rowMeta.set(spec.key, {
         addr: spec.addr, queryAddress: spec.queryAddress, port: spec.port,
         online: spec.online, headText: spec.headText, offlineText: spec.offlineText,
@@ -801,6 +1182,7 @@ function mountServiceMonitorPanel(mode, container) {
         rowClickHandlers.clear()
         rowMeta.clear()
         ownerStates.clear()
+        rowByKeyActs.clear()
         hideTip()
         if (isTab) renderBaseline(baselineOf(value))
         return
@@ -957,11 +1339,16 @@ function mountServiceMonitorPanel(mode, container) {
       hideTip()
     if (tipEl !== null && tipEl.parentNode !== null) tipEl.parentNode.removeChild(tipEl)
     tipEl = null
+    removeActionConfirm()
+    if (toastTimer !== null) { clearTimeout(toastTimer); toastTimer = null }
+    if (toastEl !== null && toastEl.parentNode !== null) toastEl.parentNode.removeChild(toastEl)
+    toastEl = null
     if (panel.parentNode !== null) panel.parentNode.removeChild(panel)
     rowByKey.clear()
     rowClickHandlers.clear()
     rowMeta.clear()
     ownerStates.clear()
+    rowByKeyActs.clear()
     lastRendered = null
   }
 }

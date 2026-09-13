@@ -22,6 +22,20 @@
 // POST /dsh-zh/api/service-monitor/open 按已缓存归属在文件管理器中定位
 // 进程文件目录——路径永远来自主机进程枚举，不接受请求传入路径。
 //
+// 条目操作（右栏 tab 专用，左栏面板不提供）：
+//   - POST /dsh-zh/api/service-monitor/rebaseline：把端点重新放入基线
+//     （「排除监控」）——条目立即从监控列表消失、端口进入「基线端口」区
+//     （可再点击恢复监控）。unbaseline 集合同步移除，防止豁免复活。
+//   - POST /dsh-zh/api/service-monitor/kill：用普通权限尝试终止监听进程
+//     （「终止进程」）——读取已缓存归属的 PID 后执行平台终止命令
+//     （win32 taskkill /F、posix kill SIGTERM，均不提权）；PID 永远来自
+//     主机进程枚举。同端点既有离线自定义项/基线端口不动——进程死掉后
+//     面板条目随扫描自然消失（自动发现）或显示离线（自定义项）。
+//   - 「永久监控」在客户端把端点写入设置的自定义监控项（localStorage），
+//     同时主机把端点加入基线（persistEndpointToBaseline 经 /rebaseline
+//     路由携带 persist:true 完成）：自定义项永不因基线规则隐藏，达成
+//     「永久监控」语义。
+//
 // 实现要点：
 //   1. 扫描命令按平台选择：win32 用 `netstat -ano -p tcp`，darwin 用
 //      `netstat -anv -p tcp`，linux 优先 `ss -tlnp`、失败回退 `netstat -tln`。
@@ -433,6 +447,82 @@ export function unbaselineEndpoint(address: string, port: number, now: number): 
 }
 
 /**
+ * 排除监控规划（纯函数）：给定当前 baseline/items/unbaseline 与目标端点，
+ * 计算「重新放入基线」后的新状态。changed = false 表示端点既不在监控
+ * 条目也不在基线（无可排除项）。unbaseline 集合同步移除，防止
+ * computeMonitoredEndpoints 的豁免让端点在下一轮扫描复活。
+ */
+export function rebaselinePlan(
+  baselineKeys: ReadonlySet<string>,
+  items: ReadonlyArray<MonitorEndpoint>,
+  unbaselineKeys: ReadonlySet<string>,
+  address: string,
+  port: number,
+): { changed: boolean; baseline: Set<string>; items: MonitorEndpoint[]; unbaseline: Set<string> } | null {
+  if (typeof address !== 'string' || address.trim() === '' || !Number.isInteger(port) || port < 1 || port > 65535) return null
+  const key = endpointKey(address, port)
+  const baseline = new Set(baselineKeys)
+  const unbaseline = new Set(unbaselineKeys)
+  const nextItems: MonitorEndpoint[] = []
+  let hadItem = false
+  for (const item of items) {
+    if (endpointKey(item.address, item.port) === key) { hadItem = true; continue }
+    nextItems.push(item)
+  }
+  unbaseline.delete(key)
+  let changed = true
+  if (!baseline.has(key)) {
+    if (!hadItem) changed = false
+    else baseline.add(key)
+  }
+  return { changed, baseline, items: nextItems, unbaseline }
+}
+
+/**
+ * 把一个端点重新放入基线（右栏 tab「排除监控」按钮）：条目立即从
+ * 监控列表消失，端口加入基线（「基线端口」区出现，可再点击恢复监控），
+ * unbaseline 集合同步移除（防 computeMonitoredEndpoints 豁免复活）。
+ * 端点不在监控条目时返回 false（可能已在基线或已停止监听）。
+ */
+export function rebaselineEndpoint(address: string, port: number): boolean {
+  const plan = rebaselinePlan(monitorState.baseline, monitorState.items, monitorState.unbaseline, address, port)
+  if (plan === null) return false
+  if (!plan.changed) return false
+  monitorState.baseline = plan.baseline
+  monitorState.items = plan.items
+  monitorState.unbaseline = plan.unbaseline
+  sweepOwnerCacheKey(endpointKey(address, port))
+  return true
+}
+
+/**
+ * 把一个端点加入基线（右栏 tab「永久监控」按钮在主机侧的前半步）：
+ * 端点不再自动发现后也会以自定义监控项形式常驻面板（客户端把它写入
+ * 设置的自定义监控项）。端点既不在监控条目、基线，也不在最近扫描中
+ * 时返回 false。
+ */
+export function persistEndpointToBaseline(address: string, port: number): boolean {
+  const plan = rebaselinePlan(monitorState.baseline, monitorState.items, monitorState.unbaseline, address, port)
+  if (plan === null) return false
+  if (!plan.changed) {
+    // 已在基线：无可监控项，但永久监控仍需成功（自定义项即将接管）。
+    if (!monitorState.lastRaw.some((raw) => raw.address === address && raw.port === port)) return false
+    plan.changed = true
+  }
+  monitorState.baseline = plan.baseline
+  monitorState.items = plan.items
+  monitorState.unbaseline = plan.unbaseline
+  sweepOwnerCacheKey(endpointKey(address, port))
+  return true
+}
+
+/** 单端点缓存清运：排除监控/终止后归属提示与可点击状态立即回落。 */
+function sweepOwnerCacheKey(key: string): void {
+  ownerCache.delete(key)
+  failedUntil.delete(key)
+}
+
+/**
  * 目录打开命令（纯函数）：在文件管理器中定位进程文件。
  * win32 用 explorer /select（成功也返回码 1，调用方允许该码）；
  * darwin 用 `open -R`；linux 用 xdg-open 打开所在目录。
@@ -441,6 +531,18 @@ export function revealCommandFor(platform: NodeJS.Platform, exePath: string): { 
   if (platform === 'win32') return { file: 'explorer.exe', args: ['/select,' + exePath] }
   if (platform === 'darwin') return { file: 'open', args: ['-R', exePath] }
   return { file: 'xdg-open', args: [dirname(exePath)] }
+}
+
+/**
+ * 终止进程命令（纯函数）：使用**普通权限**尝试终止（不提权）。
+ * win32 用 `taskkill /F /PID <pid>`（强制终止同用户进程——无 /F 的软
+ * 终止对控制台/服务进程必然失败；/F 不等于提权，他人/系统进程仍报
+ * Access denied，即「普通权限尝试」）；darwin/linux 用 `kill <pid>`
+ * （SIGTERM 软终止，node/dev server 等均响应）。
+ */
+export function killCommandFor(platform: NodeJS.Platform, pid: number): { file: string; args: string[] } {
+  if (platform === 'win32') return { file: 'taskkill', args: ['/F', '/PID', String(pid)] }
+  return { file: 'kill', args: [String(pid)] }
 }
 
 // ---------- 扫描器状态 ----------
@@ -735,6 +837,31 @@ export async function openServiceOwnerDirectory(platform: NodeJS.Platform, rawAd
   return { path: exePath }
 }
 
+/**
+ * 用普通权限尝试终止监听进程：读取该端点**已缓存**的归属（悬停查询过
+ * 才有），含 PID 时执行平台软终止命令（taskkill / kill，均无强制/提权
+ * 参数）。PID 永远来自主机进程枚举，不接受请求传入；与归属解析一样只
+ * 对可信的同源回环请求开放。http.sys 内核端点（pid 4）拒绝终止。
+ */
+export async function killServiceOwner(platform: NodeJS.Platform, rawAddress: unknown, rawPort: unknown): Promise<{ name: string; pid: number | null } | null> {
+  const address = typeof rawAddress === 'string' ? rawAddress.trim() : ''
+  const port = typeof rawPort === 'number' && Number.isFinite(rawPort) ? Math.round(rawPort) : 0
+  if (address === '' || address.length > 64 || /\s/.test(address) || port < 1 || port > 65535) return null
+  const owner = cachedOwnerFor(address, port)
+  if (owner === null || owner.pid === null) return null
+  if (owner.pid === 4) return null
+  const command = killCommandFor(platform, owner.pid)
+  try {
+    // taskkill 强制终止成功退出码 0；kill（SIGTERM）成功退出码 0。
+    // 均不接受非零码——权限不足（他人/系统进程）与超时如实回报失败。
+    await spawnManagedChild(command.file, command.args, 8000, function (code) { return code === 0 })
+  } catch {
+    // 软终止失败（权限不足/进程不存在等）：如实回报 null，由客户端提示失败。
+    return null
+  }
+  return { name: owner.name, pid: owner.pid }
+}
+
 /** reveal 命令的非零退出码失败；explorer.exe 的退出码 1 是已知成功语义。 */
 function spawnRevealProcess(file: string, args: string[]): Promise<void> {
   return new Promise(function (resolve, reject) {
@@ -753,6 +880,31 @@ function spawnRevealProcess(file: string, args: string[]): Promise<void> {
         resolve()
       } else {
         fail(new Error(`打开服务目录失败（退出码 ${String(code)}）`))
+      }
+    })
+    child.stdout?.resume()
+    child.stderr?.resume()
+  })
+}
+
+/** 平台终止命令执行：软终止（SIGTERM / taskkill /F），普通权限。 */
+function spawnManagedChild(file: string, args: string[], timeoutMs: number, acceptCode: (code: number | null) => boolean): Promise<void> {
+  return new Promise(function (resolve, reject) {
+    let settled = false
+    const fail = (error: Error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+    const child = execFile(file, args, { windowsHide: true, timeout: timeoutMs })
+    child.on('error', function (error) { fail(error) })
+    child.on('exit', function (code) {
+      if (settled) return
+      if (acceptCode(code)) {
+        settled = true
+        resolve()
+      } else {
+        fail(new Error(`终止进程命令失败（退出码 ${String(code)}）`))
       }
     })
     child.stdout?.resume()

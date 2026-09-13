@@ -78,6 +78,7 @@ const wrapperEnd = `    exports.inject = ['locale', 'slots', 'sidebarRightTabs']
       ownerTipText: ownerTipText,
       orderedPanelEntries: orderedPanelEntries,
       serviceElapsedText: serviceElapsedText,
+      serviceHostMatches: serviceHostMatches,
     };
     exports.sessionBatch = {
       pass: runBatchPassForTest,

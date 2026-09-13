@@ -35,7 +35,7 @@ The rows below follow **DSH Settings → Enhancements** from top to bottom:
 | Session list | Archived-session view | On | Adds a workspace archive view (its button sits after the select-all button) whose rows can be restored, renamed, forked, or deleted, and can be multi-selected for batch unarchive or batch deletion |
 | Session list | Session delete button | On | Shows “Delete session” in row menus; the log moves to the OS recycle bin and no list restore slot is retained; deleted sessions never appear in the archive view |
 | Session list | Session multi-select | On | Lets idle rows be selected for batch deletion or archiving; running, pending-interaction, and unread-completion rows are not selectable. Archived-session rows in the archive view are selectable too, with batch unarchive and batch deletion; a select-all button on each workspace row checks every selectable session of that workspace at once (click again to clear) |
-| Service monitor | Service monitor | Off | Dual form: keeps the original panel between the session list and Settings in the left sidebar, and adds a "Service monitor" tab in the right sidebar (entry on the guide page); shows local listening services started during the conversation; hover resolves the process on demand and click reveals its location; the tab's "Baseline ports" section lets you bring a baseline port back into monitoring with a click |
+| Service monitor | Service monitor | Off | Dual form: keeps the original panel between the session list and Settings in the left sidebar, and adds a "Service monitor" tab in the right sidebar (entry on the guide page); shows local listening services started during the conversation; hover resolves the process on demand and click reveals its location; the tab's "Baseline ports" section lets you bring a baseline port back into monitoring with a click; right-pane entries have three action buttons after the uptime — Exclude (move back to baseline, no confirmation), Always watch (add to custom watch entries in Settings, confirmation required), Kill process (try to terminate with normal privileges, confirmation required); the left panel has no buttons |
 | Service monitor | Refresh interval | 10 seconds | Range 2–300 seconds; polling pauses while the page is hidden |
 | Service monitor | Custom watch entries | Empty | Entries can be added or edited and remain visible as online/offline; maximum 100 |
 
@@ -46,7 +46,7 @@ for full interaction, data, and safety boundaries.
 
 ## Requirements
 
-- DeepSeek Harness ≥ `0.1.5-rc.1`; full UI uses `web`, Open Design stdio uses `open-design`, and DSH one-shot tasks may use `headless`
+- DeepSeek Harness ≥ `0.1.5-rc.1`; full UI uses `web`
 - Node.js `^22.19.0 || >=24.0.0`
 
 ## Installation

@@ -1202,6 +1202,50 @@ check(JSON.stringify(smOrdered.map(function (entry) {
   't:127.0.0.1:1433:off',
 ]), '服务监控排序 自动发现最上（保持新→旧）、在线自定义随后、离线自定义沉底')
 
+// ---- 服务监控条目操作：同端口判定（排除监控移除自定义项时使用） ----
+check(serviceMonitorUnderTest.serviceHostMatches('127.0.0.1', '127.0.0.1'), true, '服务监控条目操作 同端口判定 精确匹配')
+check(serviceMonitorUnderTest.serviceHostMatches('localhost', '127.0.0.1'), true, '服务监控条目操作 同端口判定 localhost 归一化命中')
+check(serviceMonitorUnderTest.serviceHostMatches('127.0.0.1', '0.0.0.0'), true, '服务监控条目操作 同端口判定 IPv4 命中通配监听')
+check(serviceMonitorUnderTest.serviceHostMatches('[::1]', '[::]'), true, '服务监控条目操作 同端口判定 IPv6 命中通配监听')
+check(serviceMonitorUnderTest.serviceHostMatches('192.168.1.10', '0.0.0.0'), true, '服务监控条目操作 同端口判定 任意 IPv4 命中 0.0.0.0（探活侧已拒绝非环回）')
+check(serviceMonitorUnderTest.serviceHostMatches('127.0.0.1', '192.168.1.10'), false, '服务监控条目操作 同端口判定 不同地址不命中')
+check(serviceMonitorUnderTest.serviceHostMatches('::1', '127.0.0.1'), false, '服务监控条目操作 同端口判定 协议族不同不命中')
+
+// ---- 服务监控条目操作：主机侧 rebaseline 规划与终止命令（子进程调用编译产物） ----
+const smHostScript = [
+  "import { rebaselinePlan, killCommandFor } from './lib/service-monitor.js'",
+  'const plan1 = rebaselinePlan(new Set(["0.0.0.0|3080"]), [{ address: "127.0.0.1", port: 81, since: 1 }], new Set(["127.0.0.1|81"]), "127.0.0.1", 81)',
+  'const plan2 = rebaselinePlan(new Set(), [], new Set(), "127.0.0.1", 9999)',
+  'const plan3 = rebaselinePlan(new Set(["127.0.0.1|81"]), [], new Set(), "127.0.0.1", 81)',
+  'const planBad = rebaselinePlan(new Set(), [], new Set(), "", 0)',
+  'const out = [',
+  '  plan1.changed === true && plan1.baseline.has("127.0.0.1|81") === true && plan1.items.length === 0 && plan1.unbaseline.has("127.0.0.1|81") === false && plan1.baseline.has("0.0.0.0|3080") === true,',
+  '  plan2.changed === false,',
+  '  plan3.changed === true && plan3.items.length === 0,',
+  '  planBad === null,',
+  '  JSON.stringify(killCommandFor("win32", 1234)),',
+  '  JSON.stringify(killCommandFor("linux", 5678)),',
+  ']',
+  'process.stdout.write(JSON.stringify(out))',
+].join('\n')
+const smHostActual = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', smHostScript], { cwd: __dirname }).toString())
+check(smHostActual[0], true, '服务监控排除监控 受监控条目移出列表、入基线、unbaseline 豁免同步移除')
+check(smHostActual[1], true, '服务监控排除监控 未知端点无可排除项（changed=false）')
+check(smHostActual[2], true, '服务监控排除监控 已在基线的端点幂等成功')
+check(smHostActual[3], true, '服务监控排除监控 非法地址返回 null')
+check(smHostActual[4], JSON.stringify({ file: 'taskkill', args: ['/F', '/PID', '1234'] }), '服务监控终止进程 win32 用 taskkill /F（普通权限）')
+check(smHostActual[5], JSON.stringify({ file: 'kill', args: ['5678'] }), '服务监控终止进程 posix 用 kill SIGTERM（普通权限）')
+
+// ---- 服务监控条目操作：文案表三按钮与确认框文案（中英文键齐全） ----
+const smCopyZh = (function () {
+  // 从构建产物读 SERVICE_MONITOR_COPY 的 zh 键（通过测试导出的 ownerTipText
+  // 间接已覆盖渲染文案；这里直接检查源片段文本，防键缺失导致的 undefined 文案）。
+  const source = fs.readFileSync(__dirname + '/lib/client/logic/service-monitor.js', 'utf8')
+  const required = ['actExclude:', 'actExcludeHint:', 'actKeep:', 'actKeepHint:', 'actKill:', 'actKillHint:', 'actKillTitle:', 'actKillOk:', 'actKeepTitle:', 'actKeepOk:', 'dialogCancel:']
+  return required.every(function (key) { return source.indexOf(key) !== -1 })
+})()
+check(smCopyZh, true, '服务监控条目操作 中英文文案键齐全（排除/永久监控/终止进程/确认框）')
+
 // ---- 服务监控右栏 tab 注册（两阶段协议 + 开关驱动装卸） ----
 // mock sidebarRightTabs 记录 register 调用；bundle 硬依赖声明使 ctx.get
 // 直接读到 mock（见 ctx._services）。apply 时 serviceMonitorEnabled 为关，未注册；
