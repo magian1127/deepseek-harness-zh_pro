@@ -95,8 +95,14 @@ dsh plugin --profile headless list
 ## Updating
 
 Re-run the install command to update dependencies and the persistent bundle. After
-browser-side content updates, refresh the page; when developing with a local link, host
-files hot-reload automatically while the DSH HMR service is available; otherwise diagnose and report the unavailable hot path rather than restarting DSH.
+browser-side content updates, refresh the page. When developing with a local link, a
+rebuilt Host half cannot reach a long-running process without a restart on the current
+DSH version (see the workspace-shared `docs/runtime-hmr.md`): after building, rebuild the
+row with a plugin-list disable → enable cycle, which loads the new build only if the
+package evicts its own module-cache entries on unload; otherwise restart `dsh web` once.
+Do not substitute repeated trial-and-error for diagnosis: a rebuilt Host half reaches a
+running process only after a plugin-list disable → enable cycle (when the package evicts
+its own module-cache entries on unload) or one `dsh web` restart.
 
 ## Uninstalling
 

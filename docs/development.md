@@ -348,12 +348,12 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
 - 开关全关或 settings 服务不可用时零改动；改写失败只 warn 一次并返回原 assembly。
 
 修改此模块后，`lib/model-locale.js` 与 `lib/chinese-prompt.js` 都要在运行进程里生效：
-HMR 失效时按 [`troubleshooting.md`](troubleshooting.md) 的强制重载通道加载新代码，
-并在会话日志（`request/header`）验证实际效果。自监视热重载只盯 6 个文件
-（`lib/index.js`、`lib/session-delete.js`、`lib/trash.js`、`lib/model-locale.js`、
-`lib/context-locale.js`、`bin/dsh-zh.mjs`）：单独修改 `cordis-section-zh.ts`、
-`assemble-patch.ts` 等被依赖模块不会触发重载，需同时改动任一被监视文件
-（或走强制重载通道）。
+Host 半边在当前 DSH 下**没有热通道**（见 [`troubleshooting.md`](troubleshooting.md)
+「主机文件修改后没有热重载」），需由用户重启一次 `dsh web`，并在会话日志
+（`request/header`）验证实际效果。历史上自监视只盯 6 个文件（`lib/index.js`、
+`lib/session-delete.js`、`lib/trash.js`、`lib/model-locale.js`、`lib/context-locale.js`、
+`bin/dsh-zh.mjs`）——该机制已随 `hmr.partialReload` 一并失效，不要再依赖「改动被监视文件
+触发重载」或「顺带改一个被监视文件」的做法。
 
 
 ### 上下文注入中文化（context-locale）

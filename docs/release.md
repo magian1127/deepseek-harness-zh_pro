@@ -59,10 +59,13 @@ npm pack --dry-run --json
 ```powershell
 node bin/dsh-zh.mjs status --profile web
 (Invoke-WebRequest 'http://127.0.0.1:3080/').Content -match 'deepseek-harness-zh_pro'
-(Invoke-WebRequest 'http://127.0.0.1:3080/plugins/deepseek-harness-zh_pro/client.js').Content -match '__ModuleLoader__'
+# client 半边已组装的判据是 boot graph（/plugins/events 的 graph 帧）含本包 entry；
+# /plugins/<包名>/client.js 一律 404，不是判据。
+(curl.exe -N --max-time 3 http://127.0.0.1:3080/plugins/events) -match 'deepseek-harness-zh_pro/client\.js&rev='
 ```
 
-刷新浏览器后检查：
+client 改动由 DSH client HMR 自动换血（`clientModules.rebuilt` → `/plugins/events` SSE →
+页面内替换），无需刷新页面即可检查：
 
 - 设置页能显示增强设置；
 - 中文/英文切换能正确应用和恢复；

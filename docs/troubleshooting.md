@@ -5,7 +5,9 @@
 ```powershell
 node bin/dsh-zh.mjs status --profile web
 (Invoke-WebRequest 'http://127.0.0.1:3080/').Content -match 'deepseek-harness-zh_pro'
-(Invoke-WebRequest 'http://127.0.0.1:3080/plugins/deepseek-harness-zh_pro/client.js').StatusCode
+# client 半边是否已组装：读 /plugins/events 的 graph 帧，确认含本包 entry 及其 url/rev
+# （不要用 /plugins/deepseek-harness-zh_pro/client.js 探测——该形式一律 404）
+(curl.exe -N --max-time 3 http://127.0.0.1:3080/plugins/events) -match 'deepseek-harness-zh_pro/client\.js&rev='
 node --check lib/client.js
 node --check lib/index.js
 node --check bin/dsh-zh.mjs
@@ -47,7 +49,7 @@ node verify-cli.mjs   # 主机删除 D7/D8/D9 用例：新契约定位、冷会�
 | 客户端写成 ESM | `lib/client.js` 必须调用 `window.__ModuleLoader__.load`，不能使用 `export` |
 | 包名负面缓存 | 修正结构后走受控动态 Client 通道或等待自然重启；同进程可能继续沿用“非客户端包”判定 |
 | profile 未安装或 bundles 未就绪 | 运行 `status`，检查 profile `package.json` 的 dependency 与 bundles |
-| 浏览器仍使用旧 bundle | 强制刷新页面，再检查 `/plugins/.../client.js` 的返回内容 |
+| 浏览器仍使用旧 bundle | 先确认 `@deepseek-ai/dsh-client-hmr` 的 500ms stat 轮询已把新 rev 推给页面（SSE `/plugins/events` 的 `rebuilt` 帧）；仍未换血时读 graph 帧确认该行的 `rev` 是否已变（`/plugins/<包名>/client.js` 恒 404，不能当判据），再强制刷新页面兜底 |
 
 ## 插件加载失败但页面无报错
 
@@ -90,66 +92,27 @@ profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢
 
 ## 主机文件修改后没有热重载
 
-查看日志：
+当前 DSH 版本（0.1.6-alpha.2）下这是**预期行为**，不是配置问题：
 
-- “官方 hmr watcher 已覆盖”或“主机半边热重载已启用”表示保存后应自动更新；
-- “hmr 服务不可用”或“缺少 registerConfig/partialReload”表示当前热路径不可用，应诊断/报告，不能以重启代替；
-- watch-only HMR 实例同时承载 `watchUserPatches`，不要在运行中替换它。
+- `hmr` 服务只提供 `baseDir`/`runExclusive`/`watchConfig`/`getOuterStack`/`getLinked`；
+  `registerConfig`/`partialReload`/`stashed` 已移除。dsh-zh 的 `src/lib/hot-reload.ts` 走的正是
+  已移除的 API，因此它只会打印「缺少 registerConfig/partialReload」并放弃——**不要期待
+  保存后自动生效**。
+- `dsh-hmr` 的模块级 watcher 只监视 `hmr` 行 `root`（本 profile 默认空），不监视本仓库 `lib/`。
+- **可行做法**：`plugin_manager` 对 `include:dsh-zh` 做 disable → enable 往返重建 Loader 行。
+  只有在包实现了「Fiber dispose 时清自己的模块缓存条目」时这一步才会载入新构建；本包尚未
+  实现该清理，因此**当前需要重启一次 `dsh web`** 才能装入 `lib/` 改动。参考实现见
+  工作区共享文档 `runtime-hmr.md` 与 zcode_mask 的 `src/esm-cache.ts`。
 
-客户端文件不走主机 HMR；修改 `lib/client.js` 后验证实际运行副本并刷新现有页面。
+客户端文件不走 Host HMR：`@deepseek-ai/dsh-client-hmr` 每 500ms stat 轮询并在页面内自动
+替换 `lib/client.js`，无需用户刷新页面。
 
-### 强制重载通道（HMR / watchUserPatches 失效时）
+### 验收注入中文化必须用全新会话
 
-实测结论：`watchUserPatches`（监视 profile 的 `cordis.patch.yml`）在当前运行版本
-**不生效**（写盘后无任何 compose/update）；HMR 行 disabled 时自监视热重载也不可用。
-需要把 `lib/` 改动加载进运行中进程时，可用动态 Cordis 插件走 include 条目更新：
-
-1. 动态插件对 dsh-zh 的 include 条目执行 `update({ config: { ...patches } })`，
-   先 `{ id: 'dsh-zh', disabled: true }` 卸载（卸载会自动清理该包模块缓存）；
-2. 再清 `loader.internal.loadCache` 中本包 realpath（当前目录名为
-   `/deepseek-harness-zh_pro/lib/`、`/deepseek-harness-zh_pro/bin/`）的键；
-3. 最后 `{ id: 'dsh-zh', disabled: false }` 从磁盘重新加载新代码。
-
-注意：对已活动的条目直接 `disabled: false` 是 no-op，**必须先禁用再恢复**。
-插件以 symlink link 到 profile 时，`import.meta.url` 解析为 realpath，清缓存时要
-按 realpath 路径匹配。
-
-2026-09-01 实测（dsh web 长跑进程，bundle 行在线）：上述三条热通道（自监视 watcher、
-动态插件 disabled 往返、动态插件 `hmr.stashed.add` + `partialReload`）**全部未能把新构建
-装入当前进程**，但插件自身始终存活（`/dsh-zh/api/service-monitor` 探活正常、未停在
-禁用态）。`loader.update`/`remove`/`reload`/`add` 在运行版上均不可用或无法解析条目；
-`hmr.partialReload` 需要 loadCache 里的旧 job 与 registry 里的旧 runtime，任一被清都进不了
-重载队列。验证是否装入新代码不要凭日志：新开会话（或子代理）后解压其
-`session.jsonl.zstd`（zstd 多帧，按帧魔数 0x28B52FFD 分段解压）看注入消息文本。
-
-#### 可用的强制重装通道（2026-09-01 晚间实测成功）
-
-经动态 Cordis 插件（受限环境 `ctx.get('loader')` 可用）对目标 bundle 条目执行三步：
-
-1. 清 `loader.internal.loadCache` 中本包 realpath 的键（`Map.prototype.delete`；Node 24
-   的实例 `.delete()` 只置空类型槽不删条目）；
-2. `entry.fiber.dispose()`（`entry` 从 `loader.entries()` 按 `options.id`/`options.name` 取；
-   此时条目仍在 entries 列表，但主机半边下线、探活 404）；
-3. `entry.init()`——`Entry.init()` 会经 `tree.import` → `internal.import` 重新导入：缓存已清
-   故从磁盘读取**新构建**并启动新 Fiber（探活恢复 200）。
-
-副作用：重建 Fiber 会丢失进程内存态——`model-locale` 的 regime 锁定表被清空，所有已开始
-会话（含当前会话）按老会话规则锁 en、中文注入停用；新会话恢复 zh。settings/监督器等随
-Fiber 重新装配。此通道适用于任意 bundle 行插件（hashline/智谱同理）。
-
-另一个副作用（2026-09-02 实测）：第 2 步的外部 `fiber.dispose()` 会命中 loader 的
-self-dispose 钩子（`vendor/loader/src/index.ts` case 7），把 `entry.options.disabled`
-置 `true`；第 3 步 `init()` 重启 fiber 后该标志残留，设置页「插件列表」显示
-「已停用」（pluginInventory 按它计算 enabled，而 fiber 实际 active、探活 200）。
-复位：动态插件把 `entry.options.disabled = false`（fiber 已 active 无需 init；
-pluginInventory 每次直读 `loader.entries()`，重开插件列表即恢复「已启用」）。
-建议把复位并入重装插件的第 3 步之后。
-
-**验收注入中文化必须用全新会话**：`subagent_fork` 的子会话继承父对话全部历史
-（含 `assistant/message`），regime 按设计锁定 en，注入不翻译是正确行为——用它验收会
-得到假阴性（2026-09-01 连续五轮误判；而重启后首次用全新 subagent 验收即全部命中）。
-用普通 `subagent`（无种子）或 GUI 新建会话，验收点：persona 中文、文件策略/审批
-策略正文中文、skill 目录首句中文、runtime-context 头部句英文（设计保留）。
+`subagent_fork` 的子会话继承父对话全部历史（含 `assistant/message`），regime 按设计锁定 en，
+注入不翻译是正确行为——用它验收会得到假阴性（2026-09-01 连续五轮误判；而重启后首次用全新
+subagent 验收即全部命中）。用普通 `subagent`（无种子）或 GUI 新建会话，验收点：persona 中文、
+文件策略/审批策略正文中文、skill 目录首句中文、runtime-context 头部句英文（设计保留）。
 
 ## 中文界面仍出现英文或还原错误
 
@@ -186,12 +149,13 @@ pluginInventory 每次直读 `loader.entries()`，重开插件列表即恢复「
    settings API 网关，正常情况下会持久化到该文件；若 GUI 显示已关但文件没变，是客户端
    写入链路问题。
 3. **确认运行时状态与磁盘一致**：主机侧 `scope.watch` 回调负责把磁盘变更同步进
-   `modelState`（`getModelState()` 的共享对象）。若回调因热重载、插件重挂而丢失，
-   内存状态会停留在旧值；先修复 watcher 生命周期并按本项目的动态强制重载通道重建 Fiber，不能用重启掩盖。
-4. **确认加载的是新代码**：`lib/` 产物修改后，HMR / `watchUserPatches` 在当前运行版本
-   可能失效（见上文「主机文件修改后没有热重载」）。用动态 Cordis 插件强制重载
-   （include 条目先 `disabled: true` 卸载、清 `loader.internal.loadCache` 中本包键、
-   再 `disabled: false` 恢复）后，还要注意旧 fiber 的 `scope.watch` 是否随旧实例释放。
+   `modelState`（`getModelState()` 的共享对象）。若回调因插件重挂而丢失，内存状态会停留在
+   旧值；先修复 watcher 生命周期（`ctx.effect` 返回 cleanup，而不是注册时直接执行 cleanup），
+   再重建 Fiber。
+4. **确认加载的是新代码**：`lib/` 产物修改后，Host 半边在当前 DSH 下没有热通道（见上文
+   「主机文件修改后没有热重载」）——`hmr` 服务面已移除 `registerConfig`/`partialReload`，
+   官方 watcher 又排除 `node_modules`。**由用户重启一次 `dsh web`** 后再验证；重建 Fiber
+   本身不会载入新构建（Node ESM 缓存按入口 URL 命中旧模块）。
 
 **经验结论**：
 

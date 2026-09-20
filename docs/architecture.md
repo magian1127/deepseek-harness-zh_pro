@@ -33,8 +33,10 @@ POST `/dsh-zh/api/service-monitor/open` 定位监听进程目录。主机没有�
 客户端侧服务监控以右栏 tab 呈现（`logic/service-monitor.ts` 共享轮询循环与纯 DOM 面板，
 `logic/service-monitor-tab.ts` 官方两阶段协议注册：`sidebarRightTabs` 页面类型 +
 keyed 槽位 `sidebar.right.pane.tab`/`.title` 按 id 分发 React 容器与活标题）。
-删除逻辑本身完全使用官方服务面：`sessionPersistence`（locate/readRaw/list）定位日志、
-`Workspace.detachSession` 移除账本槽位、`trash.ts` 把目录移入系统回收站。
+删除逻辑本身完全使用官方服务面：`sessionPersistence`（`stat`/`list` 快照，0.1.3-alpha.1 起
+句柄化——`readRaw`/`locate` 不再公开）与目录扫描定位日志、`Workspace.detachSession`
+移除账本槽位、`trash.ts` 把目录移入系统回收站（版本兼容细节见
+[`behavior.md`](behavior.md) 的「删除会话（回收站）」章）。
 
 ## 双通道挂载
 
@@ -89,4 +91,8 @@ CLI 和官方 remove 都会删除依赖声明。主机监督器发现本包被�
 
 ## 更新与热重载
 
-dsh-zh 的 Host 自监视目标是 `lib/index.js` 与 `bin/dsh-zh.mjs`，以 150ms 防抖驱动 `partialReload`；watch-only HMR 实例还承载遗留 `watchUserPatches`，不要在运行中替换它。动态 Cordis 插件不跨自然进程重启，而已加入 profile bundles 的持久插件会在下一次启动由持久行接管。
+dsh-zh 的 Host 自监视目标是 `lib/index.js` 与 `bin/dsh-zh.mjs`，历史上以 150ms 防抖驱动
+`partialReload`——**该通道在当前 DSH（0.1.6-alpha.2）已失效**：`hmr.registerConfig` /
+`partialReload` 已从服务移除，自监视只会打印「缺少 registerConfig/partialReload」并放弃。
+当前把 `lib/` 改动装入长跑进程的可行路径与限制见
+[`troubleshooting.md`](troubleshooting.md)「主机文件修改后没有热重载」。
