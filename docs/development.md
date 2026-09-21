@@ -347,13 +347,28 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
   改写 `assembly.sections` 与 `assembly.tools`——complete persona 的 preset 同样生效。
 - 开关全关或 settings 服务不可用时零改动；改写失败只 warn 一次并返回原 assembly。
 
-修改此模块后，`lib/model-locale.js` 与 `lib/chinese-prompt.js` 都要在运行进程里生效：
-Host 半边在当前 DSH 下**没有热通道**（见 [`troubleshooting.md`](troubleshooting.md)
-「主机文件修改后没有热重载」），需由用户重启一次 `dsh web`，并在会话日志
-（`request/header`）验证实际效果。历史上自监视只盯 6 个文件（`lib/index.js`、
-`lib/session-delete.js`、`lib/trash.js`、`lib/model-locale.js`、`lib/context-locale.js`、
-`bin/dsh-zh.mjs`）——该机制已随 `hmr.partialReload` 一并失效，不要再依赖「改动被监视文件
-触发重载」或「顺带改一个被监视文件」的做法。
+修改此模块后，`lib/model-locale.js` 与 `lib/chinese-prompt.js` 都要在运行进程里生效。
+Host 半边的热通道现状（2026-09 起，`hot-reload.ts` + `esm-cache.ts`）：
+
+- **行重建本身载不进新构建**：Node ESM 缓存以解析后 URL 为键，重建 Fiber 后
+  `entry.init()` 重新 import 同一 URL 直接命中进程启动时的模块。`set_plugin`
+  停用→启用、remove/install 往返、touch 文件都一样。
+- **本包自持卸载清理**：Fiber 被 dispose 时按包内目录前缀（`lib/`、`bin/`、
+  `scripts/`）逐出 `loader.internal.loadCache` 中本包条目（跨 realm 结构探测 +
+  `Map.prototype.delete.call`，见 `esm-cache.ts`），此后 `set_plugin` 往返即可
+  从磁盘求值当前构建。首次引入该能力时必须重启一次（清理代码本身在旧模块里，
+  鸡生蛋）；重启后的构建即享免重启换血。
+- **watchConfig 变化逐出**：当前 DSH 唯一公开的精确路径 watcher，回调已在 HMR
+  事务队列内（不得再嵌套 `runExclusive`）；变化时只逐出缓存，重建由 DSH 的
+  行重建完成。旧版 `registerConfig`+`partialReload` 自监视仅作旧代际兼容保留。
+- 判据必须来自运行态：`GET /dsh-zh/api/diagnostics`（回环信任围栏同
+  `/dsh-zh/api` 其余路由）返回 `buildId`（lib/index.js 的 mtime）与
+  `unloadEviction`（最近一次卸载逐出的条目数，存于 globalThis 品牌化符号、
+  跨实例可见）——路由 404→200、buildId 变化、cleared>0 三者构成「行重建
+  真的换了血」的证据链；`list_plugins` 的 `active`/Fiber 存活不构成
+  「新代码在跑」的证据。
+- 运行通道细节见 [`../docs/runtime-hmr.md`](../runtime-hmr.md)；
+  部署诊断见 [`troubleshooting.md`](troubleshooting.md)「主机文件修改后没有热重载」。
 
 
 ### 上下文注入中文化（context-locale）
@@ -384,6 +399,39 @@ agent-loop 硬编码拼接，官方渲染侧永远是英文；按用户需求在
 日志每步 +1 条快照事件）。tmux-context 快照同理且为 per-turn 重注入，不翻。
 
 修改本模块后同样要求 lib/context-locale.js 在运行进程里生效（见上文热重载说明）。
+
+### 网络搜索（web-search + agent-search-tool）
+
+`src/lib/web-search.ts` 注册组合 provider `dsh-zh-web` 并接管 web 实例的
+`searchProviderId`（WeakMap 记忆原值，关闭/卸载恢复）；`src/lib/agent-search-tool.ts`
+在 Agent own scope 注册 `web_search` 工具壳与 `tool:web_search` section。实现要点：
+
+- **让位信号是智谱包行**（`ZHIPU_PACKAGE_NAME` 在 `ctx.loader.entries()` 中），
+  而非探测智谱壳：行注册先于插件 apply，挂载顺序无关，避免双向注册竞态。
+  视图占用按 description 特征分类（官方片段与 `model-locale.ts` 的
+  `TOOL_MATCH.web_search` 同源，改动需双侧同步；`/Zhipu|智谱/` 智谱壳；
+  `/zh_pro/` 自身幂等；其余保守让位）。
+- 注册冲突用 `registerWithTakeover`（8 次 × 25ms 等待旧 Fiber 释放），
+  每次重试前重新探测智谱包行，出现即主动放弃——绝不与智谱竞速。
+- 收敛触发点：`agent/created` / `agent/disposed` / `agent-preset/selected`、
+  `zhWebSearch`/`zhPrompt` settings watch（chinese-prompt 的
+  `onModelStateChanged` 钩子）、web 服务就绪（index 的 retry install 成功后
+  refresh）、智谱热装卸（index 的 reconcile 监听 profile manifest）。
+  事件监听器绝不向事件总线抛错（Cordis emit 同步串联）。
+- 工具 execute 走 agent 作用域 `web.search` seam——后端选择已被 provider 接管，
+  因此智谱联动对 zh_pro 壳与智谱壳一致生效。多查询合并（rank 轮询 + URL 去重）
+  与结果净化（URL 白名单/链接文本转义/控制字符折叠）参照智谱壳同级语义实现，
+  零跨包 import。
+- 降级运行态记录：每次「智谱失败 → 免费后端」都在 `web-search.ts` 落一条记录
+  （时间/错误码/消息/查询，存 globalThis 品牌化符号、跨实例可见），经
+  `/dsh-zh/api/diagnostics` 的 `webSearchFallback` 字段暴露。工具返回值本身
+  看不出后端归属（降级后照常返回结果），该记录是「联动真的发生过」的唯一
+  硬证据：敏感查询后 `count` 递增且 `last.code` 为 `ZHIPU_CONTENT_FILTERED`，
+  正常查询不改变 `count`。
+- 行为回归在 `verify-websearch.cjs`（provider 选择/解析/级联 13 组 +
+  工具壳 10 组 + esm-cache 1 组）；该脚本是无 `.cts` 源的独立 `.cjs`，
+  与三个构建产物回归并存，`npm test` 不包含它，按仓库验证命令单独运行。
+
 ## CLI 规则
 
 `src/bin/dsh-zh.mts` 编译生成的 `bin/dsh-zh.mjs` 优先直接运行 profile store 内 bundled `dsh`。

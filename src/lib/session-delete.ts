@@ -57,6 +57,7 @@ import { PKG } from '../bin/dsh-zh.mjs'
 import { ZH_SETTINGS_NS } from './constants.js'
 import { log, warn } from './util.js'
 import { trashItem, restoreItem } from './trash.js'
+import { handleDiagnosticsRoute } from './diagnostics.js'
 import { ensureFreshScan, getServiceMonitorSnapshot, killServiceOwner, openServiceOwnerDirectory, persistEndpointToBaseline, probeTargets, rebaselineEndpoint, resolveServiceOwner, unbaselineEndpoint } from './service-monitor.js'
 import type { HostContext } from './types.js'
 
@@ -726,9 +727,10 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
         }
         const url = new URL(req.url ?? '/', 'http://dsh.internal')
         const pathname = url.pathname
-        // GET 仅服务「服务监控」快照：拉取即查缓存（超过网页设置的刷新
+        // GET 仅服务「服务监控」快照与运行态诊断：拉取即查缓存（超过网页设置的刷新
         // 间隔才重新扫描，间隔经查询参数 intervalSec 携带）。
         if (req.method === 'GET') {
+          if (handleDiagnosticsRoute(req, res, pathname)) return
           if (await handleServiceMonitorRoutes(req, res, pathname, {}, url)) return
           writeJson(res, 404, { ok: false, error: { code: 'not-found', message: 'unknown method' } })
           return

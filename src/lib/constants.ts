@@ -40,3 +40,15 @@ export const ZH_TOOL_DESC_KEY = 'zhToolDesc'
 //    历史前换成中文（注入源头替换：GUI、会话日志与模型请求一致显示中文）。
 //    仅新会话生效；机制说明见 context-locale.ts。
 export const ZH_CONTEXT_INJECT_KEY = 'zhContextInject'
+
+// ============ 网络搜索（web seam 组合 provider） ============
+// dsh-zh 命名空间开关：开启时本插件的 dsh-zh-web 搜索 provider 可用，
+// web seam 的 resolveProvider 在没有更明确配置时按「唯一可用 provider」选中它
+// ——即注册即接管（见 web-search.ts 与 docs/behavior.md「网络搜索」章）。
+// 默认开启：DuckDuckGo 后端零 Key 零配置；关闭后 web seam 落回官方默认。
+export const ZH_WEB_SEARCH_KEY = 'zhWebSearch'
+
+// 智谱插件 npm 包名（其 Loader 行的 name 恒为包名，行 id 随挂载方式变化）。
+// agent-search-tool 以「包行存在」为让位信号：智谱在 → 智谱壳是 web_search
+// 工具壳的唯一 owner，本插件只保留 web seam 的 provider 接管（联动）。
+export const ZHIPU_PACKAGE_NAME = 'deepseek-harness-zhipu_plan_tools'

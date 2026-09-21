@@ -26,6 +26,7 @@ The rows below follow **DSH Settings → Enhancements** from top to bottom:
 | Agent-role prompt localization | Off | Localizes the four built-in roles and confirmed system sections; locked on a new session's first request and never retrofitted into old sessions |
 | Tool-description localization | Off | Localizes confirmed built-in DSH tool descriptions and guidance; tool names, parameter names, and third-party tools remain unchanged; new sessions only |
 | Injected-context localization | Off | Replaces DSH-injected official context (workspace instruction frames, skill catalog frames, runtime context including its header line, approval/mode switch notices, dynamic-plugin notices, scheduled reminders, compaction checkpoint preambles) with Chinese before it enters session history; GUI and model requests stay consistent, new sessions only; translating the snapshot header makes DSH inject one replacement snapshot per step (slight session-log growth) |
+| Web search | On | Routes the conversational web_search tool to a free backend (DuckDuckGo, with automatic Bing fallback on rate limiting; no API key needed); when the Zhipu plugin is also installed, Zhipu is preferred and a Zhipu failure (including content filtering) automatically retries via the free backend; environments where the official web_search tool is invisible (the Web profile default) get a tool shell automatically, which yields to the Zhipu shell when that plugin is present |
 | Prompt injection | Off | Injects editable text into subsequent requests; the default text asks for Chinese reasoning and replies, and the default target is the initial system prompt |
 | Auto-expand latest thinking | On | Expands the newest streaming thinking block and collapses the previous block that the plugin auto-expanded; after a turn closes under the DSH v0.1.2 compact view it stays hidden with the official process fold (see the behavior contract) |
 | Default expanded lines | 20 lines, latest N | Limits the initial visible region to 0–200 lines; 0 disables the limit, and the direction can be changed to earliest N |
@@ -95,14 +96,17 @@ dsh plugin --profile headless list
 ## Updating
 
 Re-run the install command to update dependencies and the persistent bundle. After
-browser-side content updates, refresh the page. When developing with a local link, a
-rebuilt Host half cannot reach a long-running process without a restart on the current
-DSH version (see the workspace-shared `docs/runtime-hmr.md`): after building, rebuild the
-row with a plugin-list disable → enable cycle, which loads the new build only if the
-package evicts its own module-cache entries on unload; otherwise restart `dsh web` once.
-Do not substitute repeated trial-and-error for diagnosis: a rebuilt Host half reaches a
-running process only after a plugin-list disable → enable cycle (when the package evicts
-its own module-cache entries on unload) or one `dsh web` restart.
+browser-side content updates, refresh the page. When developing with a local link, this
+package evicts its own ESM module-cache entries when its Fiber is released:
+
+- **Upgrading to this version from an older build requires one `dsh web` restart** —
+  the cleanup code itself must first enter the long-running process;
+- afterwards, rebuilding and cycling the row (plugin-list disable → enable, or a
+  `dsh plugin` remove/add round trip) loads the new build without a restart;
+- if the running instance comes from an older build without the cleanup code, a
+  disable → enable cycle will not load the new build; restart once instead.
+
+Do not substitute repeated trial-and-error for diagnosis.
 
 ## Uninstalling
 
@@ -120,14 +124,19 @@ Removal is profile-scoped; short-lived profiles stop loading it on their next in
 | Data | Storage |
 | --- | --- |
 | Chinese completion, thinking display, stats, archived-session view, session deletion, session multi-select, service monitor, and the three cards' open state | Browser localStorage: `deepseek-harness-zh_pro:enhancements` |
-| Agent-role localization, tool-description localization, injected-context localization, prompt toggle/text/target, and auto-archive days | DSH `settings.yaml`, namespace `dsh-zh` |
+| Agent-role localization, tool-description localization, injected-context localization, web search, prompt toggle/text/target, and auto-archive days | DSH `settings.yaml`, namespace `dsh-zh` |
 
-The plugin registers no model tools and uploads no data. Except for explicitly enabled
-prompt injection, agent-role localization, tool-description localization, and
-injected-context localization, no feature modifies model requests; injected-context
-localization replaces DSH-injected official English text before it enters session history
-(closing the toggle restores English for new injections, while already-written history stays
-as official behavior). Chinese completion only applies to the Chinese interface; the
+The plugin uploads no data; its only model-tool registration is the `web_search` tool shell
+of web search (installed and removed with the toggle, see the feature table). Except for web
+search and explicitly enabled prompt injection, agent-role localization, tool-description
+localization, and injected-context localization, no feature modifies model requests;
+injected-context localization replaces DSH-injected official English text before it enters
+session history (closing the toggle restores English for new injections, while already-written
+history stays as official behavior). When web search is on, search queries are sent to the
+selected backend: to Zhipu when that plugin is installed and available (handled by that
+plugin), otherwise to the public DuckDuckGo/Bing page endpoints; this plugin carries no
+credentials and stores no queries or results.
+Chinese completion only applies to the Chinese interface; the
 other interface enhancements also apply to the English interface. Each model-request
 feature is controlled solely by its own toggle.
 

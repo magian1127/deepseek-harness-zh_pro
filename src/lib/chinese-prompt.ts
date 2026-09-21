@@ -18,6 +18,7 @@ import {
 } from './constants.js'
 import { loadSchemastery } from './schemastery.js'
 import { ensureAssemblePatch, registerAssembleRewriter } from './assemble-patch.js'
+import { applyWebSearchSelection } from './web-search.js'
 import { log, warn } from './util.js'
 import type { HostContext } from './types.js'
 
@@ -25,7 +26,8 @@ import type { HostContext } from './types.js'
 // model-locale.js 通过 getModelState() 读取。ready 表示 settings 注册成功；
 // settings 服务不可用时保持 false，model-locale 随之停用。
 // zhContextInject（上下文注入中文化，context-locale.ts 消费）同样经由本状态读取。
-const modelState = { ready: false, zhAgentPrompt: false, zhToolDesc: false, zhContextInject: false }
+// zhPrompt 与 zhWebSearch 另被 agent-search-tool.js 消费（壳描述语言 / 壳开关）。
+const modelState = { ready: false, zhPrompt: false, zhAgentPrompt: false, zhToolDesc: false, zhContextInject: false, zhWebSearch: true }
 
 /**
  * 读取「模型请求中文化」的共享开关状态（只读）。该状态随本命名空间的
@@ -35,7 +37,7 @@ export function getModelState() {
   return modelState
 }
 
-export function installChinesePrompt(ctx: HostContext): void {
+export function installChinesePrompt(ctx: HostContext, hooks: { onModelStateChanged?: () => void } = {}): void {
   const settings = ctx.get('settings')
   if (settings === undefined || settings === null || typeof settings.register !== 'function') {
     warn('settings 服务不可用，中文优先提示功能未启用')
@@ -59,22 +61,41 @@ export function installChinesePrompt(ctx: HostContext): void {
       zhAgentPrompt: z.boolean().default(false),
         zhToolDesc: z.boolean().default(false),
         zhContextInject: z.boolean().default(false),
+        zhWebSearch: z.boolean().default(true),
     }), { applies: 'live' })
     const current = scope.get()
     state.enabled = current.zhPrompt === true
     if (typeof current.zhPromptText === 'string') state.text = current.zhPromptText
     state.target = normalizeTarget(current.zhPromptTarget)
     modelState.ready = true
+    modelState.zhPrompt = current.zhPrompt === true
     modelState.zhAgentPrompt = current.zhAgentPrompt === true
       modelState.zhToolDesc = current.zhToolDesc === true
       modelState.zhContextInject = current.zhContextInject === true
+      modelState.zhWebSearch = current.zhWebSearch !== false
+    // 开关初始值同步到官方 web_search 后端选择（provider 若尚未就绪则其
+    // 注册时会自行按当前状态接管，此处 no-op 安全）。
+    applyWebSearchSelection(ctx, modelState.zhWebSearch)
     const unwatchSettings = scope.watch(function (next) {
       state.enabled = next.zhPrompt === true
       if (typeof next.zhPromptText === 'string') state.text = next.zhPromptText
       state.target = normalizeTarget(next.zhPromptTarget)
+      const prevWebSearch = modelState.zhWebSearch
+      const prevPrompt = modelState.zhPrompt
+      modelState.zhPrompt = next.zhPrompt === true
       modelState.zhAgentPrompt = next.zhAgentPrompt === true
-        modelState.zhToolDesc = next.zhToolDesc === true
-        modelState.zhContextInject = next.zhContextInject === true
+      modelState.zhToolDesc = next.zhToolDesc === true
+      modelState.zhContextInject = next.zhContextInject === true
+      modelState.zhWebSearch = next.zhWebSearch !== false
+      // 网络搜索开关实时接管/恢复官方后端选择（无需重启）。
+      if (prevWebSearch !== modelState.zhWebSearch) applyWebSearchSelection(ctx, modelState.zhWebSearch)
+      // zhWebSearch / zhPrompt 变化影响 agent 作用域 web_search 工具壳
+      //（壳开关 / 描述语言），通知装配方收敛（未装配时为 no-op）。
+      if ((prevWebSearch !== modelState.zhWebSearch || prevPrompt !== modelState.zhPrompt) && typeof hooks.onModelStateChanged === 'function') {
+        try { hooks.onModelStateChanged() } catch (error) {
+          warn(`web_search 工具壳联动失败: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
     })
     ctx.effect(function () { return unwatchSettings }, 'dsh-zh: prompt settings watch')
 

@@ -39,16 +39,18 @@
  */
 import { existsSync, readFileSync, unwatchFile, watchFile } from 'node:fs'
 import { PKG, removeManagedRow } from '../bin/dsh-zh.mjs'
-import { BUNDLE_ROW_ID, HOT_ROW_ID, LIVE_ROW_ID } from './constants.js'
-import { installChinesePrompt } from './chinese-prompt.js'
+import { BUNDLE_ROW_ID, HOT_ROW_ID, LIVE_ROW_ID, ZHIPU_PACKAGE_NAME } from './constants.js'
+import { installChinesePrompt, getModelState } from './chinese-prompt.js'
 import { installModelLocale } from './model-locale.js'
 import { installContextLocale } from './context-locale.js'
 import {
   cleanHotDir, disposeLiveEntries, hotMount, hotUnmount, liveEntryNames,
   readSnapshot, snapshotNames,
 } from './hot-mount.js'
-import { installSelfHotReload } from './hot-reload.js'
+import { installSelfHotReload, installUnloadCacheEviction } from './hot-reload.js'
 import { installSessionDeleteRoute } from './session-delete.js'
+import { installWebSearchProvider } from './web-search.js'
+import { installAgentSearchTool, type AgentSearchToolHandle } from './agent-search-tool.js'
 import { argvProfile, localProfileDir, log, manifestPath, warn } from './util.js'
 import type { HostContext, PackageSnapshot } from './types.js'
 
@@ -58,6 +60,9 @@ export const inject = ['loader', 'settings', 'systemPrompt']
 let lastSnapshot: PackageSnapshot | null = null
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let migrating = false
+// 「web_search 工具壳」收敛句柄：apply 装配，供 reconcile（智谱热装卸）与
+// installWebSearchRetry（web 服务晚就绪）触发重新评估。
+let agentSearchToolHandle: AgentSearchToolHandle | undefined
 
 /** 本插件被移除：清掉 profile patch 里的挂载行（DSH 会热卸载），并移除所有自身 Loader 条目。 */
 async function selfCleanup(ctx: HostContext) {
@@ -97,6 +102,11 @@ async function reconcile(ctx: HostContext) {
   for (const packageName of added) {
     if (liveEntryNames(ctx).has(packageName)) continue
     await hotMount(ctx, profileDir, packageName)
+  }
+  // 智谱插件热挂载/移除会改变 web_search 工具壳的让位判定（智谱在 → 让位，
+  // 智谱移除 → 本插件补壳），重新评估已存活 Agent 的壳状态。
+  if (removed.includes(ZHIPU_PACKAGE_NAME) || added.includes(ZHIPU_PACKAGE_NAME)) {
+    agentSearchToolHandle?.refresh()
   }
 }
 
@@ -189,13 +199,34 @@ async function migrateFromHotRow(ctx: HostContext): Promise<void> {
 
 export function apply(ctx: HostContext): void {
   void migrateFromHotRow(ctx)
-  if (ownsPromptRegistration(ctx)) installChinesePrompt(ctx)
+  // 「web_search 工具壳」：agent 作用域补壳（探测让位），与 settings 注册同
+  // 门槛避免双实例重复注册；须先于 installChinesePrompt 装配（其 settings
+  // watch 经 onModelStateChanged 回调收敛壳状态）。
+  if (ownsPromptRegistration(ctx)) {
+    agentSearchToolHandle = installAgentSearchTool(ctx, {
+      isEnabled: () => getModelState().zhWebSearch,
+      useZh: () => getModelState().zhPrompt,
+    }) ?? undefined
+  }
+  if (ownsPromptRegistration(ctx)) installChinesePrompt(ctx, {
+    onModelStateChanged: () => agentSearchToolHandle?.refresh(),
+  })
   if (ownsPromptRegistration(ctx)) installModelLocale(ctx)
   if (ownsPromptRegistration(ctx)) installContextLocale(ctx)
   installSelfHotReload(ctx)
+  // 自持卸载清理：Fiber dispose 时按包内目录前缀逐出本包的 ESM 模块缓存，
+  // 使后续 set_plugin 往返 / patch reload / 重启能从磁盘求值当前构建
+  // （首次引入本能力需重启一次让这段代码进入长跑进程，见 docs/runtime-hmr.md）。
+  installUnloadCacheEviction(ctx)
   // 「删除会话（回收站）」：与 settings 注册同门槛，避免热迁移窗口双实例
   // 重复注册路由；服务未就绪时由内部重试等待（见 session-delete.js）。
   if (ownsPromptRegistration(ctx)) installSessionDeleteRoute(ctx, () => resolveSessionDeleteDeps(ctx))
+  // 「网络搜索」：注册 dsh-zh-web 组合 provider（智谱优先 + DuckDuckGo 回退）。
+  // 与 settings 注册同门槛避免双实例重复注册；web 服务晚于本插件就绪时由
+  // internal/service 事件重试（与 session-delete 同款模式）。开关状态经
+  // getModelState() 读取（dsh-zh 命名空间 zhWebSearch，默认开）。
+  if (ownsPromptRegistration(ctx)) installWebSearchRetry(ctx)
+
   // 「服务监控」无独立后台任务：主机只在网页拉取快照时即时扫描一次
   // （netstat），节奏完全由面板刷新间隔（serviceMonitorIntervalSec）驱动。
   ctx.effect(() => {
@@ -247,4 +278,30 @@ function resolveSessionDeleteDeps(ctx: HostContext) {
     workspaceRegistry: registry === undefined || registry === null ? undefined : registry,
     storageDomain: storage === undefined || storage === null ? undefined : storage,
   }
+}
+
+// 「网络搜索」：web 服务可能在本文之后才挂载完成，注册失败/缺席时监听
+// internal/service 事件重试（session-delete 同款模式）；成功注册或本插件
+// 卸载后停止重试。Fiber 卸载时 provider 由 web seam 的 effect 自行释放
+// （registerProvider 内部 ctx.effect 绑定调用方 fiber）。
+function installWebSearchRetry(ctx: HostContext): void {
+  const install = function (): boolean {
+    const web = ctx.get('web')
+    if (web === undefined || web === null) return false
+    const dispose = installWebSearchProvider(ctx, { isEnabled: () => getModelState().zhWebSearch })
+    // provider 注册成功后补一次工具壳评估：agent 枚举早于 web 服务就绪时，
+    // 壳因 scoped web 缺席未装上，此时补装。
+    if (dispose !== undefined) agentSearchToolHandle?.refresh()
+    return dispose !== undefined
+  }
+  if (install()) return
+  const retry = function (): void {
+    if (install() && typeof ctx.off === 'function') ctx.off('internal/service', retry)
+  }
+  ctx.on('internal/service', retry)
+  ctx.effect(function () {
+    return function () {
+      if (typeof ctx.off === 'function') ctx.off('internal/service', retry)
+    }
+  }, 'dsh-zh: web search provider retry')
 }

@@ -7,7 +7,9 @@
 
 - 支持 DeepSeek Harness ≥ 0.1.2-rc.1。完整浏览器增强运行在 `web`；一次性无头任务使用 `headless` profile，需单独安装本 bundle。
 - profile 共用 `${DSH_HOME:-~/.dsh}/settings.yaml`，所以无头模式遵循 Web 已保存的 `dsh-zh` Host 设置；它没有 Client，浏览器增强不进入无头模式。
-- 无头模式没有额外日志约束；本插件只处理自己的提示注入与 DSH 官方工具/上下文。
+- 无头模式没有额外日志约束；本插件处理自己的提示注入、DSH 官方工具/上下文，以及
+  「网络搜索」的后端接管与 agent 作用域工具壳（headless profile 需单独安装本 bundle，
+  详见「网络搜索」章）。
 - 本版本词典与 locale 契约按 DSH 0.1.2-rc.1 对齐，更旧的 DSH 上中文补全部分条目会失配。
 - Node.js 要求：`^22.19.0 || >=24.0.0`。
 - 中文补全只在 Web 中文界面生效；其余 Web 界面增强在中文和英文界面都生效，只受各自开关控制，文案随界面语言切换。
@@ -25,6 +27,7 @@
 | 平铺 | 代理角色提示中文化 `zhAgentPrompt` | 关 | `settings.yaml` | 新会话首次模型请求时锁定 |
 | 平铺 | 工具说明中文化 `zhToolDesc` | 关 | `settings.yaml` | 新会话首次模型请求时锁定 |
 | 平铺 | 上下文注入中文化 `zhContextInject` | 关 | `settings.yaml` | 新会话首次模型请求时锁定；替换注入会话历史的官方英文文本 |
+| 平铺 | 网络搜索 `zhWebSearch` | 开 | `settings.yaml` | 实时生效；详见「网络搜索」章 |
 | 平铺 | 提示词注入 `zhPrompt` / `zhPromptText` / `zhPromptTarget` | 关；文本为“思考过程和回复始终使用中文输出”；目标为 `system` | `settings.yaml` | 后续模型请求；目标可改为 `user` |
 | 对话样式相关 | 自动展开最新思考 `thinkingAuto` | 开 | localStorage | 中文/英文界面 |
 | 对话样式相关 | 默认展开行数与方向 `thinkMaxLines` / `thinkMaxLinesFrom` | 20；`latest` | localStorage | 0–200；方向可选 `latest` / `earliest` |
@@ -125,7 +128,8 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
     工具名与参数名保持不变。**只覆盖 DSH 系统自己的工具**：段落与工具描述都带官方
     特征片段守卫（`TOOL_MATCH` / `TOOL_FLAVOR_DESC_ZH` / `match`）；第三方插件在
     Agent 作用域注册的同名阴影——hashline 替换的 `tool:read`/`tool:edit`、智谱替换的
-    `tool:web_search`——描述的是另一套机制、不含官方特征片段，因此保持原样，
+    `tool:web_search`、以及本插件网络搜索功能注册的 `web_search` 工具壳与
+    `tool:web_search` section——描述的是另一套机制、不含官方特征片段，因此保持原样，
     不会被按名盖回内置旧版。同一工具名的多种官方描述逐 flavor 翻译：极简模式的
     persistent `pwsh`/`bash`（包默认与 preset 覆盖两套文本）、`str_replace_editor`
     默认描述、PTC 模式 `run_code` 的 TypeScript/Python 两语言描述。
@@ -184,6 +188,64 @@ supersedes …` 及其清空变体）由 agent-loop 硬编码拼接，官方渲�
 回到当时的开关状态）。实现方式：pre-step 监听以 `prepend: true` 注册在监听链头部
 （先执行，`next()` 返回的 decision 已包含核心注入器的消息，翻译后返回）+ 共享
 assemble 管线改写 contexts 正文；任何改写失败只告警一次并沿用原文，不阻断模型请求。
+
+## 网络搜索
+
+由「网络搜索」开关（`zhWebSearch`，`settings.yaml` 命名空间 `dsh-zh`，**默认开**，
+实时生效）控制。开启后本插件为 DSH 提供对话中的网络搜索能力，包含两个层面，
+均不引入任何第三方运行时依赖（只用 Node 内置 fetch）：
+
+**1. 搜索后端接管（web seam provider）**：向官方 web 服务注册组合 provider
+`dsh-zh-web`，并把官方 web 实例的后端选择（`searchProviderId`）切到它；关闭开关
+或卸载插件时恢复接管前的原值（原值可能是官方 `deepseek-official`，也可能是智谱
+`zhipu-web-search-prime`，按安装环境如实恢复，非硬编码）。组合 provider 每次搜索
+按以下级联挑选后端：
+
+- **智谱优先**：智谱插件（`deepseek-harness-zhipu_plan_tools`，provider id
+  `zhipu-web-search-prime`）已注册且可用时优先走智谱（两插件共存时的联动路径，
+  顺序无关、搜索时动态判定）；
+- **智谱失败自动转免费后端**：智谱搜索失败——含敏感内容过滤
+  （`ZHIPU_CONTENT_FILTERED`）与网络/凭据失败——对同一查询自动转免费后端重试；
+  用户主动中止（AbortError）不降级、直接上抛；
+- **免费后端级联**：DuckDuckGo html 端点 POST → lite 端点 → Bing HTML 结果页。
+  DDG 对纯 Node fetch 有 TLS 指纹反爬（HTTP 202 anomaly 页），确认限流后直接转
+  Bing（解析 `li.b_algo` 直链与摘要，过滤 `bing.com/ck/` 广告）；免费后端零 API
+  Key、零配置。官方内置 deepseek-official provider 永远排最后（它消耗完整模型
+  轮次）。
+
+**2. agent 作用域 `web_search` 工具壳**：Web profile 的官方 `dsh-tool-web` 行被
+禁用、agent preset 默认不暴露 web_search 时，仅切后端模型看不到工具。本插件在
+每个**非极简** Agent 的自身作用域注册同名 `web_search` 工具（参数为 1–4 条
+`queries` 数组并合并去重结果）与 `tool:web_search` 指引 section（order 110），
+结果渲染官方 `card:'web'`/`kind:'search'` 搜索卡片，单次调用超时 45 秒；工具的
+execute 走官方 web seam，因此自动获得上述后端级联与智谱联动。壳的描述与指引
+文本随「提示词注入」开关（`zhPrompt`）选择中英文，实时切换。
+
+**职责让位（与智谱插件的关系）**——智谱壳优先、zh_pro 补缺，零侵入不改智谱代码：
+
+- 智谱插件包行存在于 Loader（挂载中或已挂载）→ 智谱壳是 `web_search` 工具壳的
+  唯一 owner，本插件不注册壳、撤下已注册的壳，只保留后端接管（智谱壳的 execute
+  同样走 web seam，联动对智谱壳同样生效）；
+- Agent 继承视图里 `web_search` 已被占用：官方定义（含官方特征片段）→ 让位
+  （官方壳走 web seam，联动已由后端接管达成）；智谱定义 → 让位；其它未知第三方
+  定义 → 保守让位，绝不覆盖他人注册；本插件自己的壳 → 幂等跳过；
+- 极简模式（minimal 预设）是双工具组合承诺，壳与智谱壳同样不注入其中；
+- 智谱单独安装 → 智谱壳工作；zh_pro 单独安装 → 本插件补壳；两插件共存 →
+  智谱壳工作、zh_pro 只做后端接管。职责切换在智谱热挂载/移除（profile manifest
+  监听）、开关或语言变化（settings watch）、web 服务就绪与 agent 生命周期事件
+  （`agent/created` / `agent/disposed` / `agent-preset/selected`）时收敛。
+
+**已知限制**：
+
+- 智谱在设置中翻转自身搜索开关后，已存活 Agent 的壳职责要等到下一次收敛时机
+  （新会话、切换 preset、开关/语言变化或智谱热装卸）才重新评估；期间模型看到的
+  壳可能有短暂滞后，功能不受影响（两种壳的 execute 都走 web seam，后端级联一致）。
+- zh_pro 先于智谱热挂载进长跑进程的窗口内，智谱壳首次注册会与本插件已注册的壳
+  撞名，智谱以错误级日志报告「注册冲突重试耗尽」后自愈（下次 agent 事件时本
+  插件让位、智谱壳正常落位）；冷启动（两插件都在 profile bundles）无此窗口。
+- DDG 免费后端受反爬限流影响，实际可用性依赖 Bing 级联；两者都是公开 HTML
+  结果页解析，结果质量与条数不及 API 类后端（每条查询向上游取 10 条，4 条查询
+  合并去重后最多 40 条来源）。
 
 ## 提示词注入
 
@@ -434,13 +496,18 @@ workspaceRegistry 尚未公开 unarchive 或事务写 API，本插件只持久�
 
 ## 数据与信任边界
 
-- 不注册模型工具，不上传数据。
+- 不上传数据。模型工具注册仅限「网络搜索」的 agent 作用域 `web_search` 工具壳
+  （经用户明确要求加入，随 `zhWebSearch` 开关装卸，注册面在 Agent own scope，
+  卸载可逆）；除该工具壳外不注册任何模型工具。
 - 除显式开启的提示词注入、代理角色提示中文化、工具说明中文化与上下文注入中文化外，
     不修改模型请求；前两者只改写发往模型的 system prompt 与工具说明，不写会话历史；
     上下文注入中文化替换 DSH 注入会话历史的官方英文文本（仅注入框架文本，用户消息、
     指令文件正文、skill 描述与第三方插件消息不动），关闭后新注入恢复英文，已写入会话的
     部分按官方行为保留。
   后两者只改写发往模型的 system prompt 与工具说明，不写会话历史。
+- 网络搜索开关开启时，搜索查询会被发送到所选后端：智谱插件在场且可用时发往智谱
+  （由智谱插件处理其凭据与回退），否则发往公开的 DuckDuckGo/Bing HTML 端点；
+  本插件不携带任何凭据，也不存储查询与结果。
 - 本地界面设置只写浏览器 localStorage。
 - 提示词设置只经 DSH 官方 settings 服务写入 `settings.yaml`。
 - 默认关闭提示词注入，关闭时没有额外 token 消耗。

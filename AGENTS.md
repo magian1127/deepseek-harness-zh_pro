@@ -34,6 +34,7 @@
 | `src/verify-pairs.cts` | 客户端词典、DOM、设置和生命周期回归源码；构建后生成被忽略的 `verify-pairs.cjs` |
 | `src/verify-archive.cts` | 自动归档、会话恢复与跨服务生命周期回归源码；构建后生成被忽略的 `verify-archive.cjs` |
 | `src/verify-cli.mts` | CLI、Windows shim、主机提示词和 disposer 回归源码；构建后生成被忽略的 `verify-cli.mjs` |
+| `verify-websearch.cjs` | 网络搜索回归脚本（provider 选择/解析/级联 + agent 工具壳 + esm-cache 逐出）；无 `.cts` 源的手写独立脚本，不由 `npm run build` 生成，`npm test` 不包含，按下方验证命令单独运行 |
 
 共享运行时真值规则见 [`../docs/runtime-hmr.md`](../docs/runtime-hmr.md)。核对 dsh-zh 上游词典或硬编码文案时，应读取当前 profile 实际加载的包，而不是本仓库 `node_modules`。
 
@@ -58,8 +59,11 @@
    全显示、自动展开思考、默认展开行数、自动归档、会话删除按钮、会话多选等）在
    中文和英文界面都生效，按当前界面语言显示对应文案。
    修改任何用户可见行为时同步更新 `README.md`、`README.en.md` 和 `docs/behavior.md`。
-6. 数据边界：不注册模型工具、不上传数据。允许的持久化仅限行为契约中列出的
-   localStorage 和 settings 命名空间 `dsh-zh`。
+6. 数据边界：不上传数据；模型工具注册仅限「网络搜索」的 agent 作用域
+   `web_search` 工具壳（用户明确要求的例外，随 `zhWebSearch` 开关装卸、
+   Agent own scope、卸载可逆，见 `docs/behavior.md`「网络搜索」章），除此之外
+   不注册模型工具。允许的持久化仅限行为契约中列出的 localStorage 和
+   settings 命名空间 `dsh-zh`。
 7. 术语修改优先改 `TERMS`（`data/terms.ts`）——它是部分翻译（`ZH_PARTIAL`）的
    术语唯一来源；整句覆盖（`ZH`）与字面对在各自条目内维护，改动时同样全局搜索
    旧名和新名，不能只依赖 `node --check`。

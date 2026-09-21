@@ -302,6 +302,12 @@ const ZhSettingsSection = function (props) {
               void boundPromptScope.set('zhContextInject', !(promptReady && promptSnapshot.value.zhContextInject === true))
             }
           }, boundPromptScope === null, t('zhContextInject'))),
+        row('zhWebSearch', t('zhWebSearch'), t('zhWebSearchDesc'),
+          toggle(promptReady && promptSnapshot.value.zhWebSearch !== false, function () {
+            if (boundPromptScope !== null && promptReady === true) {
+              void boundPromptScope.set('zhWebSearch', !(promptReady && promptSnapshot.value.zhWebSearch !== false))
+            }
+          }, boundPromptScope === null, t('zhWebSearch'))),
       // ---- 提示词注入：列布局复杂行，hairline 分隔 ----
       React.createElement('div', {
         key: 'zhPrompt',
