@@ -45,7 +45,8 @@ export const ZH_CONTEXT_INJECT_KEY = 'zhContextInject'
 // dsh-zh 命名空间开关：开启时本插件的 dsh-zh-web 搜索 provider 可用，
 // web seam 的 resolveProvider 在没有更明确配置时按「唯一可用 provider」选中它
 // ——即注册即接管（见 web-search.ts 与 docs/behavior.md「网络搜索」章）。
-// 默认开启：DuckDuckGo 后端零 Key 零配置；关闭后 web seam 落回官方默认。
+// 默认开启：免 Key 引擎零配置（Tavily 为可选，配 TAVILY_API_KEY 才启用）；
+// 关闭后 web seam 落回官方默认。
 export const ZH_WEB_SEARCH_KEY = 'zhWebSearch'
 
 // 智谱插件 npm 包名（其 Loader 行的 name 恒为包名，行 id 随挂载方式变化）。

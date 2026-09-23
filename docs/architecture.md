@@ -18,15 +18,22 @@
 | `cordis.patch.yml` | bundle 配置层 | 声明持久挂载行 `dsh-zh` |
 | `package.json` | npm/DSH 元数据 | 导出、客户端依赖图、bundle patch 和发布文件 |
 
-浏览器与主机不通过自定义 RPC 传递设置。客户端使用 DSH 官方 `settingsScope` 读写命名空间
-`dsh-zh`，主机使用 `settings.register` 和 `scope.watch` 消费同一份数据。
-无头模式（headless）只加载 Host 半边并复用同一 settings。
+浏览器与主机不通过自定义 RPC 传递设置。客户端使用 DSH 官方 `configForms` 按入口 id `dsh-zh`
+（= profile 行 id）读写行 config，主机导出全 volatile 的插件 `Config` 并监听
+`loader/volatile-update` 消费同一份数据（DSH 0.1.7 起；旧 `settingsScope`/`settings.register`
+已退役）。
+无头模式（headless）只加载 Host 半边并复用同一 Config。
 
-「删除会话（回收站）」与「服务监控」共用自定义 HTTP 通道 `/dsh-zh/api`：前者浏览器
+「删除会话（回收站）」「服务监控」「搜索凭据」与运行态诊断共用自定义 HTTP 通道
+`/dsh-zh/api`：前者浏览器
 POST 请求会话删除（路由由主机注册到 DSH `webServer`，仅接受回环主机 + 同源请求）；
 后者浏览器 POST `/dsh-zh/api/service-monitor` 轮询快照并探活自定义监控项、
 POST `/dsh-zh/api/service-monitor/resolve` 按需解析监听进程归属、
-POST `/dsh-zh/api/service-monitor/open` 定位监听进程目录。主机没有后台定时任务：
+POST `/dsh-zh/api/service-monitor/open` 定位监听进程目录；
+`GET /dsh-zh/api/diagnostics` 回运行态版本与热重载诊断；
+`GET|POST /dsh-zh/api/search-credential` 读写设置页「网络搜索」卡片的 API Key
+（provider → 凭据 ref 走**服务端白名单**，客户端不能指定任意 ref 名；响应只回脱敏
+提示，明文只写进凭据文件）。主机没有后台定时任务：
 扫描结果带时间戳缓存，拉取时请求携带网页设置的刷新间隔，超过一个间隔才重扫
 （并发拉取共享同一次扫描；基线 = 第一次扫描时的监听集合），进程归属由悬停触发
 的 resolve 按需解析；目录路径由主机进程枚举得出，不接受请求传入。
@@ -83,7 +90,7 @@ CLI 和官方 remove 都会删除依赖声明。主机监督器发现本包被�
 | 设置 | 数据流 |
 | --- | --- |
 | 中文补全、思考显示、统计、归档视图、会话删除/多选、服务监控、卡片展开态 | 设置页 → 浏览器 store → localStorage → DOM/locale/轮询效果 |
-| 代理角色/工具说明/上下文注入中文化、提示词开关/文本/目标、自动归档天数 | 设置页 → `settingsScope` → `settings.yaml` → 主机 `scope.watch` |
+| 代理角色/工具说明/上下文注入中文化、提示词开关/文本/目标、自动归档天数 | 设置页 → `configForms` → 行 config（入口 id `dsh-zh`）→ 主机 volatile 变更 |
 | `system` 注入 | 主机包装 `systemPrompt.assemble`，修改最终 assembly sections |
 | `user` 注入 | 主机在 `agent/pre-step` 插入一条 notice `user/message` |
 
@@ -92,7 +99,7 @@ CLI 和官方 remove 都会删除依赖声明。主机监督器发现本包被�
 ## 更新与热重载
 
 dsh-zh 的 Host 自监视目标是 `lib/index.js` 与 `bin/dsh-zh.mjs`，历史上以 150ms 防抖驱动
-`partialReload`——**该通道在当前 DSH（0.1.6-alpha.2）已失效**：`hmr.registerConfig` /
+`partialReload`——**该通道在当前 DSH（0.1.7-alpha.2）已失效**：`hmr.registerConfig` /
 `partialReload` 已从服务移除，自监视只会打印「缺少 registerConfig/partialReload」并放弃。
 当前把 `lib/` 改动装入长跑进程的可行路径与限制见
 [`troubleshooting.md`](troubleshooting.md)「主机文件修改后没有热重载」。

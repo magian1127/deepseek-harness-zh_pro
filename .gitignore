@@ -375,3 +375,6 @@ MigrationBackup/
 FodyWeavers.xsd
 
 .mimosa
+
+# 代理临时产物（工作区规则）
+/temp/

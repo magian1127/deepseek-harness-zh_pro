@@ -23,9 +23,11 @@ function registerSettingsSection(ctx) {
   }
 }
 
-// 装配：清理提示词防抖定时器 + 绑定「中文优先提示」开关到主机 settings
-// 命名空间（默认关闭）。用可选注入而不是 exports.inject：settingsScope
-// 缺失时仅该开关不可用，中文补全等核心功能不受影响。
+// 装配：清理提示词防抖定时器 + 绑定「中文优先提示」开关到主机插件行
+// config（DSH 0.1.7 起经 configForms 按入口 id 取 ConfigForm，快照/订阅/
+// set 面与旧 settingsScope 同构；默认关闭）。用可选注入而不是
+// exports.inject：configForms 缺失时仅该开关不可用，中文补全等核心功能
+// 不受影响。
 function bindPromptScope(ctx) {
   ctx.effect(function () {
     return function () {
@@ -36,12 +38,12 @@ function bindPromptScope(ctx) {
     }
   }, 'dsh-zh: prompt text debounce')
   if (typeof ctx.inject === 'function') {
-    ctx.inject(['settingsScope'], function (settingsCtx) {
-      const binder = settingsCtx === null ? null : settingsCtx.get('settingsScope')
-      if (binder === undefined || binder === null || typeof binder.bind !== 'function') return
-      const scope = binder.bind({ namespace: PROMPT_SETTINGS_NS })
+    ctx.inject(['configForms'], function (configCtx) {
+      const configForms = configCtx === null ? null : configCtx.get('configForms')
+      if (configForms === undefined || configForms === null || typeof configForms.get !== 'function') return
+      const scope = configForms.get(PROMPT_SETTINGS_NS)
       zhPromptStore._set(scope)
-      settingsCtx.effect(function () {
+      configCtx.effect(function () {
         return function () {
           if (zhPromptStore.getSnapshot() !== null && zhPromptStore.getSnapshot().scope === scope) zhPromptStore._set(null)
         }

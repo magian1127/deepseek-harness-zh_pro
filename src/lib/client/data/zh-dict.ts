@@ -8,6 +8,16 @@
 //    TurnUsagePanel，消息键 message.* 保留），对应覆盖删除；
 //  - 斜杠命令描述由 ui-commands command 命名空间本地化（6 条），
 //    DOM 文本层覆盖已失效，迁移为键级整句覆盖（保留用户自定义叫法）。
+//
+// DSH 0.1.7-alpha.2 对齐（2026-09-23 以部署版 `dsh-client-ui-*/src/client/locales.ts`
+// 逐键复验，脚本见 temp/find-missing-translations.mjs）：
+//  - 上游自带完整 zh 词典（42 个文件、约 1450 键），本插件的职责是**修 zh 值里的
+//    英文残留**，不再需要「把英文界面译成中文」；
+//  - settings.plugins 命名空间只剩 5 个干净键 → 该块 10 条补丁全部删除（见下方注释）；
+//  - 新增 conversation / sidebarTerminal 两个命名空间的残留修正，
+//    并补 settings.pluginInventory.presetSubtitle、settings.agentPreset.creatorDraft、
+//    chat.stats.dialog.speed；
+//  - 「Auto review」按上游权限预设的 zh 写法保留英文（既定产品术语），不译。
 const ZH = {
   chat: {
     // 重试倒计时的 lookup 兜底；正常路径在 translate 里整句拼装。
@@ -30,10 +40,13 @@ const ZH = {
     'panel.runningCount': '{count} 个运行中',
   },
     'settings.agentPreset': {
-      // 用户自定义叫法：上游官方名为「PTC 模式」，按用户要求改称「程序模式」；
-      // 描述中的「PTC 模式 SDK」同步译作「程序模式开发包」。整句覆盖，不随上游措辞变化。
+      // 用户自定义叫法：上游官方名为「PTC 模式」，按用户要求改称「程序模式」。
+      // presetPtcDescription 的整句覆盖已**删除**（2026-09-23，0.1.7 复验）：上游把
+      // 该描述整段重写为「包含标准模式的所有能力，更适合批量调用工具，并对结果进行
+      // 筛选、整理、去重、统计或汇总的任务。」——新句子里既没有 PTC 也没有 SDK，
+      // 原先那句「…通过程序模式开发包呈现工具…」是**基于旧措辞**的，继续覆盖会让界面
+      // 显示过期内容。整句覆盖的前提是「与上游同义、只改叫法」，上游改义后必须撤掉。
       presetPtcName: '程序模式',
-      presetPtcDescription: '具备标准模式的全部能力，并通过程序模式开发包呈现工具，让模型用一个 TypeScript 程序组合多步操作。',
     },
   trajectory: {
     // 0.1.5 轨迹视图完全词典化（trajectory 命名空间）。上游 zh 值仍夹带
@@ -70,13 +83,17 @@ const ZH_PARTIAL = {
     // 上游 0.1.2-alpha.2 新增的回答末尾用量/耗时统计（TurnUsagePanel）：
     // 模板仍夹带英文单元（{count} tok / 首 token 用时）。
     'message.turnUsage.count': ['tok'],
-    'message.turnTime.ttft': ['token'],
+    // 'message.turnTime.ttft' 已删除（2026-09-23，0.1.7 复验）：该键在部署版
+    // chat 词典里**已不存在**（实测 `--dump chat:message.turnTime.ttft` → 不存在），
+    // 补丁一直是空转。
     // 上游新增的轮次过程摘要行：'{count} 个 subagent'。
     'message.turnProcess.subagents.one': ['subagent'],
     'message.turnProcess.subagents.other': ['subagent'],
     // 0.1.5 StatsPills 统计对话框（stats.dialog.*）：zh 值仍夹带英文。
     'stats.dialog.usageTitle': [['Token', '词元']],
     'stats.dialog.ttft': ['token'],
+    // 0.1.7 复验新增：速度行 zh 为「输出速度（TPS）」，与同组的 tok/tok-s 术语对齐。
+    'stats.dialog.speed': [['TPS', '词元/秒']],
   },
   trajectory: {
     // 0.1.5 轨迹视图词典化后 zh 值仍夹带英文残留，术语层修正：
@@ -105,6 +122,8 @@ const ZH_PARTIAL = {
     modelId: ['modelId'],
     modelNamePlaceholder: ['modelId'],
     maxTokens: ['token'],
+    // modelMaxTokens 已删除（2026-09-23，0.1.7 复验）：部署版只剩
+    // modelMaxTokensInvalid，`modelMaxTokens` 本身已不存在，补丁空转。
     modelsEmpty: ['modelId'],
     modelIdRequired: ['modelId'],
     modelIdDuplicate: ['modelId'],
@@ -118,28 +137,24 @@ const ZH_PARTIAL = {
     onboardingTitle: ['apiKey'],
     keyRequired: ['api'],
   },
-  'settings.plugins': {
-    bashDescription: ['agent'],
-    agentLoopTitle: ['agentLabel'],
-    agentLoopDescription: ['agentLabel'],
-    webSearchApiKey: ['apiKey'],
-    // 上游 0.1.2-rc.1 新增的子代理模型选择卡：zh 模板仍夹带 Agent/Subagent。
-    subagentModelSelectionTitle: ['subagent'],
-    subagentModelSelectionDescription: ['subagent', 'agentLabel'],
-    subagentModelSelectionToggle: ['subagent', 'agentLabel'],
-    subagentModelSelectionChoose: ['subagent', 'agentLabel'],
-    subagentModelSelectionAllowed: ['agentLabel'],
-    subagentModelSelectionOff: ['subagent', 'agentLabel'],
-  },
+  // settings.plugins（内置插件设置分区）在 DSH 0.1.7 已迁移：插件配置表单搬到侧栏
+  // 插件页、由各插件 schemastery Config 自动投影，该命名空间只剩 5 个键
+  // （nav/title/intro/tabs/empty，均为干净中文）。原先的 bashDescription /
+  // agentLoopTitle / agentLoopDescription / webSearchApiKey / subagentModelSelection*
+  // 十条补丁**已实测失效**（这些键名在整个部署树里 0 处出现），全部删除。
+  // 插件页卡片标题与字段标签现为 Config 元数据（数据层），不在词典里，
+  // 由 DOM/数据层处理（见 dom-labels.ts 与 dom-enhance.js）。
   'settings.pluginInventory': {
     // 上游 0.1.2-rc.1 插件清单面板：预设切换与按会话提供说明仍夹带 Agent。
     switcherLabel: ['agentLabel'],
     presetProvidedDetail: ['agentLabel'],
+    // 0.1.7 复验新增：分组副标题「由 Agent 预设按会话组成」同样夹带 Agent。
+    presetSubtitle: ['agentLabel'],
   },
   'settings.agentPreset': {
     // 上游 0.1.2-alpha.2 起 agentPreset 词典内置大量中文，但描述仍夹带
     // 英文术语（Agent/Shell/Skills/bash/preset 等），按术语替换。
-    error: ['agentLabel'],
+    // error 已删除（2026-09-23，0.1.7 复验）：该键在部署版已不存在，补丁空转。
     seatHint: ['agentLabel'],
     headerHint: ['agentLabel'],
     nav: ['agentLabel'],
@@ -151,12 +166,14 @@ const ZH_PARTIAL = {
     // 已不含 bash / str_replace_editor 字面量，仅 Agent 术语仍生效。
     presetMinimalDescription: ['agentLabel'],
     presetCordisDescription: ['agentLabel', 'preset'],
+    // 0.1.7 复验新增：「让 Agent 帮我创建预设模式」按钮文案。
+    creatorDraft: ['agentLabel'],
   },
   plan: {
+    // chip.off.aria / chip.off.title 已删除（2026-09-23，0.1.7 复验）：部署版
+    // plan 词典只剩 chip.on.*（其 zh 值已自带「计划模式」），off 两个键不存在。
     'chip.on.aria': ['planMode'],
     'chip.on.title': ['planMode'],
-    'chip.off.aria': ['planMode'],
-    'chip.off.title': ['planMode'],
   },
   skill: {
     'row.running': ['skill'],
@@ -176,5 +193,20 @@ const ZH_PARTIAL = {
     'dialog.commandFailed': ['session'],
     // 0.1.5 上游新增的菜单项（下载 Session 日志）仍夹带英文。
     'menu.download': ['session'],
+  },
+  conversation: {
+    // 0.1.7 复验新增：工具详情表的字段名 zh 为「输入 Schema / 输出 Schema」，
+    // 与 trajectory.tab.schema 同源问题（上游把 Schema 当专有名词保留）。
+    'detail.field.inputSchema': [['Schema', '模式']],
+    'detail.field.outputSchema': [['Schema', '模式']],
+    // 注意：tool.autoReview* 的「Auto review」**不译**——上游权限预设自己的 zh
+    // 词典就写作「Auto review」（auto.label / auto.confirm.*），是既定产品术语，
+    // 本插件跟随上游，不另起中文名。
+  },
+  sidebarTerminal: {
+    // 0.1.7 复验新增：侧栏终端功能自己的词典，zh 值仍夹带 Shell（同 shell 术语）。
+    shell: ['shell'],
+    shellLoading: ['shell'],
+    shellEmpty: ['shell'],
   },
 }

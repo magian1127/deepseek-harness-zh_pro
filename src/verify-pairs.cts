@@ -7,10 +7,9 @@ const { execFileSync } = require('child_process')
 const UPSTREAM = {
   conversation: {
     'hint.goal.active': '当前目标进行中。可输入 edit 修改 / pause 暂停 / resume 继续 / clear 清除',
-    'access.confirm.title': '确认启用完全权限？',
-    'access.confirm.description': '启用完全权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
-    'access.confirm.enable': '启用完全权限',
-    'input.accessMode': '访问模式，当前：{name}',
+    // 0.1.7 复验新增：工具详情表字段名（上游 zh 把 Schema 当专有名词保留）。
+    'detail.field.inputSchema': '输入 Schema',
+    'detail.field.outputSchema': '输出 Schema',
   },
   // DSH 0.1.2：统计与消息键由 conversation 拆到 chat（ui-chat 包）。
   // DSH 0.1.5：chat.stats.* 系列键与 settings.transcript.* 已从上游移除
@@ -25,13 +24,14 @@ const UPSTREAM = {
     // 上游 0.1.2-alpha.2 新增：回答末尾用量/耗时统计（TurnUsagePanel）。
     'message.turnUsage.count': '{count} tok',
     'message.turnUsage.consumed': '用量 {total}',
-    'message.turnTime.ttft': '首 token 用时（TTFT）',
     'message.retry.status': '{label}（{retry}/{maximum}） · {seconds}s',
     'message.turnProcess.subagents.one': '{count} 个 subagent',
     'message.turnProcess.subagents.other': '{count} 个 subagent',
     // 0.1.5 StatsPills 统计对话框：zh 值仍夹带英文 Token/token。
     'stats.dialog.usageTitle': 'Token 用量',
     'stats.dialog.ttft': '首 token 平均（TTFT）',
+    // 0.1.7 复验新增：速度行的 TPS。
+    'stats.dialog.speed': '输出速度（TPS）',
   },
   // DSH 0.1.5：trajectory 视图完全词典化（ui-trajectory 包），zh 值仍夹带
   // 英文残留（token/tok/tok-s/Schema/Round），由 zh-dict.ts 的 trajectory
@@ -60,7 +60,7 @@ const UPSTREAM = {
     'toolbar.collapseCalls': '收起所有调用',
   },
   'settings.models': {
-    intro: '填入各提供方的 API 密钥即可使用其模型。',
+    intro: '填入各提供商的 API 密钥即可使用其模型。',
     deleteDescriptionWithCredential: '删除 {provider} 会移除其配置和存储的 API 密钥。',
     credentialConfigured: 'API 密钥已配置',
     credentialMissing: 'API 密钥缺失',
@@ -68,7 +68,7 @@ const UPSTREAM = {
     keyPlaceholder: '输入 API 密钥',
     keyPlaceholderNative: '输入 API 密钥，或留空使用环境认证',
     keyBlank: '请输入 API 密钥；留空则保持已存储的密钥。',
-    keyBlankNew: '请输入 API 密钥；若该提供方以其他方式鉴权，可以留空。',
+    keyBlankNew: '请输入 API 密钥；若该提供商以其他方式鉴权，可以留空。',
     keyIllegalCharacters: '该 API 密钥格式错误，请检查。',
     baseUrl: 'API 地址',
     modelId: '模型 ID',
@@ -81,36 +81,42 @@ const UPSTREAM = {
     modelMaxTokensInvalid: '最大输出 token 数必须是正数，例如 8192、64K 或 1M。',
     modelCapacityInvalid: '容量需为数字，可加 K 或 M 后缀。',
     modelDuplicate: '每个模型 ID 只能出现一次。',
-    modelMaxTokens: '最大输出 token',
     fetchNeedsBaseUrl: '请先填写 API 地址，再获取。',
     customRoute: 'Provider ID',
-    customRouteTaken: '已有提供方使用了这个 ID。',
+    customRouteTaken: '已有提供商使用了这个 ID。',
     customApi: 'API 协议',
-    customNeedsBaseUrl: '自定义提供方需要填写 API 地址。',
+    customNeedsBaseUrl: '自定义模型 API 需要填写 API 地址。',
     onboardingTitle: '添加一个 API Key 开始使用',
     keyRequired: '请输入 API 密钥后继续。',
   },
+  // DSH 0.1.7：插件配置表单从设置页搬到侧栏插件页，该命名空间只剩下面 5 个键
+  // （均为干净中文，无需本插件补丁）。旧键 bashDescription / agentLoopTitle /
+  // agentLoopDescription / webSearchApiKey 已实测从部署版消失（源码与构建产物都没有），
+  // 原先的 4 条断言随之删除——插件页卡片标题改由 Config 元数据（数据层）渲染。
   'settings.plugins': {
-    bashDescription: '限制 agent 运行的每一条命令。',
-    agentLoopTitle: 'Agent 循环',
-    agentLoopDescription: 'Agent 如何派发工具调用。',
-    webSearchApiKey: 'API Key',
+    nav: '内置插件',
+    title: '内置插件',
+    intro: '查看内置部署的插件列表',
+    tabs: '插件视图',
+    empty: '本部署没有开放任何插件视图。',
   },
   'settings.agentPreset': {
     // title 键已随上游移除（改用 nav），不再收录。
-    error: '无法加载 Agent 预设。',
-    seatHint: '即将开始的这个会话所用的 Agent 预设',
-    headerHint: '本会话运行的 Agent 预设，开始时即固定',
+    seatHint: '选择新任务使用的 Agent 预设',
+    headerHint: '本任务的 Agent 预设，在任务开始时确定',
     nav: 'Agent 预设',
-    sectionIntro: '预设即一个会话的 Agent 所运行的插件组装 —— 它的工具、提示词与能力。复制一份既有预设改成自己的，或用「创造模式」让 Agent 帮你创建。',
-    presetStandardDescription: '功能完整的编码 Agent，支持文件编辑、Shell、文件与网页检索、Skills、计划、目标、子代理和工作流。',
+    sectionIntro: '选择 Agent 的工具和工作方式。日常任务用「标准模式」，扩展 DSH 的能力用「创造模式」。',
+    presetStandardDescription: '处理代码、文件和资料，适合大多数任务。Agent 会按需使用检索、编辑和终端等工具。',
     presetPtcName: 'PTC 模式',
-    presetPtcDescription: '具备标准模式的全部能力，并通过 PTC 模式 SDK 呈现工具，让模型用一个 TypeScript 程序组合多步操作。',
+    // 0.1.7 复验：上游把该描述整段重写（新句无 PTC/SDK 字样）→ 本插件的整句覆盖已撤除，
+    // 此处同步为部署版新值，供 EXPECT 侧不再断言。
+    presetPtcDescription: '包含标准模式的所有能力，更适合批量调用工具，并对结果进行筛选、整理、去重、统计或汇总的任务。',
     // 0.1.5 minimal 描述：仅提供持久 shell 的单工具编码 Agent（上游 zh 值，
     // shell 为小写、不在本插件术语表内；Agent 术语命中）。
-    presetMinimalDescription: '仅提供持久 shell 的单工具编码 Agent。',
-    presetCordisDescription: '用于创建自定义 Agent preset：具备标准模式的全部能力，并提供运行时检查、插件实验和 preset 创作指导。',
-    creatorDraft: '用「创造模式」创作自定义预设',
+    presetMinimalDescription: 'Agent 仅使用终端工具完成任务，适合测试和对比其基础表现。',
+    presetCordisDescription: '用对话定制 DSH：让 Agent 编写插件，添加新功能或界面；也能组合工具和提示词，创建自己的模式。',
+    // 0.1.7 复验：上游改了值（旧值「用「创造模式」创作自定义预设」），新值夹带 Agent。
+    creatorDraft: '让 Agent 帮我创建预设模式',
   },
   'settings.permission': {
     // 上游 0.1.2-alpha.2 已本地化为完全权限；保留字典供核对同一自本地化后的值。
@@ -118,16 +124,9 @@ const UPSTREAM = {
     'confirm.description': '启用完全权限后，新会话将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任后续任务时使用。',
     'confirm.enable': '启用完全权限',
   },
-  'permission.access': {
-    'confirm.title': '确认启用完全权限？',
-    'confirm.description': '启用完全权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
-    'confirm.enable': '启用完全权限',
-  },
   plan: {
-    'chip.on.aria': 'plan mode 已开启，按下关闭',
-    'chip.on.title': 'plan mode 已开启 — 点击关闭（/plan off）',
-    'chip.off.aria': 'plan mode 已关闭，按下开启',
-    'chip.off.title': 'plan mode 已关闭 — 点击开启（/plan）',
+    'chip.on.aria': '计划模式已开启，按下关闭',
+    'chip.on.title': '计划模式已开启 — 点击关闭（/plan off）',
   },
   skill: {
     'row.running': '正在加载 skill',
@@ -157,6 +156,17 @@ const UPSTREAM = {
     // 0.1.5 上游新增的菜单项文案仍夹带英文 Session。
     'menu.download': '下载 Session 日志',
   },
+  // 0.1.7 复验新增的两个命名空间（上游 zh 值夹带 Agent / Shell）。
+  'settings.pluginInventory': {
+    presetSubtitle: '由 Agent 预设按会话组成',
+    // 用于验证通配表边界：上游整句不得被 ZH['*'].empty 压成「空」。
+    empty: '暂无插件。',
+  },
+  sidebarTerminal: {
+    shell: '选择 Shell',
+    shellLoading: '正在读取 Shell…',
+    shellEmpty: '没有可用的 Shell',
+  },
 }
 
 // 期望输出（与旧版整句覆盖时的显示完全一致，plan 悬停提示按设计保留 /plan 命令）
@@ -165,9 +175,9 @@ const EXPECT = {
     // goalActions 术语已删（用户接受）：该提示保留上游英文命令词
     'hint.goal.active': '当前目标进行中。可输入 edit 修改 / pause 暂停 / resume 继续 / clear 清除',
     // access.confirm.* 上游 0.1.2-alpha.2 已本地化为完全权限，本插件不再覆盖（跟随上游）。
-    'access.confirm.title': '确认启用完全权限？',
-    'access.confirm.description': '启用完全权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。',
-    'access.confirm.enable': '启用完全权限',
+    // 0.1.7 新增：Schema → 模式（与 trajectory.tab.schema 同一术语）。
+    'detail.field.inputSchema': '输入模式',
+    'detail.field.outputSchema': '输出模式',
   },
   chat: {
     // chat.stats.* 与 settings.transcript.* 已随上游 0.1.5 移除，无覆盖。
@@ -181,10 +191,11 @@ const EXPECT = {
     'message.turnProcess.subagents.other': '{count} 个子代理',
     // 上游 0.1.2-alpha.2 新增回答末尾用量/耗时统计（TurnUsagePanel）译表单键。
     'message.turnUsage.count': '{count} 词元',
-    'message.turnTime.ttft': '首词元用时（TTFT）',
     // 0.1.5 StatsPills 统计对话框：Term 层修正成语意中文。
     'stats.dialog.usageTitle': '词元用量',
     'stats.dialog.ttft': '首词元平均（TTFT）',
+    // 0.1.7 新增：TPS → 词元/秒（与 tokPerSec 术语一致）。
+    'stats.dialog.speed': '输出速度（词元/秒）',
   },
   // DSH 0.1.5 trajectory partial 期望：残留英文译为中文术语。
   trajectory: {
@@ -221,7 +232,7 @@ const EXPECT = {
     'toolbar.collapseCalls': '收起所有调用',
   },
   'settings.models': {
-    intro: '填入各提供方的接口密钥即可使用其模型。',
+    intro: '填入各提供商的接口密钥即可使用其模型。',
     deleteDescriptionWithCredential: '删除 {provider} 会移除其配置和存储的接口密钥。',
     credentialConfigured: '接口密钥已配置',
     credentialMissing: '接口密钥缺失',
@@ -229,7 +240,7 @@ const EXPECT = {
     keyPlaceholder: '输入接口密钥',
     keyPlaceholderNative: '输入接口密钥，或留空使用环境认证',
     keyBlank: '请输入接口密钥；留空则保持已存储的密钥。',
-    keyBlankNew: '请输入接口密钥；若该提供方以其他方式鉴权，可以留空。',
+    keyBlankNew: '请输入接口密钥；若该提供商以其他方式鉴权，可以留空。',
     keyIllegalCharacters: '该接口密钥格式错误，请检查。',
     baseUrl: '接口地址',
     modelId: '模型标识',
@@ -243,41 +254,41 @@ const EXPECT = {
     modelMaxTokensInvalid: '最大输出 token 数必须是正数，例如 8192、64K 或 1M。',
     modelCapacityInvalid: '容量需为数字，可加 K 或 M 后缀。',
     modelDuplicate: '每个模型标识只能出现一次。',
-    modelMaxTokens: '最大输出词元',
     fetchNeedsBaseUrl: '请先填写接口地址，再获取。',
     customRoute: '提供方标识',
-    customRouteTaken: '已有提供方使用了这个标识。',
+    customRouteTaken: '已有提供商使用了这个标识。',
     customApi: '接口协议',
-    customNeedsBaseUrl: '自定义提供方需要填写接口地址。',
+    customNeedsBaseUrl: '自定义模型接口需要填写接口地址。',
     onboardingTitle: '添加一个接口密钥开始使用',
     keyRequired: '请输入接口密钥后继续。',
   },
+  // 0.1.7：该命名空间只剩 5 个干净键，无补丁 → 期望值与上游原值一致。
   'settings.plugins': {
-    bashDescription: '限制代理运行的每一条命令。',
-    agentLoopTitle: '代理循环',
-    agentLoopDescription: '代理如何派发工具调用。',
-    webSearchApiKey: '接口密钥',
+    nav: '内置插件',
+    title: '内置插件',
+    intro: '查看内置部署的插件列表',
+    tabs: '插件视图',
+    empty: '本部署没有开放任何插件视图。',
   },
   'settings.agentPreset': {
     // title 键已随上游移除（改用 nav），不再覆盖。
-    error: '无法加载代理预设。',
-    seatHint: '即将开始的这个会话所用的代理预设',
-    headerHint: '本会话运行的代理预设，开始时即固定',
+    seatHint: '选择新任务使用的代理预设',
+    headerHint: '本任务的代理预设，在任务开始时确定',
     nav: '代理预设',
-    sectionIntro: '预设即一个会话的代理所运行的插件组装 —— 它的工具、提示词与能力。复制一份既有预设改成自己的，或用「创造模式」让代理帮你创建。',
-    presetStandardDescription: '功能完整的编码代理，支持文件编辑、终端、文件与网页检索、技能、计划、目标、子代理和工作流。',
-    // presetPtcName/presetPtcDescription 上游 0.1.2 已补全中文，不再覆盖。
-    presetMinimalDescription: '仅提供持久 shell 的单工具编码代理。',
-    presetCordisDescription: '用于创建自定义代理预设：具备标准模式的全部能力，并提供运行时检查、插件实验和预设创作指导。',
-    creatorDraft: '用「创造模式」创作自定义预设',
+    sectionIntro: '选择代理的工具和工作方式。日常任务用「标准模式」，扩展 DSH 的能力用「创造模式」。',
+    presetStandardDescription: '处理代码、文件和资料，适合大多数任务。代理会按需使用检索、编辑和终端等工具。',
+    // presetPtcName：用户自定义叫法（PTC 模式 → 程序模式），本插件整句覆盖，需断言。
+    // presetPtcDescription：0.1.7 上游整段重写后已撤除覆盖，故此处不断言。
+    presetPtcName: '程序模式',
+    presetMinimalDescription: '代理仅使用终端工具完成任务，适合测试和对比其基础表现。',
+    presetCordisDescription: '用对话定制 DSH：让代理编写插件，添加新功能或界面；也能组合工具和提示词，创建自己的模式。',
+    creatorDraft: '让代理帮我创建预设模式',
   },
   // settings.permission / permission.access 上游 0.1.2-alpha.2 已本地化为
   // 「完全权限」，本插件不再覆盖（跟随上游），因此不从 EXPECT 断言。
   plan: {
     'chip.on.aria': '计划模式已开启，按下关闭',
     'chip.on.title': '计划模式已开启 — 点击关闭（/plan off）',
-    'chip.off.aria': '计划模式已关闭，按下开启',
-    'chip.off.title': '计划模式已关闭 — 点击开启（/plan）',
   },
   skill: {
     'row.running': '正在加载技能',
@@ -311,6 +322,15 @@ const EXPECT = {
     'dialog.errorTitle': '会话导出失败',
     'dialog.commandFailed': '无法启动会话导出。',
   },
+  // 0.1.7 新增命名空间期望：Agent → 代理、Shell → 终端。
+  'settings.pluginInventory': {
+    presetSubtitle: '由代理预设按会话组成',
+  },
+  sidebarTerminal: {
+    shell: '选择终端',
+    shellLoading: '正在读取终端…',
+    shellEmpty: '没有可用的终端',
+  },
 }
 
 // ---------- 装载 client.js ----------
@@ -324,12 +344,26 @@ if (captured === null || captured.id !== 'deepseek-harness-zh_pro') {
   console.error('FAIL: client.js 未通过 __ModuleLoader__.load 注册')
   process.exit(1)
 }
+// 搜索凭据快照覆盖（见 mock React 的 useSyncExternalStore）；null = 用组件真实默认值。
+let credSnapshotOverride: any = null
 const pluginExports = captured.factory(function (name) {
   // 本 bundle 唯一允许的跨包引用是 react（设置页组件用）；其余跨包 require 视为回归。
   if (name === 'react') {
     return {
-      useSyncExternalStore: function (_subscribe, getSnapshot) { return getSnapshot() },
+      useSyncExternalStore: function (_subscribe, getSnapshot) {
+        const snapshot = getSnapshot()
+        // 搜索凭据 store 的快照带 configured 字段：用覆盖值模拟主机回的凭据状态
+        //（该 store 的更新走异步 fetch，同步脚本里无法自然驱动）。
+        if (credSnapshotOverride !== null && snapshot !== null && typeof snapshot === 'object' && 'configured' in snapshot) {
+          return credSnapshotOverride
+        }
+        return snapshot
+      },
       useState: function (initial) { return [initial, function () {}] },
+      // 设置页「网络搜索」卡在挂载时用 useEffect 拉取凭据状态；mock 不跑副作用，
+      // 只保证调用不抛（真实行为由 verify-cli 的主机侧用例覆盖）。
+      useEffect: function () {},
+      useRef: function (initial) { return { current: initial } },
       createElement: function (type, props) {
         const children = Array.prototype.slice.call(arguments, 2)
         const nextProps = Object.assign({}, props, { children: children })
@@ -471,43 +505,12 @@ const skillCompDescEn = 'Use when creating, changing, or validating a Cordis com
 const skillDevDescEn = 'Create, modify, debug, or extend dynamic Cordis Plugins, including Host Services and Events, Client Slot and theme UI, Package-private Client-to-Host calls, dynamic Tools, version updates, approval failures, and runtime diagnostics. Use this Skill to route a user request to the correct platform and Inspect Provider, then define, run, repair, or roll back the Plugin.'
 const skillCompText = makeText(skillCompDescEn)
 const skillDevText = makeText(skillDevDescEn)
-const statsText = makeText('9 轮 · 203 步')
-const statsAttrs = {}
-const statsRow = {
-  nodeType: 1,
-  tagName: 'DIV',
-  style: makeStyle(),
-  clientWidth: 240,
-  scrollWidth: 200,
-  parentElement: null,
-  nextSibling: null,
-  firstChild: null,
-  firstElementChild: null,
-  getAttribute: function (name) { return Object.prototype.hasOwnProperty.call(statsAttrs, name) ? statsAttrs[name] : null },
-  setAttribute: function (name, value) { statsAttrs[name] = String(value) },
-  removeAttribute: function (name) { delete statsAttrs[name] },
-  querySelectorAll: function () { return [] },
-}
-const statsGroup = {
-  nodeType: 1,
-  tagName: 'SPAN',
-  style: makeStyle(),
-  parentElement: statsRow,
-  nextSibling: null,
-  firstChild: statsText,
-  getAttribute: function () { return null },
-  setAttribute: function () {},
-}
-statsText.parentElement = statsGroup
-statsRow.firstChild = statsGroup
-statsRow.firstElementChild = statsGroup
 permissionText.nextSibling = commandText
 commandText.nextSibling = thinkText
 thinkText.nextSibling = toolText
 toolText.nextSibling = deepThinkText
 deepThinkText.nextSibling = skillCompText
 skillCompText.nextSibling = skillDevText
-skillDevText.nextSibling = statsRow
 // 思考块 DOM 夹具：最小化的元素对象，支撑「默认展开行数」折叠逻辑的查询/读写。
 let injectedThinkRoots = []
 function makeFakeEl(attrs) {
@@ -611,12 +614,10 @@ const fakeBody = {
   querySelector: function () { return null },
   querySelectorAll: function (selector) {
     if (selector === '[data-variant="think"]') return injectedThinkRoots
-    if (selector === '[data-dsh-zh-stats-full]') return statsRow.getAttribute('data-dsh-zh-stats-full') === null ? [] : [statsRow]
     if (selector === '[data-dsh-zh-hide-prompt-provider]') return []
     return []
   },
 }
-statsRow.parentElement = fakeBody
 for (const node of [permissionText, commandText, thinkText, toolText, deepThinkText, skillCompText, skillDevText]) node.parentElement = fakeBody
 window.innerWidth = 1280
 window.getComputedStyle = function () { return { textOverflow: 'clip', lineHeight: '24px', fontSize: '14px' } }
@@ -660,20 +661,38 @@ fakeObserverCbs[0].cb([{ type: 'childList', addedNodes: [incrementalText], targe
 check(incrementalText.data, '命令行', 'DOM 增量扫描 改写新增子树')
 check(permissionText.data, permissionDescEn, 'DOM 增量扫描 不重扫无关子树')
 permissionText.data = permissionDescZh
-const proseAttrs = {}
-const proseRow = {
-  nodeType: 1,
-  tagName: 'DIV',
-  getAttribute: function (name) { return Object.prototype.hasOwnProperty.call(proseAttrs, name) ? proseAttrs[name] : null },
-  setAttribute: function (name, value) { proseAttrs[name] = String(value) },
+
+// 插件页与「智能体团队」动作按钮的固定文案：来自官方插件的数据层（label / plugins.item
+// 槽位 summary / 动作按钮字面量），不在任何词典里，只能整段精确改写。
+// 原文取自 2026-09-23 真实 GUI 的 DOM 快照。
+const pluginPageCases = [
+  ['Agent Team', '代理团队'],
+  ['Agent 循环', '代理循环'],
+  ['Subagent', '子代理'],
+  ['控制 Agent 派发工具调用的方式。', '控制代理派发工具调用的方式。'],
+  ['设置 Subagent 的递归层级、数量和模型。', '设置子代理的递归层级、数量和模型。'],
+]
+// 注意：全量重扫沿 fakeBody.firstChild → nextSibling 链遍历（fakeBody 没有 childNodes），
+// 因此这些节点必须接进链尾，否则英文还原阶段扫不到（只有增量回调能命中）。
+let pluginPageTail = skillDevText
+while (pluginPageTail.nextSibling !== null && pluginPageTail.nextSibling !== undefined) pluginPageTail = pluginPageTail.nextSibling
+const pluginPageNodes = []
+for (let i = 0; i < pluginPageCases.length; i += 1) {
+  const [from, to] = pluginPageCases[i]
+  const node = makeText(from)
+  node.parentElement = fakeBody
+  pluginPageTail.nextSibling = node
+  pluginPageTail = node
+  fakeObserverCbs[0].cb([{ type: 'childList', addedNodes: [node], target: fakeBody }])
+  check(node.data, to, 'DOM 文本层 插件页文案 ' + from)
+  pluginPageNodes.push({ node, from })
 }
-const proseGroup = { nodeType: 1, tagName: 'P', parentElement: proseRow }
-const proseText = makeText('7 轮 · 8 步')
-proseText.parentElement = proseGroup
-fakeObserverCbs[0].cb([{ type: 'characterData', target: proseText }])
-check(proseRow.getAttribute('data-dsh-zh-stats-full'), null, '统计全显示 不误标正文计数文本')
-check(statsRow.getAttribute('data-dsh-zh-stats-full') !== null, true, '统计全显示 不依赖瞬时截断样式')
-check(statsRow.style.getPropertyValue('white-space'), 'nowrap', '统计全显示 样式应用')
+// 卡片标题按钮的 aria-label（「查看 <插件名>」）需整串匹配才命中。
+const pluginCardBtn = makeFakeEl()
+pluginCardBtn.setAttribute('aria-label', '查看 Agent 循环')
+pluginCardBtn.parentElement = fakeBody
+fakeObserverCbs[0].cb([{ type: 'childList', addedNodes: [pluginCardBtn], target: fakeBody }])
+check(pluginCardBtn.getAttribute('aria-label'), '查看代理循环', 'DOM 文本层 插件页 aria-label 改写')
 
 function findElement(node, predicate) {
   if (node === null || node === undefined) return null
@@ -689,7 +708,7 @@ function findElement(node, predicate) {
   return findElement(node.props && node.props.children, predicate)
 }
 check(typeof settingsRender, 'function', '增强设置 已注册')
-// 统计全显示 / 默认展开行数收在「对话样式相关」收缩卡片内：测试前展开
+// 对话样式相关收缩卡片内：测试前展开
 // （卡片折叠态持久化在 localStorage，mock 环境默认收起、body 不渲染）。
 pluginExports.settingsStore.set('styleSettingsOpen', true)
 let settingsTree = settingsRender()
@@ -707,18 +726,6 @@ const toolDescToggle = findElement(settingsTree, function (node) {
 check(toolDescToggle !== null && toolDescToggle.props.disabled === true, true, '设置服务缺失时禁用工具说明开关')
 check(locale.lookup('dsh-zh-settings', 'zhAgentPrompt'), '代理角色提示中文化', '代理角色提示 中文文案')
 check(locale.lookup('dsh-zh-settings', 'zhToolDesc'), '工具说明中文化', '工具说明 中文文案')
-let statsToggle = findElement(settingsTree, function (node) {
-  return node.type === 'button' && node.props && node.props['aria-label'] === '统计全显示'
-})
-check(statsToggle !== null, true, '统计全显示 开关可访问名称')
-statsToggle.props.onClick()
-check(statsRow.getAttribute('data-dsh-zh-stats-full'), null, '统计全显示 关闭即清理')
-settingsTree = settingsRender()
-statsToggle = findElement(settingsTree, function (node) {
-  return node.type === 'button' && node.props && node.props['aria-label'] === '统计全显示'
-})
-statsToggle.props.onClick()
-check(statsRow.getAttribute('data-dsh-zh-stats-full') !== null, true, '统计全显示 重新开启')
 
 // 默认展开行数（thinkMaxLines）：设置行渲染 + 思考正文折叠/展开/收起
 const maxLinesInput = findElement(settingsRender(), function (node) {
@@ -727,6 +734,86 @@ const maxLinesInput = findElement(settingsRender(), function (node) {
 check(maxLinesInput !== null, true, '默认展开行数 设置输入框存在')
 check(maxLinesInput === null || maxLinesInput.props.value === 20, true, '默认展开行数 默认值 20')
 check(locale.lookup('dsh-zh-settings', 'thinkMaxLines'), '默认展开行数', '默认展开行数 中文文案')
+
+// 「网络搜索」收缩卡片：开关已从平铺行移入卡内，与 Tavily API Key 同卡。
+// 卡收起时开关不应出现在树里 —— 这正是「已不在平铺区」的判据。
+const collapsedSearchTree = settingsRender()
+check(findElement(collapsedSearchTree, function (node) {
+  return node.type === 'button' && node.props && node.props['aria-label'] === '启用多引擎搜索'
+}) === null, true, '网络搜索开关已移出平铺区（卡片收起时不渲染）')
+pluginExports.settingsStore.set('searchSettingsOpen', true)
+const searchTree = settingsRender()
+const searchCardHead = findElement(searchTree, function (node) {
+  return node.type === 'button' && node.props && node.props['aria-label'] === '网络搜索'
+})
+check(searchCardHead !== null && searchCardHead.props['aria-expanded'] === true, true, '网络搜索卡 展开头存在')
+const searchToggle = findElement(searchTree, function (node) {
+  return node.type === 'button' && node.props && node.props['aria-label'] === '启用多引擎搜索'
+})
+check(searchToggle !== null && searchToggle.props.disabled === true, true, '设置服务缺失时禁用网络搜索开关')
+const apiKeyInput = findElement(searchTree, function (node) {
+  return node.type === 'input' && node.props && node.props['aria-label'] === 'Tavily API Key'
+})
+check(apiKeyInput !== null, true, '网络搜索卡 API Key 输入框存在')
+check(apiKeyInput === null || apiKeyInput.props.type === 'password', true, 'API Key 输入框用 password 形态')
+check(apiKeyInput === null || apiKeyInput.props.value === '', true, 'API Key 输入框初始为空（明文不落 localStorage）')
+const apiKeySave = findElement(searchTree, function (node) {
+  return node.type === 'button' && node.props && node.props['aria-label'] === '保存'
+})
+check(apiKeySave !== null && apiKeySave.props.disabled === true, true, '空草稿时保存按钮禁用')
+const apiKeyClear = findElement(searchTree, function (node) {
+  return node.type === 'button' && node.props && node.props['aria-label'] === '清除'
+})
+check(apiKeyClear !== null && apiKeyClear.props.disabled === true, true, '未配置时清除按钮禁用')
+check(locale.lookup('dsh-zh-settings', 'searchGroup'), '网络搜索', '网络搜索卡 中文文案')
+check(locale.lookup('dsh-zh-settings', 'searchApiKeyNotConfigured'), '未配置', 'API Key 未配置文案')
+
+// 凭据错误码映射：**只有主机的校验码才归因为「Key 不合法」**。
+// 回归 2026-09-23：主机未重启时 POST 落到分发器兜底 404（code=not-found），旧映射
+// 把任何未知码都报成「Key 不合法」，用户拿着完全合法的 key 却看到该提示。
+const credApi = pluginExports.searchCredential
+const credText = function (key) { return locale.lookup('dsh-zh-settings', key) }
+check(typeof credApi.errorText, 'function', '搜索凭据 错误映射已导出')
+check(credApi.errorText(credText, { error: 'empty' }), credText('searchApiKeyInvalid'), '搜索凭据 empty → Key 不合法')
+check(credApi.errorText(credText, { error: 'whitespace' }), credText('searchApiKeyInvalid'), '搜索凭据 whitespace → Key 不合法')
+check(credApi.errorText(credText, { error: 'too-long' }), credText('searchApiKeyInvalid'), '搜索凭据 too-long → Key 不合法')
+check(credApi.errorText(credText, { error: 'not-found' }), credText('searchApiKeyRouteMissing'), '搜索凭据 not-found → 重启提示（不得报 Key 不合法）')
+check(credApi.errorText(credText, { error: 'internal' }), credText('searchApiKeySaveFailed') + ' (internal)', '搜索凭据 internal → 通用失败 + 错误码')
+check(credApi.errorText(credText, { error: 'unreachable' }), credText('searchApiKeyUnreachable'), '搜索凭据 unreachable → 无法连接主机')
+check(credApi.errorText(credText, { error: null }), null, '搜索凭据 无错误 → null')
+// 客户端校验码列表必须与主机模块一致：主机新增校验码而客户端没跟上时这里会失败
+//（Node ≥22.12 的 require(ESM) 可直接加载主机的 lib 产物）。
+const hostCredentialRoute = require(__dirname + '/lib/search-credential.js')
+check(
+  credApi.validationCodes.join(','),
+  hostCredentialRoute.SEARCH_CREDENTIAL_VALIDATION_CODES.join(','),
+  '搜索凭据 校验码列表与主机一致',
+)
+// 失败态归一化：not-found 必须标记「路由未就绪」，校验失败不得标记
+check(credApi.failure({}, { body: { ok: false, error: { code: 'not-found', message: 'unknown method' } } }).routeMissing, true, '搜索凭据 not-found 标记路由未就绪')
+check(credApi.failure({}, { body: { ok: false, error: { code: 'empty' } } }).routeMissing, false, '搜索凭据 校验失败不标记路由缺失')
+check(credApi.failure({}, { code: 'unreachable' }).error, 'unreachable', '搜索凭据 网络失败归一化')
+check(credApi.failure({}, { body: null }).error, 'unknown', '搜索凭据 缺 body 归一化为 unknown')
+
+// 状态行渲染：已配置显示来源+脱敏提示；路由未就绪显示重启提示（而非 Key 不合法）
+function hasChildText(node, text) {
+  return node.props && Array.isArray(node.props.children) && node.props.children.indexOf(text) !== -1
+}
+credSnapshotOverride = {
+  status: 'ready', loading: false, saving: false, configured: true, source: 'file',
+  hint: 'tvly-dev…OsQWC', error: null, errorMessage: null, routeMissing: false, savedAt: null,
+}
+check(findElement(settingsRender(), function (node) {
+  return node.type === 'div' && hasChildText(node, '已配置 · 凭据文件 · tvly-dev…OsQWC')
+}) !== null, true, '状态行 已配置时显示来源与脱敏提示')
+credSnapshotOverride = {
+  status: 'error', loading: false, saving: false, configured: false, source: null,
+  hint: null, error: 'not-found', errorMessage: 'unknown method', routeMissing: true, savedAt: null,
+}
+check(findElement(settingsRender(), function (node) {
+  return node.type === 'div' && hasChildText(node, credText('searchApiKeyRouteMissing'))
+}) !== null, true, '状态行 路由未就绪时显示重启提示')
+credSnapshotOverride = null
 
 // 构造一个超过行数上限的思考块假 DOM（data-state=ok 避免触发自动展开）。
 const thinkBody = makeFakeEl()
@@ -1012,9 +1099,10 @@ for (const ns of Object.keys(EXPECT)) {
 
 // translate 路径（参数格式化 + 部分翻译联动）
 check(locale.translate('chat', 'message.retry.status', { label: '重试', retry: 2, maximum: 5, seconds: 3723 }), '重试（2/5） · 1小时2分3秒', 'translate message.retry.status')
-// input.accessMode 的 name 参数自 0.1.2-alpha.2 起由上游直接传入本地化标签
-//（可写入工作区 等），本插件不再转换（PERMISSION_NAMES 已移除）。
-check(locale.translate('conversation', 'input.accessMode', { name: 'Workspace Write' }), '访问模式，当前：Workspace Write', 'translate input.accessMode 不转换')
+// conversation.input.accessMode 已随上游 0.1.7 移除（`permission.access` 命名空间
+// 整体消失，访问模式文案改由上游自带）：无覆盖也不报错，原样返回键。
+// 旧断言（不转换 name 参数）已无意义——键本身不存在了。
+check(locale.translate('conversation', 'input.accessMode', { name: 'Workspace Write' }), 'input.accessMode', 'translate input.accessMode 已随上游移除（原样返回键）')
 // chat.stats.* 已随上游 0.1.5 移除：无覆盖也不报错。
 check(locale.translate('chat', 'stats.llm', { duration: '48m48s' }), 'stats.llm', 'translate stats.llm 已随上游移除（原样返回键）')
 check(locale.translate('chat', 'message.turnUsage.count', { count: '2.4M' }), '240万 词元', 'translate message.turnUsage.count 2.4M')
@@ -1025,6 +1113,10 @@ check(locale.translate('chat', 'message.turnUsage.count', { count: '482,447' }),
 check(locale.translate('chat', 'message.turnUsage.consumed', { total: '240万 词元' }), '用量 240万 词元', 'translate message.turnUsage.consumed')
 check(locale.translate('chat', 'stats.dialog.usageTitle'), '词元用量', 'translate stats.dialog.usageTitle')
 check(locale.translate('chat', 'stats.dialog.ttft'), '首词元平均（TTFT）', 'translate stats.dialog.ttft')
+// 通配表 ZH['*'] 的边界（2026-09-23 修复）：键名命中通配表、但上游 zh 已是中文时，
+// 必须尊重上游整句——否则 `empty` 这类通用键名会把整句压成一个词。
+check(locale.translate('settings.plugins', 'empty'), '本部署没有开放任何插件视图。', '通配表 不覆盖上游已本地化的 empty')
+check(locale.translate('settings.pluginInventory', 'empty'), '暂无插件。', '通配表 不覆盖上游已本地化的 empty（插件清单）')
 check(locale.translate('settings.models', 'deleteDescriptionWithCredential', { provider: 'openai' }), '删除 openai 会移除其配置和存储的接口密钥。', 'translate deleteDescriptionWithCredential')
 // trajectory partial：残留英文术语修正。
 check(locale.translate('trajectory', 'unit.tokens', { value: '123' }), '123 词元', 'translate trajectory unit.tokens')
@@ -1042,19 +1134,17 @@ check(locale.translate('chat', 'stats.llm'), 'stats.llm', 'en passthrough')
 // 英文界面下 DOM 文本层按反向表还原
 for (const o of fakeObserverCbs) o.cb()
 check(fakeBody.firstChild.data, permissionDescEn, 'DOM 文本层 英文还原')
+// 插件页文案同样按反向表还原为英文原文
+for (let i = 0; i < pluginPageNodes.length; i += 1) {
+  check(pluginPageNodes[i].node.data, pluginPageNodes[i].from, 'DOM 文本层 插件页文案英文还原 ' + pluginPageNodes[i].from)
+}
 check(fakeBody.firstChild.nextSibling.data, 'Compact older conversation history', 'DOM 文本层 命令说明保持英文（词典化后不参与 DOM 还原）')
 check(skillCompText.data, skillCompDescEn, 'DOM 文本层 技能描述（组合编辑）还原')
 check(skillDevText.data, skillDevDescEn, 'DOM 文本层 技能描述（插件开发）还原')
 
 // ---- 新行为：除「中文补全」外的功能在英文界面下同样生效 ----
 active = 'en'
-// 1) 统计全显示：英文计数格式（N turns · N steps）同样触发样式。
-statsText.data = '9 turns · 203 steps'
-statsRow.removeAttribute('data-dsh-zh-stats-full')
-fakeObserverCbs[0].cb(undefined)
-check(statsRow.getAttribute('data-dsh-zh-stats-full') !== null, true, '英文界面 统计全显示 识别英文计数')
-check(statsRow.style.getPropertyValue('white-space'), 'nowrap', '英文界面 统计全显示 样式应用')
-// 2) 默认展开行数：英文界面下思考正文仍按上限折叠。
+// 1) 默认展开行数：英文界面下思考正文仍按上限折叠。
 const enThinkBody = makeFakeEl()
 const enHeader = makeFakeEl()
 enHeader.setAttribute('data-disclosure-row', '')
@@ -1078,12 +1168,9 @@ check(enThinkBody.style.maxHeight, '480px', '英文界面 默认展开行数 折
 check(enThinkBody.getAttribute('data-dsh-zh-think'), 'clamped', '英文界面 默认展开行数 折叠标记')
 check(enThinkBody.__dshZhControl.textContent, 'Expand 20 more lines (25 left)', '英文界面 默认展开行数 按钮提示剩余总行数')
 injectedThinkRoots = []
-// 3) 中文补全：英文界面仍 passthrough（词典与标签改写都不生效）。
+// 2) 中文补全：英文界面仍 passthrough（词典与标签改写都不生效）。
 check(locale.translate('chat', 'stats.llm'), 'stats.llm', '英文界面 中文补全 passthrough（键已随上游移除）')
 check(fakeBody.firstChild.data, permissionDescEn, '英文界面 中文补全 标签不改写')
-// 复位统计夹具，供后续卸载清理校验使用。
-statsText.data = '9 轮 · 203 步'
-statsRow.removeAttribute('data-dsh-zh-stats-full')
 
 // ---- 会话删除按钮开关（设置 store 默认值与读写） ----
 // settingsStore 在无 localStorage 环境走默认值：deleteSessionEnabled 默认开。
@@ -1340,7 +1427,6 @@ UPSTREAM['settings.models'].deleteDescriptionWithCredential = ORIGINAL_UPSTREAM
 for (let i = ctx._effects.length - 1; i >= 0; i -= 1) ctx._effects[i]()
 check(localeRegisterDisposed, 3, '设置词典与归档词典 随生命周期卸载（含开关翻转）')
 check(localeListeners.length, 0, '插件卸载 取消语言监听')
-check(statsRow.getAttribute('data-dsh-zh-stats-full'), null, '插件卸载 清理统计样式')
 check(settingsRender, null, '插件卸载 清理设置分区')
 
 if (fail > 0) {

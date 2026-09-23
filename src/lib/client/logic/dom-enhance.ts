@@ -1,6 +1,6 @@
 // 中文补全核心：locale.translate 重写 + DOM 文本层增强。
 // 仅中文界面 + 「中文补全」开启时改写文本；英文界面按反向表还原。
-// 其余 DOM 效果（统计全显示、自动展开思考、默认展开行数、隐藏提示词提供方行）
+// 其余 DOM 效果（自动展开思考、默认展开行数、隐藏提示词提供方行）
 // 与界面语言无关，按各自开关生效。
 // DSH 0.1.2 起 LocaleRuntime 不再暴露公开的 lookup，translate 也移出公开面
 // （TS 私有，但运行时仍是实例可达方法；bind 的闭包在调用时解析 this.translate）。
@@ -59,8 +59,18 @@ function installChineseEnhance(ctx) {
           return interpolateZh(applyPairs(template, resolvePairs(partial[key])), nextParams)
         }
       }
+      // 通配表 ZH['*']：按「键名」跨命名空间兜底，只用于补上游没本地化的
+      // 通用英文词（open/done/failed…）。**上游 zh 值已含中文时必须尊重上游**——
+      // 否则 `empty` 这类通用键名会把整句中文压成一个词（实测：0.1.7 的
+      // settings.plugins.empty「本部署没有开放任何插件视图。」被压成「空」，
+      // settings.pluginInventory.empty「暂无插件。」同样中招）。
       const star = ZH['*'][key]
-      if (star !== undefined) return interpolateZh(star, nextParams)
+      if (star !== undefined) {
+        const upstreamValue = originalTranslate.call(this, ns, key)
+        const upstreamLocalized = typeof upstreamValue === 'string' && /[\u4e00-\u9fff]/.test(upstreamValue)
+        if (!upstreamLocalized) return interpolateZh(star, nextParams)
+        return originalTranslate.call(this, ns, key, nextParams)
+      }
       return originalTranslate.call(this, ns, key, nextParams)
     }
     // 权限预设描述 / 斜杠命令说明 / 轨迹界面标签的 DOM 文本层（词典管不到的地方）：
@@ -69,8 +79,6 @@ function installChineseEnhance(ctx) {
     // 英文界面时按反向表还原。改写前先断开观察器、写完再续，杜绝递归。
     let observer
     let domReadyListener
-    let statsResizeTimer
-    let statsResizeListener
     let settingsUnsubscribe
     let localeUnsubscribe
     let resetDomEffects
@@ -79,108 +87,14 @@ function installChineseEnhance(ctx) {
     // 与本插件按百分比覆盖 --dsh-chat-content-width 的做法冲突，让位给上游。
     let autoThinkTarget = null
     if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined') {
-      const forward = Object.assign({}, PERMISSION_DESCRIPTIONS, SKILL_DESCRIPTIONS, CHAT_LABELS)
+      const forward = Object.assign({}, PERMISSION_DESCRIPTIONS, SKILL_DESCRIPTIONS, CHAT_LABELS, PLUGIN_ITEM_LABELS)
       const reverse = {}
       // 译文重复时首个定义者生效（还原到更常见的英文写法，如 Tool call/TOOL/USER）
       for (const k of Object.keys(forward)) {
         if (reverse[forward[k]] === undefined) reverse[forward[k]] = k
       }
-      // 统计行「9 轮 203 步」（0.1.5 StatsPills；旧版为「9 轮 · 203 步」，兼容）
-      // 默认单行截断（label 带 ellipsis）。统计全显示：让统计行保持单行、不换行、
-      // 不省略——先放宽到输入区全宽，再按宽度自动缩小字号适配；极端超长仍放不下
-      // 时改为同一行横向滚动。与界面语言无关。
-      const STATS_FULL_KEY = 'data-dsh-zh-stats-full'
-      const STATS_FULL_STYLES = [
-        ['white-space', 'nowrap'],
-        ['overflow', 'hidden'],
-        ['text-overflow', 'clip'],
-        ['max-width', 'none'],
-        ['width', '100%'],
-        ['height', 'auto'],
-        ['min-height', '0'],
-      ]
-      // 0.1.5 StatsPills 的 pill（button/span）样式子集：不强行拉满宽度，
-      // 只放开省略号并保持单行，让 fit 字号逻辑基于 label 内容宽度工作。
-      const STATS_PILL_STYLES = [
-        ['white-space', 'nowrap'],
-        ['overflow', 'hidden'],
-        ['text-overflow', 'clip'],
-        ['max-width', 'none'],
-      ]
-      const STATS_BASE_FONT = 12
-      const STATS_MIN_FONT = 9
-      const STATS_COUNTS_ZH = /^\s*\d+\s*轮(?:\s*·\s*|\s+)\d+\s*步\s*$/
-      const STATS_COUNTS_EN = /^\s*\d+\s*turns?(?:\s*·\s*|\s+)\d+\s*steps?\s*$/
-      const isStatsCounts = function (text) {
-        return STATS_COUNTS_ZH.test(String(text)) || STATS_COUNTS_EN.test(String(text))
-      }
-      const fitStatsRow = function (row) {
-        if (typeof window === 'undefined') return
-        row.style.fontSize = STATS_BASE_FONT + 'px'
-        row.style.removeProperty('overflow-x')
-        if (row.clientWidth <= 0) return
-        let size = STATS_BASE_FONT
-        for (let i = 0; i < 4; i += 1) {
-          if (row.scrollWidth <= row.clientWidth) break
-          size = Math.max(STATS_MIN_FONT, Math.round(size * (row.clientWidth / row.scrollWidth) * 10) / 10)
-          row.style.fontSize = size + 'px'
-          if (size <= STATS_MIN_FONT) break
-        }
-        if (row.scrollWidth > row.clientWidth) {
-          // 极端超长：保持单行，改为横向滚动，内容不省略、不换行。
-          row.style.setProperty('overflow-x', 'auto', 'important')
-        }
-      }
-      const fixStatsFull = function (textNode) {
-        if (settingsStore.getSnapshot().statsFull !== true) return
-        if (!isStatsCounts(textNode.data)) return
-        const group = textNode.parentElement
-        if (group === null || group.nodeType !== 1) return
-        // 0.1.5 StatsPills：计数组 span[class*="label"] 位于 button/span[class*="pill"]。
-        if (group.tagName === 'SPAN' && typeof group.getAttribute === 'function'
-          && (group.getAttribute('class') || '').indexOf('label') !== -1
-          && group.parentElement !== null && group.parentElement.nodeType === 1
-          && (group.parentElement.tagName === 'BUTTON' || group.parentElement.tagName === 'SPAN')) {
-          const pill = group.parentElement
-          if (pill.getAttribute(STATS_FULL_KEY) === null) {
-            for (const pair of STATS_PILL_STYLES) pill.style.setProperty(pair[0], pair[1], 'important')
-            pill.setAttribute(STATS_FULL_KEY, '')
-          }
-          fitStatsRow(pill)
-          return
-        }
-        // 旧版 StatsLine：DIV 行 > 首个 SPAN 计数组（0.1.4 及之前的结构）。
-        if (group.tagName !== 'SPAN') return
-        const row = group.parentElement
-        if (row === null || row.nodeType !== 1 || row.tagName !== 'DIV') return
-        if (row.firstElementChild !== group) return
-        // StatsLine 的稳定结构是「DIV 行 > 首个 SPAN 计数组」。不要依赖瞬时
-        // 计算样式：文本更新与布局截断可能不在同一帧，按 ellipsis 判定会漏掉首次应用。
-        if (row.getAttribute(STATS_FULL_KEY) === null) {
-          for (const pair of STATS_FULL_STYLES) {
-            row.style.setProperty(pair[0], pair[1], 'important')
-          }
-          row.setAttribute(STATS_FULL_KEY, '')
-        }
-        fitStatsRow(row)
-      }
-      const fitAllStats = function (root) {
-        if (root === null || typeof root.querySelectorAll !== 'function') return
-        const rows = root.querySelectorAll('[' + STATS_FULL_KEY + ']')
-        for (const row of rows) fitStatsRow(row)
-      }
-      const undoStatsFull = function (root) {
-        if (root === null || typeof root.querySelectorAll !== 'function') return
-        const fixed = root.querySelectorAll('[' + STATS_FULL_KEY + ']')
-        for (const el of fixed) {
-          for (const pair of STATS_FULL_STYLES) el.style.removeProperty(pair[0])
-          el.style.removeProperty('overflow-x')
-          el.style.removeProperty('font-size')
-          el.removeAttribute(STATS_FULL_KEY)
-        }
-      }
       // Models 设置页：隐藏「提示词注入（deepseek-harness-zh_pro）」目录行。
-      // 该目录条目是主机半边为把 dsh-zh 设置命名空间暴露给网页 settingsScope
+      // 该目录条目是主机半边为把 dsh-zh 行 config 暴露给网页 configForms
       // 而注册的可配置提供方（DSH 目录类型没有 hidden 字段），Models 页会把它
       // 渲染成一张行卡片。这里仅中文界面按精确文本隐藏该行（或添加下拉里的
       // 同名选项），目录注册保留，网页「提示词注入」开关不受影响；切回英文
@@ -215,23 +129,11 @@ function installChineseEnhance(ctx) {
           el.removeAttribute(PROMPT_PROVIDER_KEY)
         }
       }
-      statsResizeListener = function () {
-        if (typeof document === 'undefined' || document.body === null) return
-        if (statsResizeTimer !== undefined) clearTimeout(statsResizeTimer)
-        statsResizeTimer = setTimeout(function () {
-          statsResizeTimer = undefined
-          if (document.body !== null) fitAllStats(document.body)
-        }, 100)
-      }
-      if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-        window.addEventListener('resize', statsResizeListener)
-      }
       const rewrite = function (root, exact, patterns) {
         if (root.nodeType === 3) {
           const to = rewriteText(root.data, exact, patterns)
           if (to !== root.data) root.data = to
-          // 统计全显示与界面语言无关（中文/英文都生效）；隐藏提示词提供方行仅中文界面。
-          fixStatsFull(root)
+          // 隐藏提示词提供方行仅中文界面。
           if (activeIsZh()) hidePromptProviderText(root)
           return
         }
@@ -721,8 +623,6 @@ function installChineseEnhance(ctx) {
         // 思考行数折叠：关闭时先还原折叠正文，让其完整文本接受后续改写。
         if (snapshot.thinkMaxLines <= 0) restoreAllThinkLines()
         runThinkAuto()
-        // 「统计全显示」是独立开关：关闭或卸载时立即清理旧样式。
-        if (snapshot.statsFull !== true) undoStatsFull(document.body)
         if (!zh) unhidePromptProvider(document.body)
         const targets = roots === undefined ? [document.body] : roots
         const exact = zh && snapshot.zhComplete === true ? forward : reverse
@@ -794,7 +694,6 @@ function installChineseEnhance(ctx) {
         autoThinkTarget = null
         if (document.body !== null) {
           restoreAllThinkLines()
-          undoStatsFull(document.body)
           unhidePromptProvider(document.body)
         }
       }
@@ -808,10 +707,6 @@ function installChineseEnhance(ctx) {
     return () => {
       if (observer !== undefined) observer.disconnect()
       if (domReadyListener !== undefined) document.removeEventListener('DOMContentLoaded', domReadyListener)
-      if (statsResizeTimer !== undefined) clearTimeout(statsResizeTimer)
-      if (statsResizeListener !== undefined && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
-        window.removeEventListener('resize', statsResizeListener)
-      }
       if (settingsUnsubscribe !== undefined) settingsUnsubscribe()
       if (localeUnsubscribe !== undefined) localeUnsubscribe()
       if (resetDomEffects !== undefined) resetDomEffects()

@@ -52,7 +52,8 @@ npm test
 会在需要时从 `src/bin/` 生成完整 CLI 层。
 
 `dsh.client.inject` 写客户端**包名依赖**，用于构建加载图；浏览器插件的 `exports.inject`
-写 Cordis **服务名**。当前硬依赖是 `locale`、`slots`，`settingsScope` 使用 `ctx.inject`
+写 Cordis **服务名**。当前硬依赖是 `locale`、`slots`，`configForms`（DSH 0.1.7+，接替已退役的
+`settingsScope`）使用 `ctx.inject`
 可选绑定，缺失时只禁用提示词设置。
 
 ## 客户端文件格式
@@ -62,7 +63,8 @@ npm test
 
 - `src/lib/client/data/`：语言相关数据（`settings-dicts.ts` 设置页文案、`terms.ts` 术语词典、
   `zh-dict.ts` 整句覆盖/部分翻译、`dom-labels.ts` DOM 精确映射、`traj-patterns.ts` 轨迹正则）；
-- `src/lib/client/logic/`：状态与逻辑（`settings-store.ts`、`prompt-store.ts`、`format-utils.ts`、
+- `src/lib/client/logic/`：状态与逻辑（`settings-store.ts`、`search-credential.ts` 搜索凭据状态、
+  `prompt-store.ts`、`format-utils.ts`、
   `settings-section.ts` 设置页组件、`auto-archive.ts`、`register.ts`、`dom-enhance.ts`、
   `session-menu.ts` 会话删除菜单（含批量项注入与批量执行）、`session-batch.ts` 会话多选与批量操作
   （行首复选框 + 多选状态）、`archive-view.ts` 归档视图、`service-monitor.ts` 服务监控（共享轮询 + DOM 面板）、
@@ -70,6 +72,10 @@ npm test
   `apply.ts`）；
 - `src/lib/client/entry.ts`：客户端行为说明；`scripts/build-client.mjs` 负责生成包壳与导出，
   同时更新 `lib/client/` 下的旧路径生成快照，便于兼容既有审查工具。
+  **片段顺序只在 `src/scripts/build-client.mts` 的 `BODY_ORDER` 里改**：`scripts/build-client.mjs`
+  是它的编译产物，构建时会被覆盖（2026-09-23 踩过：只改产物导致新片段没进 `lib/client.js`，
+  运行时报 `xxx is not defined`）。新增客户端片段必须同时登记进 `BODY_ORDER`，且排在
+  使用它的片段之前。
 
 改词典/文案/逻辑一律改 `src/lib/client/` 下的 TypeScript 源片段后重新构建，不要直接编辑
 `lib/client.js`。
@@ -96,15 +102,41 @@ window.__ModuleLoader__.load({
 子系统在 `src/lib/constants.ts`、`src/lib/util.ts`、`src/lib/schemastery.ts`、`src/lib/hot-reload.ts`、
 `src/lib/chinese-prompt.ts`、`src/lib/assemble-patch.ts`（systemPrompt.assemble 的唯一
 包装管线，chinese-prompt 与 model-locale 都以改写器形式注册）、`src/lib/model-locale.ts`
-（模型请求中文化：persona/系统段落/工具说明/指引段落改写；`cordis-section-zh.ts` 存放
-`tool:cordis` 大段的中文版）、`src/lib/context-locale.ts`（上下文注入中文化：
+（模型请求中文化：persona/系统段落/工具说明/指引段落改写）、
+`src/lib/context-locale.ts`（上下文注入中文化：
 runtime-context 正文（contexts）改写 + 注入消息的 agent/pre-step 行级替换，见下文专节）、
 `src/lib/hot-mount.ts`、`src/lib/trash.ts`（跨平台回收站）、
-`src/lib/session-delete.ts`（会话删除编排与 `/dsh-zh/api` 路由）、`src/lib/service-monitor.ts`
-（服务监控：本机监听端口扫描 + 基线 diff + 进程归属解析 + 快照与目录打开）；CLI 实现拆在 `src/bin/cli/`，`src/bin/dsh-zh.mts`
+`src/lib/session-delete.ts`（会话删除编排与 `/dsh-zh/api` 路由分发）、`src/lib/service-monitor.ts`
+（服务监控：本机监听端口扫描 + 基线 diff + 进程归属解析 + 快照与目录打开）、
+`src/lib/diagnostics.ts`（`GET /dsh-zh/api/diagnostics`）、`src/lib/search-credential.ts`
+（`GET|POST /dsh-zh/api/search-credential`：设置页「网络搜索」卡片的 API Key 读写；
+provider → 凭据 ref 走服务端白名单，响应只回脱敏提示，明文只落凭据文件）、
+`src/lib/credentials.ts`（凭据三层解析 + 凭据文件读写）；CLI 实现拆在 `src/bin/cli/`，`src/bin/dsh-zh.mts`
 是转发导出并保留入口守卫的聚合入口。编译后对应的 `.js`/`.mjs` 文件供 DSH 和 npm 消费。
 
 client-modules 会缓存某个包名是否为有效客户端包。结构错误被判定为非客户端包后，本插件应先修正格式，再走受控动态 Client 通道或等待自然重启，不把重启作为开发动作。
+
+**设置页改动的可视验证（不需要运行中的 GUI）**：bundle 的 mock React 返回 `{type, props}`
+纯对象，因此可以在 Node 里 `eval` `lib/client.js`、用 `apply(ctx)` 捕获设置页渲染函数、
+把组件树序列化成静态 HTML，再用 Edge headless 截图。要点：`apply()` 的**第一个**调用就是
+`registerSettingsSection`，所以后续 `install*` 因 mock 不全抛错也不影响捕获（try/catch）；
+`ctx.slots.register(config, fn)` 即渲染函数来源。此法在 2026-09-23 抓到一个真实布局 bug：
+把横向行样式 `zhRowTextStyle`（`flex: '1 1 180px'`）复用到纵向（column）容器时，主轴变成
+高度、基准 180px 会撑出大片空白，必须 `Object.assign({}, zhRowTextStyle, { flex: '0 0 auto' })`。
+
+`/dsh-zh/api/search-credential` 的行为回归在 `verify-cli.mts`（凭据文件读写保留其余条目与
+注释、响应只回脱敏提示、非法输入一律拒绝、provider 白名单不接受任意 ref 名、环境变量优先、
+清除只删目标键、文件不存在时创建）；设置页「网络搜索」卡的渲染回归在 `verify-pairs.cts`
+（卡收起时开关不在平铺区、展开后开关 / Key 输入 / 保存 / 清除同卡、空草稿禁用保存、
+未配置禁用清除、错误码 → 文案映射、状态行三种态）。该套 mock React 必须提供 bundle 用到的
+全部 hook（`useEffect` 缺失会让设置页渲染直接抛错），新增 hook 用法时要同步补齐。
+
+**错误码 → 文案的硬契约（2026-09-23 修复）**：只有主机 `SEARCH_CREDENTIAL_VALIDATION_CODES`
+里的码才归因为「Key 不合法」；`not-found` 表示主机路由尚未载入（旧主机 + 新客户端，或本
+版本新增路由后未重启 `dsh web`），必须提示重启而不是「Key 不合法」；其余一律走通用失败
+文案并附错误码。客户端那份码表由 `verify-pairs` 与主机模块**逐项比对**，主机新增校验码而
+客户端没跟上时会直接失败。**别再写「未知错误码 → 当作校验失败」的兜底**——那正是让用户
+拿着完全合法的 key 看到「Key 不合法」的原因。
 
 ## locale 补丁
 
@@ -115,7 +147,11 @@ client-modules 会缓存某个包名是否为有效客户端包。结构错误�
 
 1. `ZH` 整句覆盖；
 2. `ZH_PARTIAL` 根据 `TERMS` 替换上游原句中的术语；
-3. `'*'` 通用词兜底；
+3. `'*'` 通用词兜底——**仅当上游值不含中文时**才替换。该表按「键名」跨命名空间命中，
+   而 `empty`/`error`/`status`/`options` 这类通用键名在多个命名空间里都是**整句**，
+   不判上游是否已本地化就会把整句压成一个词（2026-09-23 实测：`settings.plugins.empty`
+   「本部署没有开放任何插件视图。」被压成「空」，`settings.pluginInventory.empty`
+   「暂无插件。」同样中招）；
 4. 原 locale 结果。
 
 `TERMS` 是术语叫法的唯一来源。片段应带足够上下文、区分大小写，长片段放在前面；空译文表示
@@ -133,11 +169,23 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
 1. **只认运行时真值**：以 active profile 实际加载的包（`$DSH_HOME\profiles\node_modules\@deepseek-ai\`，
    每个包 `package.json` 的 version）为准，不凭 checkout 源码或旧 README 断言。diff 历史 tag
    （`git diff dsh-vX..dsh-vY --stat`）找出改动面，再对每个 `sha` 读具体 diff。
+   **0.1.7-alpha.2 起这些包随包发布 `src/`，词典真值就是 `src/client/locales.ts`**
+   （`chat` 命名空间是 `locale.ts`，无 s；部分文件不导出 `NS`，命名空间写在文件头注释里），
+   比翻构建产物可靠得多。读它们有两个坑：pnpm 用符号链接存包，`Dirent.isDirectory()` 对软链
+   为 false，必须 `statSync` 解析；文件含中文，Git Bash 的 `grep` 会当二进制跳过，用 Node
+   `readFileSync` 判断才可靠。扫描脚本：`temp/inventory-dsh-locales.mjs`（清单）、
+   `temp/find-missing-translations.mjs`（zh 值夹带英文且本插件未覆盖的键；记得先剥 `{占位符}`）。
 2. **核对本插件所有覆盖键**：对 `terms.ts`、`zh-dict.ts`、`dom-labels.ts`、`format-utils.ts`
    引用的每个命名空间/键，从运行包生成 zh 词典真值逐项比对。优先怀疑上游已本地化的点：
    权限预设标签与 confirm 文案、trajectory 工具栏、插件清单页、settings 系列、新 UI 组件
    的残留单元。示例：0.1.2-alpha.2 起权限预设由上游本地化（仅可查看/可写入工作区/完全权限），
-   trajectory 整表中文，plugin-inventory 重写后 cordis 状态键消失。
+   trajectory 整表中文，plugin-inventory 重写后 cordis 状态键消失；**0.1.7-alpha.2 起
+   `settings.plugins` 只剩 5 个键**（插件配置表单搬到侧栏插件页、由各插件 schemastery
+   `Config` 自动投影），旧的 `agentLoopTitle`/`subagentModelSelection*` 等 10 条补丁实测失效。
+   **判「失效」要在源码与 `lib/client.js` 两边都查**（曾误以为「搬到别的命名空间」，实测
+   两处都是 0 处出现）。
+   另注意：插件页的**卡片标题/字段标签属 Config 元数据（数据层），不在任何词典里**，
+   词典补丁覆盖不到，只能走 DOM/数据层。
 3. **处置**：被上游完全本地化且叫法一致的覆盖直接删除（`terms.ts` + `zh-dict.ts`/`dom-labels.ts`
    的引用一起清，禁止只删一边留下悬空引用）；叫法不同时按用户决定「以上游为主」跟随上游并从
    行为契约移除自定义叫法；host 仍下发英文的数据（如权限描述）保留 DOM 层覆盖；新增键（如
@@ -145,6 +193,23 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
 4. **同步回归**：`verify-pairs.cjs` 的 `UPSTREAM` 必须与部署版真实词典一致（不凭旧版本摘录），
    `EXPECT` 相应更新；DOM 夹具若覆盖文本已删，改用仍有效的映射文本。跑 `npm test` 三组回归全绿
    后才算完成。
+5. **核对段落守卫（`SECTION_ZH` / `SYSTEM_SECTION_ZH` 的 `match` / `en`）**——**这一步不做就会
+   静默漏译**：`model-locale.ts` 的每条段落规则都靠一个特征片段（`match`）或逐字原文（`en`）守卫，
+   只有原文**包含该片段**才替换。上游**改写段落文本**时守卫失配，该段落整段退回英文，
+   而 `npm test` 的三组回归**都不覆盖段落规则**，所以不会有任何失败提示。
+   2026-09-23 实测即此因：0.1.7 把 `context:file-reference` 与 `ui:deliverable-file-references` 的
+   `FILE_REFERENCE_PROMPT` 整段重写（前者开头从「are workspace paths」改为
+   「are paths the user explicitly referenced」，后者 8 句全换），两段一直显示英文。
+   升版后跑 `node temp/check-section-guards.mjs`：把每条 `match`/`en`/`replacements.en` 片段在部署版
+   `packages/` 里搜一遍，**0 命中即失配**。失配的按新原文改 `match` 并同步译文；若某 section 在
+   部署树里**已不存在**（如 0.1.7 的 `tool:cordis`，其守卫一直失配、从未生效），整条规则连同
+   专属常量文件一起删。
+   同时按 DSH 的 section 注册表 diff 一遍本表，找出**从未覆盖**的新段落——
+   注册形式是 `ctx.systemPrompt.section({ name, order: ctx.systemPrompt.getSectionOrder('X'), text })`，
+   顺序位常量表在 `packages/core/system-prompt/src/index.ts` 的 `SECTION_ORDERS`。
+   0.1.7 一次补了 `tool:pty`、`tool:lsp`、`tool:session-query`、`mcp-resource-servers`、
+   `tool:structured_output` 五个。带**动态值**的段落（`mcp-resource-servers` 的服务器名 JSON 列表）
+   用 `replacements` 分段替换，不要整段覆盖——整段覆盖会把运行时数据抹掉。
 
 ## DOM 文本层
 
@@ -238,18 +303,19 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
 本地增强设置使用稳定 localStorage 键和不可变快照。`useSyncExternalStore` 要求状态变化后
 `getSnapshot()` 返回新引用，否则 React 可能跳过渲染。
 
-提示词设置通过 `settingsScope.bind({ namespace: 'dsh-zh' })` 绑定。scope 对象引用稳定，
+提示词设置通过 `configForms.get('dsh-zh')`（入口 id = profile 行 id，DSH 0.1.7+）绑定。
+scope 对象引用稳定，
 因此 store 对外暴露 `{ scope, snapshot }` 绑定对象，并在 scope 通知时替换整个对象。
 文本编辑使用本地草稿和 600ms 防抖，组件卸载时清理定时器。
 
-API 网关只允许网页访问硬编码命名空间和 configurable provider 目录。仅调用
-`settings.register` 不足以暴露 `dsh-zh`；主机还要用固定 provider 键 `zh-prompt` 注册
-`settingsNs: 'dsh-zh'`。热重载后先查重再注册，避免 `DUPLICATE_DIRECTORY`。该注册会在
+API 网关只允许网页访问硬编码命名空间和 configurable provider 目录。仅导出
+Config 不足以暴露 `dsh-zh`；主机还要用固定 provider 键 `zh-prompt` 注册
+`settingsNs: 'dsh-zh'`（0.1.7 起即行 id）。热重载后先查重再注册，避免 `DUPLICATE_DIRECTORY`。该注册会在
 Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏，但目录本身必须保留。
 
 ## 客户端服务接入（自动归档等跨服务功能）
 
-- 自动归档与归档视图使用官方 `sessions`、`workspaces`、`settingsScope`、`locale`、`slots` 服务；名称以运行版 `ui-conversation` 等插件的契约为准。
+- 自动归档与归档视图使用官方 `sessions`、`workspaces`、`configForms`、`locale`、`slots` 服务；名称以运行版 `ui-conversation` 等插件的契约为准。
 - `sessions.list` / `workspaces.list` 的订阅建立后要立即按当前快照刷新一次归档视图，否则插件加载时已存在的会话不会进入首次计算。
 - `ZH_AUTO_ARCHIVE_DAYS_DEFAULT` 等跨端默认值必须在 Client 构建输入中显式维护并由测试校对；误引用 Host 常量会使整个经典 bundle apply 失败。
 
@@ -310,7 +376,7 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
 ### 模型请求中文化（model-locale）
 
 `src/lib/model-locale.ts` 维护两个独立开关（`zhAgentPrompt` 代理角色提示中文化、
-`zhToolDesc` 工具说明中文化），与「提示词注入」共用一个 `dsh-zh` settings 命名空间，
+`zhToolDesc` 工具说明中文化），与「提示词注入」共用 `dsh-zh` 行 config（DSH 0.1.7 起），
 通过 `getModelState()` 读取 `chinese-prompt.ts` 维护的共享状态：
 
 - **共享状态来源唯一**：`modelState` 只由 `chinese-prompt.ts`（`dsh-zh` 命名空间唯一
@@ -422,15 +488,53 @@ agent-loop 硬编码拼接，官方渲染侧永远是英文；按用户需求在
   因此智谱联动对 zh_pro 壳与智谱壳一致生效。多查询合并（rank 轮询 + URL 去重）
   与结果净化（URL 白名单/链接文本转义/控制字符折叠）参照智谱壳同级语义实现，
   零跨包 import。
-- 降级运行态记录：每次「智谱失败 → 免费后端」都在 `web-search.ts` 落一条记录
+- 传输层（学习 Hermes ddgs 的 primp 浏览器指纹伪装）：`web-search.ts` 导出
+  `webSearchTransport`（Chrome 风格 cipher/sigalgs/ecdhCurve 的 `https.Agent`，
+  手动 gzip/deflate/br 解压与重定向跟随）；测试经替换其 `request` 属性注入 mock
+  （ESM 绑定只读、对象属性可变）。注意：TLS 指纹**不是** DDG 202 的决定因素
+  （2026-09-23 受控复测四种指纹同拿 202），DDG 按 IP + 请求量限流，故它只当
+  尽力而为的主引擎，可用性靠 Yandex/Bing。
+- 免 Key 引擎集：DDG html→lite（主引擎，`withDdgQueue` 全进程排队串行 + 60s 限流
+  记忆 `ddgRateLimitedUntil`，测试用 `resetWebSearchEngineState` 重置）→
+  Yandex（`yandexSearch`：**旧端点** `/search/site/?text=&web=1&searchid=<随机数>`，
+  `parseYandexResults` 解析 `b-serp-item` 块；正文 captcha 标记按**失败**归因；
+  中文命中词是**逐字** `<b>` 包裹，剥标签必须用空串，用空格会拆散 CJK 词）→
+  Bing（主机 `cn.bing.com` → `www.bing.com`，每台主机 RSS 通道 `parseBingRss`
+  优先、HTML 通道 `parseBingResults` 兜底；HTML 侧用 `unwrapBingUrl` 解包
+  `ck/a?u=a1<base64url>` 跳转）+ Wikipedia opensearch（`parseOpensearchJson`）
+  并发兜底、URL 聚合去重（**合并顺序即优先级**）。Bing/Yandex 都过相关性闸门
+  `looksRelevant`（`queryTokens` 取拉丁词 + CJK 二元组）：整批结果零重叠时丢弃
+  该通道——2026-09-23 实测本机 IP 上 `www.bing.com` 对中文查询返回完全无关的
+  投毒结果。brave/google-wml/mojeek/startpage/yahoo 实测被反爬拦截或结果不可
+  解析，不纳入（证据脚本 `temp/` 下）。
+- Key 型引擎层（`freeSearch` 第 0 层，排在免 Key 引擎之前）：`tavilyReady(ctx)`
+  为真才试；`tavilySearch` 走 `https://api.tavily.com/search`（POST JSON，
+  `Authorization: Bearer`，`search_depth: basic` = 1 点额度），`parseTavilyJson`
+  解析 `results[]` 并把 `content` 截到 `TAVILY_SNIPPET_MAX`（500 字符）。HTTP
+  429/432 记 `tavilyBackoffUntil`（1h）后退避降级。凭据经 `credentials.ts` 三层
+  解析（credentials 服务 → 环境变量 → `$DSH_HOME/.credentials.yaml` 的 `refs:`
+  段），键名 `TAVILY_API_KEY`。**密钥只进请求头**，绝不进请求体、错误消息、日志
+  或诊断快照。
+- 凭据隔离（测试）：`verify-websearch.cjs` 启动时把 `DSH_HOME` 指向临时目录、在
+  其中写 `.credentials.yaml` 夹具，收尾删除并恢复原值。**不隔离就会读到开发机真实
+  凭据**——本机一旦配了 `TAVILY_API_KEY`，所有场景都会额外尝试 Tavily，断言随机器
+  漂移（2026-09-23 踩过：靠 `transportLog.length` 计数的断言直接失败）。
+- 失败归因：`freeSearch` 用 `FreeEngineOutcome` 逐引擎记账，全空且有引擎真实失败
+  时抛 `WEB_PROVIDER_ERROR` 并把每个引擎的归因串进消息（`engineOutcomeLabel`）；
+  只有「全部引擎都通但都没结果」才返回空数组。
+- 降级运行态记录：每次「智谱失败 → 多引擎后端」都在 `web-search.ts` 落一条记录
   （时间/错误码/消息/查询，存 globalThis 品牌化符号、跨实例可见），经
   `/dsh-zh/api/diagnostics` 的 `webSearchFallback` 字段暴露。工具返回值本身
   看不出后端归属（降级后照常返回结果），该记录是「联动真的发生过」的唯一
   硬证据：敏感查询后 `count` 递增且 `last.code` 为 `ZHIPU_CONTENT_FILTERED`，
   正常查询不改变 `count`。
-- 行为回归在 `verify-websearch.cjs`（provider 选择/解析/级联 13 组 +
-  工具壳 10 组 + esm-cache 1 组）；该脚本是无 `.cts` 源的独立 `.cjs`，
-  与三个构建产物回归并存，`npm test` 不包含它，按仓库验证命令单独运行。
+- 行为回归在 `verify-websearch.cjs`（解析器 7 组 + provider/级联/传输 mock
+  25 组 + 工具壳 10 组 + esm-cache 1 组，共 43 组）；该脚本是无 `.cts` 源的独立
+  `.cjs`，与三个构建产物回归并存，`npm test` 不包含它，按仓库验证命令单独运行。
+  传输 mock 里 Bing 夹具要按 `format=rss` 分流（RSS 体 vs HTML 体），查询词还需
+  与夹具结果有词元重叠——相关性闸门会把「与查询零重叠」的整批结果当投毒丢弃；
+  兜底路径的 handler 还必须处理 `yandex.com`（Yandex 已在并发兜底组里），否则
+  会以「unexpected URL」的形式变成一条假的引擎失败。
 
 ## CLI 规则
 

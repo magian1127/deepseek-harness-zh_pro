@@ -31,3 +31,27 @@ const CHAT_LABELS = {
   'Pwsh': 'PowerShell',
   'Schema': '模式',
 }
+// 插件页（ui-plugin-manager）与「智能体团队」动作按钮上的固定文案：**全部是数据层**
+// —— 官方插件的 label / `plugins.item` 槽位 summary，以及团队动作按钮的字面量，
+// 都不在任何 locale 词典里（2026-09-23 以真实 GUI 的 DOM 快照核对，节点形如
+// `<button aria-label="查看 Agent 循环">Agent 循环</button>`、
+// `<div data-slot="plugins.item">控制 Agent 派发工具调用的方式。</div>`、
+// `<div data-team-action="true"><span>Agent Team</span></div>`），因此只能整段精确改写。
+// 每一条都要求「整段文本恰好等于原文」，句子里的 Agent 不做全局替换，避免误伤正文。
+const PLUGIN_ITEM_LABELS = {
+  // 智能体团队动作按钮（data-team-action）。
+  // ⚠️ 这里是**刻意**与上游不一致：上游官方插件卡把同一功能叫「智能体团队」，
+  // 但用户明确偏好「代理团队」，且要求**不改动上游已有的「智能体团队」翻译**
+  // （2026-09-23 确认）。所以只译这个英文按钮，不去动上游的中文名——
+  // 两者并存是预期状态，别把「同一功能两个中文名」当 bug 统一掉。
+  'Agent Team': '代理团队',
+  // 官方插件卡片标题（data-plugin-item="agent-loop" / "subagent"）。
+  'Agent 循环': '代理循环',
+  'Subagent': '子代理',
+  // 卡片标题按钮的 aria-label（「查看 <插件名>」），需整串匹配。
+  '查看 Agent 循环': '查看代理循环',
+  '查看 Subagent': '查看子代理',
+  // 卡片一句话描述（plugins.item 槽位的 summary）。
+  '控制 Agent 派发工具调用的方式。': '控制代理派发工具调用的方式。',
+  '设置 Subagent 的递归层级、数量和模型。': '设置子代理的递归层级、数量和模型。',
+}

@@ -1,7 +1,7 @@
 // 增强设置页组件（注册进 DSH 设置）——仅界面逻辑，文案来自 settings-dicts.js。
 // 设计语言对齐 dsh-session-notification 的通知设置页：扁平 hairline 行
 // （18/28 分区标题、14/22 行名、12/18 说明、官方风格 switch 与胶囊控件）
-// + 三个可收缩卡片（对话样式相关 / 对话列表相关 / 服务监控，复刻官方
+// + 四个可收缩卡片（对话样式相关 / 对话列表相关 / 网络搜索 / 服务监控，复刻官方
 // 插件卡收缩样式），颜色全部走 --dsw-alias-* 令牌（带回退）。
 const zhSectionStyle = {
   display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '720px',
@@ -113,6 +113,23 @@ const ZhSettingsSection = function (props) {
   const svcEditErrorIndexState = React.useState(null)
   const svcEditErrorIndex = svcEditErrorIndexState[0]
   const setSvcEditErrorIndex = svcEditErrorIndexState[1]
+  // ---- 「网络搜索」卡片的 API Key 状态：草稿只存组件态（不落 localStorage），
+  //      界面只显示主机回的脱敏提示，因此刷新后拿不回明文。 ----
+  const credBinding = React.useSyncExternalStore(searchCredentialStore.subscribe, searchCredentialStore.getSnapshot)
+  const credKeyDraftState = React.useState('')
+  const credKeyDraft = credKeyDraftState[0]
+  const setCredKeyDraft = credKeyDraftState[1]
+  React.useEffect(function () { searchCredentialStore.load() }, [])
+  // 保存成功（savedAt 变化）后清空输入框，避免明文留在界面上。
+  React.useEffect(function () {
+    if (credBinding.savedAt !== null) setCredKeyDraft('')
+  }, [credBinding.savedAt])
+  const searchToggleOn = promptReady && promptSnapshot.value.zhWebSearch !== false
+  const submitSearchCredential = function () {
+    const key = credKeyDraft.trim()
+    if (key === '') return
+    searchCredentialStore.save(key)
+  }
   const toggleSvcOpen = function () {
     const next = !(snapshot.serviceMonitorSettingsOpen === true)
     settingsStore.set('serviceMonitorSettingsOpen', next)
@@ -209,6 +226,31 @@ const ZhSettingsSection = function (props) {
     color: 'var(--dsw-alias-label-primary-inverted, #fff)',
     cursor: 'pointer', font: 'inherit', fontSize: 13, lineHeight: '20px',
   }
+  // 「网络搜索」卡片：Key 状态行（真错误标红）与保存/清除按钮的禁用态。
+  // 环境变量提供的 key 无法从界面清除（改不了已运行进程的环境变量），故禁用清除。
+  // 错误码 → 文案由 searchCredentialErrorText 统一映射：只有主机的校验码才归因为
+  // 「key 不合法」，not-found（主机未重启、路由未载入）走单独的重启提示，且不标红
+  // ——它是「需要重启」而非「输入有误」。
+  const credRouteMissing = credBinding.routeMissing === true
+  const credHasError = credBinding.error !== null && credBinding.error !== undefined && credRouteMissing !== true
+  const credStatusStyle = {
+    fontSize: 12, lineHeight: '18px',
+    color: credHasError
+      ? 'var(--dsw-alias-state-error-primary, #d93026)'
+      : 'var(--dsw-alias-label-tertiary, #666)',
+  }
+  let credStatusText = credRouteMissing === true ? t('searchApiKeyRouteMissing') : t('searchApiKeyNotConfigured')
+  const credErrorText = searchCredentialErrorText(t, credBinding)
+  if (credErrorText !== null) {
+    credStatusText = credErrorText
+  } else if (credBinding.configured === true) {
+    const sourceLabel = credBinding.source === 'environment' ? t('searchApiKeySourceEnv') : t('searchApiKeySourceFile')
+    credStatusText = t('searchApiKeyConfigured') + ' · ' + sourceLabel
+      + (typeof credBinding.hint === 'string' && credBinding.hint.length > 0 ? ' · ' + credBinding.hint : '')
+  }
+  const credBusy = credBinding.saving === true
+  const credSaveDisabled = credBusy || credKeyDraft.trim() === ''
+  const credClearDisabled = credBusy || credBinding.configured !== true || credBinding.source === 'environment'
   // 官方插件卡（ui-settings-plugins PluginCard）收缩样式的复刻：
   // 12px 圆角边框卡片，header 是名称(15/600)压描述(13)的两行按钮，
   // 展开时背景变 layer-2、chevron 旋转 180°，body 由 top 分隔线开始。
@@ -279,9 +321,10 @@ const ZhSettingsSection = function (props) {
     React.createElement('h3', { style: zhTitleStyle }, t('nav')),
     React.createElement('p', { style: zhIntroStyle }, t('sectionIntro')),
     React.createElement('div', { style: zhRowsStyle },
-          // 平铺开关：中文补全 / 代理角色提示 / 工具说明 / 上下文注入中文化 / 提示词注入。
-          // 后四项与「提示词注入」同走主机 settings（dsh-zh 命名空间，默认关闭），
-          // 官方文本；全部只作用于新会话；settingsScope 未就绪时显示为禁用。
+          // 平铺开关：中文补全 / 代理角色提示 / 工具说明 / 上下文注入中文化。
+          // 后三项走主机插件行 config（入口 id dsh-zh，默认关闭），官方文本；
+          // 只作用于新会话；configForms 未就绪时显示为禁用。网络搜索开关在下方
+          // 「网络搜索」收缩卡片里（与 API Key 同卡）。
         row('zhComplete', t('zhComplete'), t('zhCompleteDesc'),
           toggle(snapshot.zhComplete, function () { settingsStore.set('zhComplete', !snapshot.zhComplete) }, false, t('zhComplete'))),
         row('zhAgentPrompt', t('zhAgentPrompt'), t('zhAgentPromptDesc'),
@@ -302,12 +345,7 @@ const ZhSettingsSection = function (props) {
               void boundPromptScope.set('zhContextInject', !(promptReady && promptSnapshot.value.zhContextInject === true))
             }
           }, boundPromptScope === null, t('zhContextInject'))),
-        row('zhWebSearch', t('zhWebSearch'), t('zhWebSearchDesc'),
-          toggle(promptReady && promptSnapshot.value.zhWebSearch !== false, function () {
-            if (boundPromptScope !== null && promptReady === true) {
-              void boundPromptScope.set('zhWebSearch', !(promptReady && promptSnapshot.value.zhWebSearch !== false))
-            }
-          }, boundPromptScope === null, t('zhWebSearch'))),
+        // 网络搜索开关已移入下方「网络搜索」收缩卡片（与 API Key 同卡）。
       // ---- 提示词注入：列布局复杂行，hairline 分隔 ----
       React.createElement('div', {
         key: 'zhPrompt',
@@ -452,8 +490,6 @@ const ZhSettingsSection = function (props) {
           },
             React.createElement('option', { value: 'button' }, t('thinkModeButton')),
             React.createElement('option', { value: 'scroll' }, t('thinkModeScroll')))),
-        row('statsFull', t('statsFull'), t('statsFullDesc'),
-          toggle(snapshot.statsFull, function () { settingsStore.set('statsFull', !snapshot.statsFull) }, false, t('statsFull'))),
       ]),
       // ---- 「对话列表相关」收缩卡片：归档 / 删除 / 多选 ----
       collapseCard('listGroup', snapshot.listSettingsOpen === true,
@@ -490,6 +526,72 @@ const ZhSettingsSection = function (props) {
           toggle(snapshot.batchOpsEnabled, function () {
             settingsStore.set('batchOpsEnabled', !snapshot.batchOpsEnabled)
           }, false, t('batchOps'))),
+      ]),
+      // ---- 「网络搜索」收缩卡片：多引擎开关 + Tavily API Key（开关原为平铺行，
+      // 按用户要求与 Key 同卡）。展开时顺带刷新凭据状态。 ----
+      collapseCard('searchGroup', snapshot.searchSettingsOpen === true,
+        function () {
+          const next = !(snapshot.searchSettingsOpen === true)
+          settingsStore.set('searchSettingsOpen', next)
+          if (next === true) searchCredentialStore.load()
+        },
+        t('searchGroup'), t('searchGroupDesc'), null, [
+        row('zhWebSearch', t('zhWebSearch'), t('zhWebSearchDesc'),
+          toggle(searchToggleOn, function () {
+            if (boundPromptScope !== null && promptReady === true) {
+              void boundPromptScope.set('zhWebSearch', !searchToggleOn)
+            }
+          }, boundPromptScope === null, t('zhWebSearch'))),
+        // Key 行：整行纵向布局（key 约 58 字符，横排放不下）；输入框用 password
+        // 形态，保存后由主机回的脱敏提示确认写入结果。
+        React.createElement('div', {
+          key: 'searchApiKey',
+          style: Object.assign({}, zhRowStyle, {
+            flexDirection: 'column', alignItems: 'stretch', gap: '10px', borderBottom: 'none',
+          }),
+        },
+          // zhRowTextStyle 的 flex 基准是按「横向行」设计的（1 1 180px）；本行是
+          // 纵向布局，主轴变成高度，必须把基准收回 auto，否则会撑出 180px 空白。
+          React.createElement('div', { style: Object.assign({}, zhRowTextStyle, { flex: '0 0 auto' }) },
+            React.createElement('div', { style: zhRowTitleStyle }, t('searchApiKeyLabel')),
+            React.createElement('div', { style: zhDescStyle }, t('searchApiKeyDesc'))),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+            React.createElement('input', {
+              type: 'password',
+              value: credKeyDraft,
+              placeholder: t('searchApiKeyPlaceholder'),
+              'aria-label': t('searchApiKeyLabel'),
+              autoComplete: 'off',
+              spellCheck: false,
+              disabled: credBusy,
+              style: Object.assign({}, svcTextAddrStyle, { flex: '1 1 260px' }),
+              onChange: function (event) { setCredKeyDraft(event.target.value) },
+              onKeyDown: function (event) {
+                if (event.key === 'Enter') submitSearchCredential()
+              },
+            }),
+            React.createElement('button', {
+              type: 'button',
+              'aria-label': t('searchApiKeySave'),
+              onClick: function () { submitSearchCredential() },
+              disabled: credSaveDisabled,
+              style: credSaveDisabled
+                ? Object.assign({}, svcAddButtonStyle, { opacity: 0.5, cursor: 'not-allowed' })
+                : svcAddButtonStyle,
+            }, t('searchApiKeySave')),
+            React.createElement('button', {
+              type: 'button',
+              'aria-label': t('searchApiKeyClear'),
+              onClick: function () { searchCredentialStore.clear() },
+              disabled: credClearDisabled,
+              style: credClearDisabled
+                ? Object.assign({}, svcGhostButtonStyle, { opacity: 0.5, cursor: 'not-allowed' })
+                : svcGhostButtonStyle,
+            }, t('searchApiKeyClear'))),
+          React.createElement('div', { style: credStatusStyle }, credStatusText),
+          credBinding.source === 'environment'
+            ? React.createElement('div', { style: zhDescStyle }, t('searchApiKeyEnvNote'))
+            : null),
       ]),
       // ---- 「服务监控」卡片（复刻官方插件设置卡的收缩样式，位于设置页最下方） ----
         React.createElement('div', {

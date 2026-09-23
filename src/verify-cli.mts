@@ -198,20 +198,12 @@ try {
     'function schema() { return { default: function () { return this } } }',
     'module.exports = { object: schema, boolean: schema, string: schema, number: schema }',
   ].join('\n'))
-  let settingsValue = { zhPrompt: true, zhPromptText: '始终使用中文', zhPromptTarget: 'system' }
-  let settingsWatcher = null
-  let settingsUnwatched = 0
-  const settings = {
-    register: function () {
-      return {
-        get: function () { return settingsValue },
-        watch: function (listener) {
-          settingsWatcher = listener
-          return function () { settingsUnwatched += 1 }
-        },
-      }
-    },
-  }
+  // 模拟宿主物化 volatile 引用：apply 直接收 config（字段带 .get()），实时
+  // 变更改状态对象后派发 loader/volatile-update。
+  const configState: Record<string, unknown> = { zhPrompt: true, zhPromptText: '始终使用中文', zhPromptTarget: 'system' }
+  const configRef: Record<string, unknown> = {}
+  for (const key of Object.keys(configState))
+    configRef[key] = { get: function () { return configState[key] } }
   const originalAssemble = async function () {
     return { sections: [{ name: 'deployment:persona-prefix', text: 'persona' }] }
   }
@@ -222,7 +214,6 @@ try {
     fiber: { entry: { options: { id: 'dsh-zh' } } },
     loader: { entries: function () { return [] } },
     get: function (name) {
-      if (name === 'settings') return settings
       if (name === 'systemPrompt') return systemPrompt
       return undefined
     },
@@ -247,15 +238,16 @@ try {
   try {
     console.log = function () {}
     console.warn = function () {}
-    hostPlugin.apply(hostCtx)
+    hostPlugin.apply(hostCtx, configRef)
   } finally {
     console.log = originalConsoleLog
     console.warn = originalConsoleWarn
   }
   let assembly = await systemPrompt.assemble({})
   check(assembly.sections.map(function (section) { return section.name }), ['dsh-zh:language', 'deployment:persona-prefix'], 'system 目标写入最终提示')
-  settingsValue = { zhPrompt: true, zhPromptText: '只用中文', zhPromptTarget: 'user' }
-  settingsWatcher(settingsValue)
+  Object.assign(configState, { zhPrompt: true, zhPromptText: '只用中文', zhPromptTarget: 'user' })
+  for (const entry of handlers['loader/volatile-update'] ?? [])
+    entry.handler([])
   assembly = await systemPrompt.assemble({})
   check(assembly.sections.map(function (section) { return section.name }), ['deployment:persona-prefix'], 'user 目标不写 system prompt')
   const claimed = { role: 'user', id: 'claimed', content: [{ type: 'text', text: '问题' }] }
@@ -270,7 +262,7 @@ try {
   check(decision.messages[1].source, { kind: 'plugin', plugin: 'deepseek-harness-zh_pro', form: 'notice', summary: '提示词注入：只用中文' }, 'user 目标上下文来源正确')
   for (let i = effects.length - 1; i >= 0; i -= 1) await effects[i]()
   check(systemPrompt.assemble, originalAssemble, '卸载后恢复 systemPrompt.assemble')
-  check(settingsUnwatched, 1, '卸载后取消 settings watch')
+  check((handlers['loader/volatile-update'] ?? []).length, 0, '卸载后取消 volatile 监听')
 
     // ---- 模型请求中文化：新会话生效、老会话不重新注入、开关关零改动 ----
     // 复用同样的 stub 模式，但独立装配 chinese-prompt + model-locale 两个模块
@@ -1112,6 +1104,105 @@ try {
     check(probed[1] !== undefined && probed[1].online, false, '服务监控探活 未监听的端口离线')
     check(JSON.stringify(probed[2]), '{"name":"lan","host":"192.168.1.10","port":80,"online":false}', '服务监控探活 非环回项恒为离线')
     await new Promise<void>((resolve) => { probeServer.close(() => resolve()) })
+
+  // 搜索凭据路由（/dsh-zh/api/search-credential）：凭据文件读写 + 脱敏 + provider 白名单。
+  {
+    const credRoot = tempRoot('search-credential')
+    process.env.DSH_HOME = credRoot
+    const credFile = join(credRoot, '.credentials.yaml')
+    // 预置「其它凭据 + 注释 + 顶层键」，验证写入/清除只动目标键。
+    writeFileSync(credFile, [
+      '# 顶层注释',
+      'refs:',
+      '  OTHER_API_KEY: "keep-me"',
+      '',
+      'otherTopLevel: 1',
+      '',
+    ].join('\n'))
+
+    const credentials = await import('./lib/credentials.js')
+    const route = await import('./lib/search-credential.js')
+    const path = route.SEARCH_CREDENTIAL_PATH
+
+    /** 假 req/res：返回 { handled, status, json }。 */
+    const call = (method: string, pathname: string, payload: Record<string, unknown> | null) => {
+      let status = 0
+      let body = ''
+      const res = {
+        statusCode: 0,
+        writeHead(code: number, _headers?: Record<string, string>): void { status = code },
+        end(text?: string | Uint8Array): void { body = typeof text === 'string' ? text : '' },
+      }
+      const handled = route.handleSearchCredentialRoute({ method, url: pathname }, res, pathname, payload)
+      return { handled, status, body, json: body === '' ? null : JSON.parse(body) }
+    }
+    const KEY = 'tvly-dev-abcdefghijklmnopqrstuvwxyz0123456789'
+
+    // 1) 未配置状态
+    const initial = call('GET', path, null)
+    check(initial.handled, true, '搜索凭据路由 命中本路径')
+    check(initial.status, 200, '搜索凭据路由 GET 200')
+    check(initial.json.value.configured, false, '搜索凭据路由 初始未配置')
+    check(initial.json.value.ref, 'TAVILY_API_KEY', '搜索凭据路由 回传 ref 名')
+    check(initial.json.value.hint, null, '搜索凭据路由 未配置时无提示')
+    check(call('GET', '/dsh-zh/api/other', null).handled, false, '搜索凭据路由 非本路径不接管')
+
+    // 2) 保存：写入 refs 段且不破坏文件其余内容
+    const saved = call('POST', path, { key: KEY })
+    check(saved.status, 200, '搜索凭据路由 保存 200')
+    check(saved.json.value.configured, true, '搜索凭据路由 保存后已配置')
+    check(saved.json.value.source, 'file', '搜索凭据路由 来源为凭据文件')
+    const savedText = readFileSync(credFile, 'utf8')
+    check(savedText.includes('# 顶层注释'), true, '搜索凭据路由 保留注释')
+    check(savedText.includes('OTHER_API_KEY: "keep-me"'), true, '搜索凭据路由 保留其它凭据')
+    check(savedText.includes('otherTopLevel: 1'), true, '搜索凭据路由 保留顶层键')
+    check(/^\s+TAVILY_API_KEY: "/m.test(savedText), true, '搜索凭据路由 以双引号标量写入')
+    check(credentials.credentialInFile('TAVILY_API_KEY', credRoot), KEY, '搜索凭据路由 文件可被解析回读')
+
+    // 3) 响应只回脱敏提示，绝不回明文
+    check(saved.json.value.hint, 'tvly-dev…6789', '搜索凭据路由 只回脱敏提示')
+    check(saved.body.includes('abcdefghijklmnop'), false, '搜索凭据路由 响应不得含明文')
+
+    // 4) 非法输入一律拒绝，且不落盘
+    check(call('POST', path, { key: '   ' }).json.error.code, 'empty', '搜索凭据路由 空 key 拒绝')
+    check(call('POST', path, { key: 'tvly a b' }).json.error.code, 'whitespace', '搜索凭据路由 含空格拒绝')
+    check(call('POST', path, { key: 'x'.repeat(513) }).json.error.code, 'too-long', '搜索凭据路由 超长拒绝')
+    check(call('POST', path, { key: 42 }).json.error.code, 'not-string', '搜索凭据路由 非字符串拒绝')
+    const injected = call('POST', path, { key: 'tvly-a\n  EVIL_KEY: "x"' })
+    check(injected.status, 400, '搜索凭据路由 多行注入拒绝')
+    check(readFileSync(credFile, 'utf8').includes('EVIL_KEY'), false, '搜索凭据路由 注入内容不得落盘')
+
+    // 5) provider 白名单：未知 provider 回落 tavily，不能指定任意 ref 名
+    const unknown = call('POST', path, { provider: 'evil', key: 'zzz-1234567890abcdef' })
+    check(unknown.json.value.provider, 'tavily', '搜索凭据路由 未知 provider 回落默认')
+    check(readFileSync(credFile, 'utf8').includes('evil'), false, '搜索凭据路由 不得写入任意 ref 名')
+
+    // 6) 环境变量优先于凭据文件，且同样脱敏
+    process.env.TAVILY_API_KEY = 'tvly-env-0000000000000000'
+    const envStatus = call('GET', path, null)
+    check(envStatus.json.value.source, 'environment', '搜索凭据路由 环境变量优先')
+    check(envStatus.json.value.hint, 'tvly-env…0000', '搜索凭据路由 环境变量值同样脱敏')
+    check(envStatus.body.includes('0000000000000000'), false, '搜索凭据路由 环境变量明文不外泄')
+    delete process.env.TAVILY_API_KEY
+
+    // 7) 清除只删目标键
+    const cleared = call('POST', path, { clear: true })
+    check(cleared.status, 200, '搜索凭据路由 清除 200')
+    check(cleared.json.value.configured, false, '搜索凭据路由 清除后未配置')
+    const clearedText = readFileSync(credFile, 'utf8')
+    check(clearedText.includes('TAVILY_API_KEY'), false, '搜索凭据路由 清除移除目标键')
+    check(clearedText.includes('OTHER_API_KEY: "keep-me"'), true, '搜索凭据路由 清除保留其它凭据')
+
+    // 8) 凭据文件不存在时创建（含 refs 段）
+    const freshRoot = tempRoot('search-credential-fresh')
+    process.env.DSH_HOME = freshRoot
+    check(call('POST', path, { key: 'tvly-fresh-1234567890ab' }).status, 200, '搜索凭据路由 无文件时创建 200')
+    const freshText = readFileSync(join(freshRoot, '.credentials.yaml'), 'utf8')
+    check(/^refs:$/m.test(freshText), true, '搜索凭据路由 新文件含 refs 段')
+    check(credentials.credentialInFile('TAVILY_API_KEY', freshRoot), 'tvly-fresh-1234567890ab', '搜索凭据路由 新文件可回读')
+
+    process.env.DSH_HOME = hostRoot
+  }
   console.log(`OK: CLI/主机全部 ${checks} 项校验通过`)
 } finally {
   if (originalHome === undefined) delete process.env.DSH_HOME

@@ -9,9 +9,9 @@
  *    单实例；下次启动由持久 bundle 行（id `dsh-zh`）唯一挂载；
  * 3. 本插件被裸 `dsh plugin remove` 移除时 → 清理残留临时行 + 自释放，
  *    保证重启后也不会再挂载；
- * 4. 「中文优先提示」（默认关闭）：注册官方 settings 命名空间 `dsh-zh`
- *    （字段 `zhPrompt` 默认 false、`zhPromptText` 注入文本、
- *    `zhPromptTarget` 注入目标，客户端通过 settingsScope 读写）。注入目标
+ * 4. 「中文优先提示」（默认关闭）：插件 Config（DSH 0.1.7 起，行 id
+ *    `dsh-zh` 的行 config，字段 `zhPrompt` 默认 false、`zhPromptText` 注入
+ *    文本、`zhPromptTarget` 注入目标，客户端经 configForms 读写）。注入目标
  *    二选一（客户端下拉框）：`system`（初始系统提示，默认）——包装
  *    systemPrompt.assemble 把文本写进最终 system prompt 的 sections；
  *    `user`（首用户提示词）——在 `agent/pre-step` 阶段把用户文本作为一条
@@ -40,9 +40,10 @@
 import { existsSync, readFileSync, unwatchFile, watchFile } from 'node:fs'
 import { PKG, removeManagedRow } from '../bin/dsh-zh.mjs'
 import { BUNDLE_ROW_ID, HOT_ROW_ID, LIVE_ROW_ID, ZHIPU_PACKAGE_NAME } from './constants.js'
-import { installChinesePrompt, getModelState } from './chinese-prompt.js'
+import { installChinesePrompt, getModelState, createZhConfigSchema } from './chinese-prompt.js'
 import { installModelLocale } from './model-locale.js'
 import { installContextLocale } from './context-locale.js'
+import { loadSchemastery } from './schemastery.js'
 import {
   cleanHotDir, disposeLiveEntries, hotMount, hotUnmount, liveEntryNames,
   readSnapshot, snapshotNames,
@@ -55,7 +56,15 @@ import { argvProfile, localProfileDir, log, manifestPath, warn } from './util.js
 import type { HostContext, PackageSnapshot } from './types.js'
 
 export const name = PKG
-export const inject = ['loader', 'settings', 'systemPrompt']
+export const inject = ['loader', 'systemPrompt']
+
+// 宿主(DSH 0.1.7+)读取的插件 Config:字段全 volatile(见 chinese-prompt.ts
+// createZhConfigSchema),「中文优先提示」等开关持久化在 profile 行 config,
+// 插件页/模型页实时编辑,loader/volatile-update 驱动状态收敛。
+// schemastery 不可用时导出 undefined(不能是 null:宿主 settings 的
+// `'toJSON' in Config` 检查遇 null 会崩掉整页设置),宿主跳过 schema,
+// config 以普通值传入。
+export const Config = createZhConfigSchema(loadSchemastery()) ?? undefined
 
 let lastSnapshot: PackageSnapshot | null = null
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -197,18 +206,18 @@ async function migrateFromHotRow(ctx: HostContext): Promise<void> {
   }
 }
 
-export function apply(ctx: HostContext): void {
+export function apply(ctx: HostContext, config: Record<string, unknown> = {}): void {
   void migrateFromHotRow(ctx)
-  // 「web_search 工具壳」：agent 作用域补壳（探测让位），与 settings 注册同
-  // 门槛避免双实例重复注册；须先于 installChinesePrompt 装配（其 settings
-  // watch 经 onModelStateChanged 回调收敛壳状态）。
+  // 「web_search 工具壳」：agent 作用域补壳（探测让位），与中文优先提示
+  // 装配同门槛避免双实例重复注册；须先于 installChinesePrompt 装配（其
+  // volatile 变更经 onModelStateChanged 回调收敛壳状态）。
   if (ownsPromptRegistration(ctx)) {
     agentSearchToolHandle = installAgentSearchTool(ctx, {
       isEnabled: () => getModelState().zhWebSearch,
       useZh: () => getModelState().zhPrompt,
     }) ?? undefined
   }
-  if (ownsPromptRegistration(ctx)) installChinesePrompt(ctx, {
+  if (ownsPromptRegistration(ctx)) installChinesePrompt(ctx, config, {
     onModelStateChanged: () => agentSearchToolHandle?.refresh(),
   })
   if (ownsPromptRegistration(ctx)) installModelLocale(ctx)
@@ -221,7 +230,7 @@ export function apply(ctx: HostContext): void {
   // 「删除会话（回收站）」：与 settings 注册同门槛，避免热迁移窗口双实例
   // 重复注册路由；服务未就绪时由内部重试等待（见 session-delete.js）。
   if (ownsPromptRegistration(ctx)) installSessionDeleteRoute(ctx, () => resolveSessionDeleteDeps(ctx))
-  // 「网络搜索」：注册 dsh-zh-web 组合 provider（智谱优先 + DuckDuckGo 回退）。
+  // 「网络搜索」：注册 dsh-zh-web 组合 provider（智谱优先 → Tavily → 免 Key 多引擎）。
   // 与 settings 注册同门槛避免双实例重复注册；web 服务晚于本插件就绪时由
   // internal/service 事件重试（与 session-delete 同款模式）。开关状态经
   // getModelState() 读取（dsh-zh 命名空间 zhWebSearch，默认开）。

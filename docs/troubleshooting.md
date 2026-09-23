@@ -92,7 +92,7 @@ profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢
 
 ## 主机文件修改后没有热重载
 
-当前 DSH 版本（0.1.6-alpha.2）下这是**预期行为**，不是配置问题：
+当前 DSH 版本（0.1.7-alpha.2）下这是**预期行为**，不是配置问题：
 
 - `hmr` 服务只提供 `baseDir`/`runExclusive`/`watchConfig`/`getOuterStack`/`getLinked`；
   `registerConfig`/`partialReload`/`stashed` 已移除。dsh-zh 的 `src/lib/hot-reload.ts` 走的正是
@@ -126,7 +126,7 @@ subagent 验收即全部命中）。用普通 `subagent`（无种子）或 GUI �
 
 | 现象 | 原因与处理 |
 | --- | --- |
-| 开关禁用 | `settingsScope` 不可用，或 `dsh-zh` 未进入 configurable provider allowlist；检查客户端依赖、主机日志和提供方注册 |
+| 开关禁用 | `configForms` 不可用，或 `dsh-zh` 未进入 configurable provider allowlist；检查客户端依赖、主机日志和提供方注册 |
 | Models 出现内部提供方行 | 目录用于 settings allowlist；中文界面的 DOM 隐藏效果可能未加载，刷新 bundle |
 | 修改后 UI 不刷新 | 检查 store 是否在 scope 通知时返回新的绑定对象引用 |
 | `system` 不注入 | 检查 `systemPrompt` 服务和 assemble 包装警告 |
@@ -241,6 +241,51 @@ DSH profile 自己安装的 `dshmarket` 与本项目依赖属于不同范围，�
 `ZH_AUTO_ARCHIVE_DAYS_DEFAULT`，语法检查通过但插件 apply 抛 `ReferenceError`，整个插件
 （含中文补全、设置页）一起无法加载。**客户端与主机端各自定义自己的默认值常量**，
 并做一次全仓库 grep 确认没有跨端引用。
+
+## 免费搜索报 `DuckDuckGo 触发反爬限流 (HTTP 202)`
+
+这是免费后端的**常态**而非偶发故障：DuckDuckGo 按 IP + 请求量限流，本机 IP 上短时间
+1–2 次请求后即整段返回 202 anomaly 页；改客户端 TLS 指纹无效（2026-09-23 受控复测：
+primp 随机浏览器指纹、primp chrome、Node 默认 Agent、插件自己的 Chrome 风格 Agent
+四者同一时段同样 202）。Hermes 里看不到这个错误，是因为 ddgs 把非 200 当「无结果」
+静默丢弃并聚合其它引擎。
+
+排查顺序：
+
+1. 看错误消息里**有没有其它引擎的归因**。2026-09-23 起消息会聚合每个引擎
+   （`DuckDuckGo 触发反爬限流 (HTTP 202)；Yandex 无结果；Bing 无结果；Wikipedia 无结果`）。
+   若只有 DDG 一句，说明进程跑的是旧构建（主机半边改动需重启 `dsh web` 才生效）。
+2. `Yandex 无结果` / `Yandex 触发验证码`：Yandex 只有**旧端点** `/search/site/` 可用，
+   `/search/?text=` 已被 captcha 墙接管。手工验证：
+   `curl -s "https://yandex.com/search/site/?text=<urlencoded>&web=1&searchid=1234567" | head -c 400`
+   （正常返回含 `b-serp-item`；被拦则正文含 `showcaptcha`/`form-unique_key`）。
+   注意中文标题里的命中词是**逐字** `<b>` 包裹，用「标签换空格」的方式解析会把
+   「深圳」读成「深 圳」，进而被相关性闸门整批误杀——这是排查时最容易踩的坑。
+3. `Bing 无结果` 时先确认主机：`www.bing.com` 会对本机 IP 返回与查询完全无关的
+   投毒结果（10 条全不沾边、每次还不一样），插件按 `cn.bing.com` → `www.bing.com`
+   顺序尝试并用相关性闸门丢弃投毒批。手工验证：
+   `curl -s "https://cn.bing.com/search?q=<urlencoded>&format=rss&setlang=zh-CN" | head -c 400`
+   （RSS 通道体积约 4KB、link 为真实 URL；HTML 通道的链接包在 `bing.com/ck/a` 里）。
+4. 配了 `TAVILY_API_KEY` 却仍报错：确认键在 `$DSH_HOME/.credentials.yaml` 的
+   `refs:` 段（或同名环境变量）下；`Tavily 额度耗尽或限流 (HTTP 429/432)` 表示
+   免费额度用完，插件会自动退避 1 小时并降级到免 Key 引擎，搜索不会整体失败。
+5. 用真实构建产物复现整条链路（不经 GUI）：加载 `lib/web-search.js`，包一层
+   `webSearchTransport.request` 打印每次请求的 method/url/status，再用假的 `ctx`
+   （`get('web')` 返回带 `registerSearchProvider` 的对象）安装 provider 并调用
+   `search({ query })`——即可看到「DDG 202 → Yandex/Bing 出结果」的真实时序。
+
+## 设置页填 API Key 报「主机接口未就绪」
+
+凭据接口 `/dsh-zh/api/search-credential` 是**主机半边**新增的路由，客户端半边经 client-hmr
+会自动换血、主机半边不会。因此**刚更新插件但还没重启 `dsh web`** 时，设置页「网络搜索」
+卡片能显示出来，但保存 Key 会打到分发器兜底 404（`code=not-found`），卡片状态行提示
+「主机接口未就绪：凭据接口是本版本新增的，需重启一次 dsh web 后可用（key 本身没有问题）」。
+
+**这不是 key 的问题**，重启一次 `dsh web` 即恢复；重启后保存会写进
+`$DSH_HOME/.credentials.yaml` 的 `refs.TAVILY_API_KEY`，保存即生效（凭据每次调用现查）。
+
+排查提示：若状态行显示的是「Key 不合法」，那才是真的校验失败（空、含空格或换行、超过
+512 字符）；只有主机的校验码会映射到该文案，其余错误码一律显示「保存失败 (码)」。
 
 ## npm publish 卡在 EOTP
 

@@ -2,7 +2,7 @@
 // agent preset 默认不暴露 web_search 时，仅切 provider 模型看不到工具——本模块
 // 在每个非极简 Agent 的自身作用域注册同名 web_search 工具与 tool:web_search
 // 说明 section，execute 调用官方 web seam（ctx.web.search），因此自动获得
-// web-search.ts 已接管的 provider 选择（智谱优先 → DuckDuckGo/Bing 免费级联）。
+// web-search.ts 已接管的 provider 选择（智谱优先 → Tavily/DuckDuckGo/Yandex/Bing/Wikipedia 级联）。
 //
 // 与智谱插件（deepseek-harness-zhipu_plan_tools）的职责划分——**探测让位**：
 // 1. 智谱包行存在于 Loader（挂载中或已挂载）→ 智谱是搜索壳的优先 owner，
@@ -101,11 +101,11 @@ interface Localized {
   zh: string
 }
 
-// ============ 文案（后端是 DuckDuckGo/Bing + 智谱联动，无「敏感过滤」措辞） ============
+// ============ 文案（后端是 Tavily/DuckDuckGo/Yandex/Bing/Wikipedia 多引擎 + 智谱联动，无「敏感过滤」措辞） ============
 
 const WEB_SEARCH_TOOL_DESC: Localized = {
-  en: 'Search the web through the zh_pro combined backend (Zhipu-first with automatic DuckDuckGo/Bing fallback). Provide 1–4 focused queries in the required queries array; returns an optional summary answer plus a list of source URLs.',
-  zh: '通过 zh_pro 组合搜索后端（智谱优先，失败自动转 DuckDuckGo/Bing 免费后端）搜索网络。在必填的 queries 数组中提供 1–4 条聚焦的查询；返回可选的摘要回答与来源 URL 列表。',
+  en: 'Search the web through the zh_pro combined backend (Zhipu-first with automatic Tavily/DuckDuckGo/Yandex/Bing/Wikipedia fallback). Provide 1–4 focused queries in the required queries array; returns an optional summary answer plus a list of source URLs.',
+  zh: '通过 zh_pro 组合搜索后端（智谱优先，失败自动转 Tavily/DuckDuckGo/Yandex/Bing/Wikipedia 免费后端）搜索网络。在必填的 queries 数组中提供 1–4 条聚焦的查询；返回可选的摘要回答与来源 URL 列表。',
 }
 
 const QUERIES_PARAM_DESC: Localized = {

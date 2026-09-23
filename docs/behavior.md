@@ -32,7 +32,6 @@
 | 对话样式相关 | 自动展开最新思考 `thinkingAuto` | 开 | localStorage | 中文/英文界面 |
 | 对话样式相关 | 默认展开行数与方向 `thinkMaxLines` / `thinkMaxLinesFrom` | 20；`latest` | localStorage | 0–200；方向可选 `latest` / `earliest` |
 | 对话样式相关 | 展开模式 `thinkMode` | `button` | localStorage | 可选 `button` / `scroll` |
-| 对话样式相关 | 统计全显示 `statsFull` | 开 | localStorage | 中文/英文界面 |
 | 对话列表相关 | 自动归档旧会话 `zhAutoArchiveDays` | 7 天 | `settings.yaml` | 0–365；打开新建会话界面时评估，0 表示关闭 |
 | 对话列表相关 | 查看已归档 `archiveViewEnabled` | 开 | localStorage | 中文/英文界面 |
 | 对话列表相关 | 会话删除按钮 `deleteSessionEnabled` | 开 | localStorage | 关闭时多选菜单中的“批量删除”同时隐藏 |
@@ -41,8 +40,8 @@
 | 服务监控 | 刷新间隔 `serviceMonitorIntervalSec` | 10 秒 | localStorage | 范围 2–300 秒 |
 | 服务监控 | 自定义监控项 `serviceMonitorTargets` | 空 | localStorage | 每项 `{ name, host, port }`，最多 100 项 |
 
-localStorage 键为 `deepseek-harness-zh_pro:enhancements`；主机 settings 命名空间为
-`dsh-zh`。`settingsScope` 不可用时，四个模型请求中文化开关及自动归档字段不可写；
+localStorage 键为 `deepseek-harness-zh_pro:enhancements`；主机配置持久化在行 id `dsh-zh` 的
+profile 行 config（DSH 0.1.7 起）。`configForms` 不可用时，四个模型请求中文化开关及自动归档字段不可写；
 localStorage 中的界面增强仍可使用。
 
 ## 中文补全
@@ -53,6 +52,11 @@ localStorage 中的界面增强仍可使用。
 2. `ZH_PARTIAL` + `TERMS`：只替换上游原句中的目标术语，句子其余部分继续跟随上游。
 3. 参数格式化：把时长、吞吐量和词元数量转换成中文格式。
 4. DOM 文本层：只对已知整段文本或已知动态格式做精确/正则匹配，不改正文片段。
+
+按「键名」跨命名空间兜底的通用词表（`ZH['*']`）**只在上游值不含中文时生效**：
+`empty`/`error`/`status` 这类通用键名在多个命名空间里都是整句，兜底若不判上游是否已本地化，
+就会把整句压成一个词（2026-09-23 修复前：`settings.plugins.empty`「本部署没有开放任何插件
+视图。」被压成「空」）。
 
 界面采用以下已确认术语；其中部分由插件改写，部分直接沿用上游中文：
 
@@ -66,6 +70,11 @@ localStorage 中的界面增强仍可使用。
 | Model ID | 模型标识 |
 | agent / subagent | 代理 / 子代理 |
 | plan mode | 计划模式 |
+| Agent Team（团队动作按钮） | 代理团队 |
+
+> 「代理团队」是**刻意**保留的用户偏好：上游官方插件卡把同一功能叫「智能体团队」，
+> 本插件只译团队动作按钮上的英文 `Agent Team`，**不改动上游已有的「智能体团队」**。
+> 同一功能存在两个中文名是预期状态（用户 2026-09-23 明确要求），不要当成不一致去「统一」。
 
 `subagent → 子代理` 直接沿用上游中文；权限预设内置标签（仅可查看 / 可写入工作区 / 完全权限）与
 confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（跟随上游叫法），
@@ -73,6 +82,14 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
 保留 Cordis、DeepSeek、TypeScript、命令名、文件名、快捷键和示例标识符。数量格式使用万和亿：
 `12.2K → 1.22万`、`46.7M → 4670万`、`123.4M → 1.234亿`。时长示例：
 `48m48s → 48分48秒`、`2.4s → 2.4秒`。
+
+**插件页与「智能体团队」按钮的文案属数据层**：官方插件卡片标题（`data-plugin-item="agent-loop"`
+→「Agent 循环」）、卡片一句话描述（`plugins.item` 槽位 summary，如「控制 Agent 派发工具调用的
+方式。」）、卡片标题按钮的 `aria-label`（「查看 Subagent」）以及团队动作按钮
+（`data-team-action` 内的「Agent Team」）**都不在任何 locale 词典里**——它们由各官方插件以
+数据形式提供（DSH 0.1.7 起插件配置表单由 schemastery `Config` 自动投影）。因此这类文案
+**只能走 DOM 文本层的整段精确改写**（`dom-labels.ts` 的 `PLUGIN_ITEM_LABELS`），
+`ZH`/`ZH_PARTIAL` 词典补丁对它们无效。原文以真实 GUI 的 DOM 快照为准，上游改字后需同步。
 
 刻意保留的上游行为：
 
@@ -193,7 +210,8 @@ assemble 管线改写 contexts 正文；任何改写失败只告警一次并沿�
 
 由「网络搜索」开关（`zhWebSearch`，`settings.yaml` 命名空间 `dsh-zh`，**默认开**，
 实时生效）控制。开启后本插件为 DSH 提供对话中的网络搜索能力，包含两个层面，
-均不引入任何第三方运行时依赖（只用 Node 内置 fetch）：
+均不引入任何第三方运行时依赖（只用 Node 内置 https，TLS 层调成 Chrome 浏览器
+指纹风格）：
 
 **1. 搜索后端接管（web seam provider）**：向官方 web 服务注册组合 provider
 `dsh-zh-web`，并把官方 web 实例的后端选择（`searchProviderId`）切到它；关闭开关
@@ -204,14 +222,52 @@ assemble 管线改写 contexts 正文；任何改写失败只告警一次并沿�
 - **智谱优先**：智谱插件（`deepseek-harness-zhipu_plan_tools`，provider id
   `zhipu-web-search-prime`）已注册且可用时优先走智谱（两插件共存时的联动路径，
   顺序无关、搜索时动态判定）；
-- **智谱失败自动转免费后端**：智谱搜索失败——含敏感内容过滤
-  （`ZHIPU_CONTENT_FILTERED`）与网络/凭据失败——对同一查询自动转免费后端重试；
+- **智谱失败自动转多引擎后端**：智谱搜索失败——含敏感内容过滤
+  （`ZHIPU_CONTENT_FILTERED`）与网络/凭据失败——对同一查询自动转多引擎后端重试；
   用户主动中止（AbortError）不降级、直接上抛；
-- **免费后端级联**：DuckDuckGo html 端点 POST → lite 端点 → Bing HTML 结果页。
-  DDG 对纯 Node fetch 有 TLS 指纹反爬（HTTP 202 anomaly 页），确认限流后直接转
-  Bing（解析 `li.b_algo` 直链与摘要，过滤 `bing.com/ck/` 广告）；免费后端零 API
-  Key、零配置。官方内置 deepseek-official provider 永远排最后（它消耗完整模型
-  轮次）。
+- **Key 型引擎层（可选，Tavily）**：凭据里配了 `TAVILY_API_KEY` 时优先走 Tavily
+  官方 API（`Authorization: Bearer`，`search_depth: basic` = 1 点额度；结果取正文
+  片段并截到 500 字符），命中即返回、不再触免 Key 引擎。未配置时**静默跳过**
+  （不记失败，避免「没填 key」被报成搜索故障）；额度耗尽/限流（HTTP 429/432）
+  记 1 小时退避并降级到免 Key 引擎，搜索不会因此整体失败；
+- **设置页入口**：多引擎开关与 Key 同在「网络搜索」收缩卡片里（开关原为平铺行，
+  已移入卡内）。卡内可填 Tavily API Key，经 `GET|POST /dsh-zh/api/search-credential`
+  写入 `$DSH_HOME/.credentials.yaml` 的 `refs.TAVILY_API_KEY`；凭据每次调用现查，
+  **保存即生效、无需重启**。界面只显示脱敏提示（前 8 + … + 后 4），明文不落
+  localStorage、不进日志；环境变量提供的 Key 优先于凭据文件，此时「清除」按钮禁用
+  （改不了已运行进程的环境变量）；
+- **免 Key 多引擎级联（学习 Hermes 的 ddgs 元搜索架构）**：DuckDuckGo html
+  端点 POST → lite 端点（主引擎，全进程排队串行）→ Yandex + Bing + Wikipedia
+  opensearch API（并发兜底、聚合去重；合并顺序即优先级）。传输层以 Chrome 风格的
+  cipher/sigalgs/ecdhCurve 发起请求；确认限流后记入 60 秒限流记忆（窗口内跳过 DDG
+  直接兜底）。
+  **DDG 的 HTTP 202 反爬是 IP + 请求量限流，不是 TLS 指纹问题**（2026-09-23 受控
+  复测：primp 随机浏览器指纹、primp chrome、Node 默认 Agent、本 Chrome Agent 四者
+  同一时段同样 202；短时间 1–2 次请求后整段 202），因此 DDG 只作「尽力而为」的
+  主引擎，真正扛住可用性的是 Yandex/Bing。Hermes/ddgs 同样拿 202，只是它把非 200
+  当「无结果」静默丢弃并聚合其它引擎，所以用户看不到该错误。
+- **Yandex（无 Key）**：必须用**旧端点** `/search/site/?text=&web=1&searchid=<随机数>`
+  （即 ddgs `engines/yandex.py` 用的那个）——`/search/?text=` 已被 captcha 墙接管
+  （正文 title=Verification），而 `/search/site/` 仍返回真 SERP（2026-09-23 实测
+  12 次请求 0 captcha、每页 10–14 条、中英文结果均沾边）。结果链接是**真实 URL**
+  （跳转只藏在 `onmousedown` 的 clck/jsredir 里），不需要 Bing 那样的 ck/a 解包；
+  正文出现 captcha 标记时按**失败**归因而不是「无结果」，否则会把拦截误报成
+  「查不到」。命中词用 `<b>` **逐字**包住中文（`<b>深</b><b>圳</b>`），所以剥标签
+  必须用空串——换成空格会把「深圳」拆成「深 圳」，被 CJK 二元组闸门整批误杀。
+- **Bing 双主机 × 双通道**：主机 `cn.bing.com` 优先、`www.bing.com` 次选（2026-09-23
+  实测本机 IP 上 www 会对中文查询返回 10 条与查询完全无关的「投毒」结果、每次还
+  不一样，cn 同一查询稳定沾边）；每台主机先走 RSS 结构化通道（`&format=rss`，
+  体积约 4KB、link 为真实 URL），再走 HTML 结果页。HTML 通道的结果链接全部包进
+  `bing.com/ck/a` 跳转（2026-09 改版），解析时解包还原真实 URL 并过滤广告。
+- **相关性闸门**：Bing 的某通道返回结果整批与查询词元（拉丁词 + CJK 二元组）
+  零重叠时视为投毒响应，丢弃该批结果并换通道；全通道都投毒时按「Bing 无结果」
+  处理。Yandex 同样过闸门（整批零重叠时按「无结果」处理）。两者都不把无关链接
+  当搜索结果交给模型。
+- **失败归因聚合**：所有引擎都拿不到结果时，错误消息逐个列出各引擎的归因
+  （`DuckDuckGo 触发反爬限流 (HTTP 202)；Yandex 无结果；Bing 无结果；Wikipedia 无结果`），
+  不再只报最后一个错误——否则会把 DDG 的限流误报成全局故障。
+- 免 Key 引擎零配置；Tavily 可选，只需在凭据里填 `TAVILY_API_KEY`（见「凭据与隐私」）。
+  官方内置 deepseek-official provider 永远排最后（它消耗完整模型轮次）。
 
 **2. agent 作用域 `web_search` 工具壳**：Web profile 的官方 `dsh-tool-web` 行被
 禁用、agent preset 默认不暴露 web_search 时，仅切后端模型看不到工具。本插件在
@@ -243,9 +299,17 @@ execute 走官方 web seam，因此自动获得上述后端级联与智谱联动
 - zh_pro 先于智谱热挂载进长跑进程的窗口内，智谱壳首次注册会与本插件已注册的壳
   撞名，智谱以错误级日志报告「注册冲突重试耗尽」后自愈（下次 agent 事件时本
   插件让位、智谱壳正常落位）；冷启动（两插件都在 profile bundles）无此窗口。
-- DDG 免费后端受反爬限流影响，实际可用性依赖 Bing 级联；两者都是公开 HTML
-  结果页解析，结果质量与条数不及 API 类后端（每条查询向上游取 10 条，4 条查询
-  合并去重后最多 40 条来源）。
+- DDG 反爬限流是常态而非偶发（本机 IP 上短时间 1–2 次请求后即整段 202，改客户端
+  TLS 指纹无效）；触发后 60 秒限流记忆窗口内自动跳过 DDG，Yandex/Bing/Wikipedia
+  兜底照常出结果，用户只在三者同时无结果时才会看到聚合后的错误。
+  免 Key 引擎都是公开端点解析，结果质量与条数不及 API 类后端（每条查询向上游取
+  约 10 条，4 条查询合并去重后最多 40 条来源）。
+- **Tavily 额度消耗**：Key 型引擎层排在免 Key 引擎之前，因此配了 `TAVILY_API_KEY`
+  后**每次搜索都会消耗 1 点额度**（免费 1000 次/月，basic 深度），命中即返回；
+  用尽后自动降级到免 Key 引擎。若想只在免 Key 引擎全部失败时才动用 Tavily
+  （省额度换质量），需要调整 `web-search.ts` 中 `freeSearch` 的层序。
+- Yandex 的结果来自其自有索引、不经国内审核，因此同一中文查询在 Yandex 与
+  cn.bing.com 上可能得到不同（含更敏感）的结果集；这是引擎属性而非插件行为。
 
 ## 提示词注入
 
@@ -291,15 +355,6 @@ execute 走官方 web seam，因此自动获得上述后端级联与智谱联动
 - 流式输出期间点击「再展开」同样立即生效：展开基于正文当前（实时）内容计算，不会因缓存旧文本而回退。
 - 折叠只作用于思考块正文，不影响 `自动展开最新思考` 的展开行为。
 - `0` 表示不限制行数，此时不起作用。关闭开关或卸载插件时移除折叠样式，正文保持原文。
-
-## 统计全显示
-
-匹配 StatsLine 的 `N 轮 · N 步`（中文界面）或 `N turns · N steps`（英文界面）计数组后：
-
-- 保持单行，不使用省略号；
-- 从 12px 开始自动缩小，最低 9px；
-- 仍超长时启用横向滚动；
-- 关闭开关或卸载插件时恢复上游样式。
 
 ## 自动归档旧会话
 
@@ -506,8 +561,11 @@ workspaceRegistry 尚未公开 unarchive 或事务写 API，本插件只持久�
     部分按官方行为保留。
   后两者只改写发往模型的 system prompt 与工具说明，不写会话历史。
 - 网络搜索开关开启时，搜索查询会被发送到所选后端：智谱插件在场且可用时发往智谱
-  （由智谱插件处理其凭据与回退），否则发往公开的 DuckDuckGo/Bing HTML 端点；
-  本插件不携带任何凭据，也不存储查询与结果。
+  （由智谱插件处理其凭据与回退）；配了 `TAVILY_API_KEY` 时发往 Tavily 官方 API
+  （密钥只进 `Authorization` 请求头）；否则发往公开的 DuckDuckGo/Yandex/Bing/
+  Wikipedia 端点。本插件不存储查询与结果，也不把密钥写入配置、日志或诊断快照；
+  设置页「网络搜索」卡片是密钥**唯一**的落盘入口（写 DSH 凭据文件的 `refs` 段），
+  界面与接口响应都只经手脱敏提示。
 - 本地界面设置只写浏览器 localStorage。
 - 提示词设置只经 DSH 官方 settings 服务写入 `settings.yaml`。
 - 默认关闭提示词注入，关闭时没有额外 token 消耗。

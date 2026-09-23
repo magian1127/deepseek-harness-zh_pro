@@ -20,6 +20,7 @@ const outputFile = join(root, 'lib', 'client.js')
 const BODY_ORDER = [
   'data/settings-dicts.ts',
   'logic/settings-store.ts',
+  'logic/search-credential.ts',
   'logic/prompt-store.ts',
   'data/terms.ts',
   'data/zh-dict.ts',
@@ -83,6 +84,13 @@ const wrapperEnd = `    exports.inject = ['locale', 'slots', 'sidebarRightTabs']
     exports.sessionBatch = {
       pass: runBatchPassForTest,
       selectionSize: batchSelectionSize,
+    };
+    exports.searchCredential = {
+      store: searchCredentialStore,
+      errorText: searchCredentialErrorText,
+      failure: searchCredentialFailure,
+      validationCodes: SEARCH_CREDENTIAL_VALIDATION_CODES,
+      endpoint: SEARCH_CREDENTIAL_ENDPOINT,
     };
     return module.exports;
   },

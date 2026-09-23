@@ -14,12 +14,14 @@ function installAutoArchive(ctx) {
   const autoArchive = function () {
     const sessions = ctx.get('sessions')
     const workspaces = ctx.get('workspaces')
-    const binder = ctx.get('settingsScope')
+    // DSH 0.1.7 起 settingsScope 退役:经 configForms 按入口 id 取 ConfigForm
+    // (快照面与旧 settingsScope 同构)。
+    const configForms = ctx.get('configForms')
     if (sessions === undefined || sessions === null
       || workspaces === undefined || workspaces === null
-      || binder === undefined || binder === null
-      || typeof binder.bind !== 'function') return false
-    const archiveScope = binder.bind({ namespace: PROMPT_SETTINGS_NS })
+      || configForms === undefined || configForms === null
+      || typeof configForms.get !== 'function') return false
+    const archiveScope = configForms.get(PROMPT_SETTINGS_NS)
     const autoArchiveState = {
       days: ZH_AUTO_ARCHIVE_DAYS_DEFAULT,
       ready: false,
@@ -210,7 +212,7 @@ function installAutoArchive(ctx) {
   // 立即尝试初始化；服务未就绪时监听 internal/service 事件，出现时重试。
   if (!autoArchive()) {
     const retryService = function (name) {
-      if (name === 'sessions' || name === 'workspaces' || name === 'settingsScope') {
+      if (name === 'sessions' || name === 'workspaces' || name === 'configForms') {
         if (autoArchive()) {
           ctx.off('internal/service', retryService)
         }

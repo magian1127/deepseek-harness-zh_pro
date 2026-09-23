@@ -16,7 +16,6 @@
 // 必须等 assemble 完整返回后再改写。
 import { getModelState } from './chinese-prompt.js'
 import { ensureAssemblePatch, registerAssembleRewriter } from './assemble-patch.js'
-import { CORDIS_SECTION_ZH } from './cordis-section-zh.js'
 import { log, warn } from './util.js'
 import type { HostContext } from './types.js'
 
@@ -266,14 +265,19 @@ const SYSTEM_SECTION_ZH: Record<string, { zh: string; match: string; keep?: (tex
     },
   },
   'context:file-reference': {
-    // 官方特征：file-reference FILE_REFERENCE_PROMPT 开头。
-    match: 'Tokens prefixed with @ are workspace paths',
-    zh: '带 @ 前缀的路径是用户显式引用的文件。需要其内容时使用 read 工具；在读取之前不要声称已检查过该文件。',
+    // 官方特征：dsh-file-reference 的 FILE_REFERENCE_PROMPT 开头句。
+    // 2026-09-23 复验：0.1.7 把该常量从「are workspace paths」整段重写为
+    // 「are paths the user explicitly referenced.」——旧 match 失配 → 段落整段
+    // 保持英文（用户报「开关都开着但这段没翻译」即此因）。译文同步新句。
+    match: 'Tokens prefixed with @ are paths the user explicitly referenced',
+    zh: '带 @ 前缀的路径是用户显式引用的路径。相对路径从工作区根解析；绝对路径指向主机上的文件或目录。末尾的斜杠标记目录：当目录内容重要时列出它。其它情况都是文件：需要其内容时使用 read 工具，读取之前不要声称已检查过该文件。@"..." 用于引用含空格的路径。',
   },
   'ui:deliverable-file-references': {
-      // 官方特征：ui-deliverables 包独立的 FILE_REFERENCE_PROMPT 开头句（非 context:file-reference 同名常量）。
-      match: 'When you successfully create or modify files, mention the primary outputs',
-    zh: '当你成功创建或修改文件时，在最终回复中提及主要输出。为让这些及其它变更文件引用在 Web 中可点击，请使用确切的文件工具路径（或本回合变更文件中唯一的 basename）以 Markdown 行内代码格式写出。',
+    // 官方特征：ui-deliverables 包独立的 FILE_REFERENCE_PROMPT 开头句（非 context:file-reference 同名常量）。
+    // 2026-09-23 复验：0.1.7 把整段重写为「Prefer showing the primary results…」
+    // （8 句，含 present 用法、卡片数量上限与链接规则），旧 match 失配 → 整段英文。
+    match: 'Prefer showing the primary results within your final response',
+    zh: '优先在最终回复中展示主要结果，并配一段简短说明。形如 [Report](path/to/report.html) 的 Markdown 文件链接会在侧栏预览中打开该文件。图像可以加内联预览，如 ![Preview](/absolute/path/image.png)；同时附上文件链接，以便无法内联显示图像的客户端仍能访问。不要仅为罗列被编辑的源文件而调用 present，也不要为确认是否会显示 diff 视图而运行命令。当单独的文件卡片能帮助用户打开完整交付物时使用 present，尤其是 Office 文档、电子表格与演示文稿。每个 present 的文件会在回复下方添加一张卡片，带预览与原生打开操作。通常挑 1-2 个最重要的交付物；确有需要可多给，但单次 present 调用最多 4 个文件。避免重复展示已内联呈现的结果，除非单独卡片能带来有用的访问方式。在命令、配置表达式与代码块之外，把每一处对既有文件的提及（含重复提及与表格内提及）都链接到其相对于工作目录的完整路径或绝对路径；已知行号时在目标后追加 #L24 或 #L24-L30。标签用文件名或清晰的别名，只补足够区分文件的上级目录；标签里不要放完整路径。默认只用文件名；需要精确位置时追加 :24 或 :24–30，行后缀里不带 # 或 L。',
   },
 }
 
@@ -427,10 +431,12 @@ const SECTION_ZH: Record<string, SectionRule> = {
     zh: '仅当用户明确要求工作流或大规模多代理编排时才使用 workflow 工具：你编写一个 JavaScript 脚本（工具说明记载了确切格式），把工作扇出给许多子代理，分阶段并产出结构化结果。只有一两个委派时，优先用普通 subagent 调用。',
     match: 'Use the workflow tool ONLY when',
   },
-  'tool:cordis': {
-    zh: CORDIS_SECTION_ZH,
-    match: 'Dynamic Cordis plugins temporarily extend the current DSH process',
-  },
+  // 原 `tool:cordis` 规则已删除（2026-09-23，0.1.7 复验）：**该 section 已不存在**——
+  // 在整个部署树里搜不到任何注册 `tool:cordis` 的段落，`Dynamic Cordis plugins
+  // temporarily extend the current DSH process` 这句在 packages/ 下 0 处出现
+  // （cordis 工具的说明现在是 `api-catalog.ts` 里的生成式 API 目录，不是提示段落）。
+  // 守卫一直失配、从未生效，属死规则；与其保留给人「已覆盖」的错觉，不如删掉。
+  // 附带的 `cordis-section-zh.ts` 也随之删除。
   // PTC 模式（ptc 预设）：执行器收敛声明（mode 非 ptc 时为空串，空段守卫跳过）。
   'tools:ptc-only': {
     zh: '`run_code` 是你唯一能直接调用的工具——点名其它任何工具的调用都会失败。SDK 在下方声明的所有工具都从程序内部调用。',
@@ -440,6 +446,40 @@ const SECTION_ZH: Record<string, SectionRule> = {
   // 生成的 SDK 代码声明（约 30KB TS/Py 声明块，模型的唯一工具绑定）保留英文。
   'tools:sdk': { replacements: SDK_SECTION_REPLACEMENTS },
   'plan:policy': { zh: PLAN_POLICY_ZH, en: PLAN_POLICY_EN },
+  // ---- 0.1.7 复验补齐（2026-09-23）：以下 5 个段落**从未覆盖**。
+  // 它们随各自工具包挂载才出现（standard 预设只挂载其中一部分），此前一直整段英文。
+  // 判据：按 DSH section 注册表逐项 diff 本表（脚本见 docs/development.md 的升版对齐步骤）。
+  // 来源：packages/terminal/tool-terminal。
+  'tool:pty': {
+    zh: '仅当工作需要持久终端状态或交互式 stdin 时才使用终端会话；有界的一次性操作用 shell/read/write/edit。跟踪每个终端会话 id，并关闭不再重要的会话。inferred_idle 或超时结果并不能证明前台命令已退出。',
+    match: 'Use a terminal session only when work needs persistent terminal state',
+  },
+  // 来源：packages/lsp/tool-lsp。
+  'tool:lsp': {
+    zh: '常规导航用 search/read。当文本匹配有歧义，或在改动前需要精确定义、实现或引用时，用 lsp。位置是光标处从 1 开始的行与字符（UTF-16）；不在符号上的位置可能返回空结果。findReferences 总是包含声明本身。',
+    match: 'Use search/read for ordinary navigation.',
+  },
+  // 来源：packages/session-query/tool-session-query。
+  'tool:session-query': {
+    zh: '用 session_search 查找此前会话中的相关工作，或用 session_event_search 在单个会话内搜索更早的事件。搜索结果无游标、限定在工作区内。需要谱系、关系或精确数据时，用 session_trace、session_event_trace 或 session_event_read 跟进有用的命中。',
+    match: 'Use session_search to find relevant work from prior sessions',
+  },
+  // 来源：packages/mcp/mcp-resources。段落含动态服务器名 JSON 列表 →
+  // 分段替换：只翻标题与固定句式，`["..."]` 名字列表原样保留。
+  'mcp-resource-servers': {
+    replacements: [
+      { en: '## MCP resource servers', zh: '## MCP 资源服务器' },
+      {
+        en: 'Use list_mcp_resources, list_mcp_resource_templates, or read_mcp_resource with one of these names as the server argument: ',
+        zh: '把下列名字之一作为 server 参数，传给 list_mcp_resources、list_mcp_resource_templates 或 read_mcp_resource：',
+      },
+    ],
+  },
+  // 来源：packages/subagent/subagent-in-process-driver（结构化子代理的收尾要求）。
+  'tool:structured_output': {
+    zh: '得到最终答案后，你必须调用 `structured_output` 工具上报，参数严格匹配其参数 schema。不要用纯文本作答收尾：只有工具调用才算你的结果。',
+    match: 'When you have your final answer, you MUST report it by calling the',
+  },
 }
 
 // ============ 会话语言锁定 ============
