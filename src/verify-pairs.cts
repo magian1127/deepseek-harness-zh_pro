@@ -1289,6 +1289,98 @@ check(JSON.stringify(smOrdered.map(function (entry) {
   't:127.0.0.1:1433:off',
 ]), '服务监控排序 自动发现最上（保持新→旧）、在线自定义随后、离线自定义沉底')
 
+// ---- 服务监控左栏面板：10 行上限 + 隐藏滚动条 + 「还有更多」箭头 ----
+// 行高/间距/行数常量与 CSS 必须一致：CSS 用 calc(var(--dsh-zh-sm-row-h) * 10
+// + var(--dsh-zh-sm-row-gap) * 9) 算高度上限，JS 翻页按同样的数值算步长。
+check(serviceMonitorUnderTest.panelRows, 10, '服务监控左栏 一屏最多 10 行')
+check(serviceMonitorUnderTest.panelRowHeight, 28, '服务监控左栏 行高 28px（与 CSS line-height 18 + padding 5×2 一致）')
+check(serviceMonitorUnderTest.panelRowGap, 1, '服务监控左栏 行间距 1px')
+const smPanelCss = String(serviceMonitorUnderTest.panelCss)
+check(smPanelCss.indexOf('max-height:calc(var(--dsh-zh-sm-row-h) * 10 + var(--dsh-zh-sm-row-gap) * 9)') !== -1, true,
+  '服务监控左栏 CSS 高度上限按行高变量精确算出 10 行')
+check(smPanelCss.indexOf('scrollbar-width:none') !== -1, true,
+  '服务监控左栏 隐藏滚动条（Firefox scrollbar-width）')
+check(smPanelCss.indexOf('-ms-overflow-style:none') !== -1, true,
+  '服务监控左栏 隐藏滚动条（旧 Edge/IE -ms-overflow-style）')
+check(smPanelCss.indexOf('[data-dsh-zh-sm-list]::-webkit-scrollbar{width:0;height:0;display:none}') !== -1, true,
+  '服务监控左栏 隐藏滚动条（WebKit/Blink 伪元素）')
+// 限高与隐藏滚动条都只作用于左栏：右栏 tab 仍撑满容器（原行为）。
+check(smPanelCss.indexOf('[data-dsh-zh-service-monitor]:not([data-mount="tab"]) [data-dsh-zh-sm-list]') !== -1, true,
+  '服务监控左栏 高度上限只作用于左栏（排除 data-mount=tab）')
+check(smPanelCss.indexOf('[data-dsh-zh-service-monitor][data-mount="tab"] [data-dsh-zh-sm-list]{flex:1 1 auto;min-height:0;max-height:none}') !== -1, true,
+  '服务监控右栏 tab 解除限高（撑满 React 容器）')
+check(smPanelCss.indexOf('[data-dsh-zh-service-monitor][data-overflow="true"] [data-dsh-zh-sm-more]{display:inline-flex}') !== -1, true,
+  '服务监控左栏 箭头仅在 data-overflow=true 时显示')
+check(smPanelCss.indexOf('[data-dsh-zh-sm-more][data-dir="up"] svg{transform:rotate(180deg)}') !== -1, true,
+  '服务监控左栏 向上箭头由 data-dir=up 翻转同一枚图标')
+// 箭头状态判定（纯函数）：none / down / up 三分支 + 1px 容差。
+check(serviceMonitorUnderTest.panelMoreState(0, 280, 280), 'none', '左栏箭头 恰好一屏不溢出时不显示')
+check(serviceMonitorUnderTest.panelMoreState(0, 0, 0), 'none', '左栏箭头 几何不可知（未布局）时不显示')
+check(serviceMonitorUnderTest.panelMoreState(0, 1000, 280), 'down', '左栏箭头 顶部且有更多内容 → 向下')
+check(serviceMonitorUnderTest.panelMoreState(360, 1000, 280), 'down', '左栏箭头 滚动中（未到底）→ 向下')
+check(serviceMonitorUnderTest.panelMoreState(720, 1000, 280), 'up', '左栏箭头 滚到底 → 向上')
+check(serviceMonitorUnderTest.panelMoreState(719, 1000, 280), 'up', '左栏箭头 距底 1px 内视为到底（缩放舍入容差）')
+check(serviceMonitorUnderTest.panelMoreState(718, 1000, 280), 'down', '左栏箭头 距底超过 1px 仍为向下')
+// 一屏行数：按列表高度换算（供「翻一屏」步长使用）。
+// 10 行恰好需要 28×10 + 1×9 = 289px（即 CSS max-height 的值）。
+check(serviceMonitorUnderTest.panelPageRows(289), 10, '左栏箭头 289px 恰好容纳 10 行（与 CSS 上限一致）')
+check(serviceMonitorUnderTest.panelPageRows(0), 10, '左栏箭头 高度未知时退回默认 10 行')
+check(serviceMonitorUnderTest.panelPageRows(280), 9, '左栏箭头 280px 只能容纳 9 行（第 10 行需 289px）')
+check(serviceMonitorUnderTest.panelPageRows(145), 5, '左栏箭头 145px 高容纳 5 行')
+check(serviceMonitorUnderTest.panelPageRows(10), 1, '左栏箭头 极矮列表至少 1 行（不出现 0 步长）')
+// 文案键齐全（中英文各一份）。
+const smMoreCopySource = fs.readFileSync(__dirname + '/lib/client/logic/service-monitor.js', 'utf8')
+check(['moreDown:', 'moreUp:', 'moreDownAria:', 'moreUpAria:'].every(function (key) {
+  return smMoreCopySource.split(key).length === 3
+}), true, '服务监控左栏箭头 中英文文案键齐全（各 2 份）')
+
+// 箭头与列表的联动（真实元素，非纯函数）：滚动几何用 makeFakeEl 的
+// scrollTop/scrollHeight/clientHeight；这里手工搭一个可滚动的列表 + 箭头。
+// listEl.clientHeight 由 maxHeight 派生（makeFakeEl 的既有语义），因此把
+// maxHeight 设成 289px（= 10 行）来模拟 CSS 的 height 上限。
+function makeSmScrollFixture(totalRows) {
+  const list = makeFakeEl()
+  list.style.maxHeight = '289px'
+  // 行高 28 + 间距 1 → 内容高度 = 行数 × 28 + (行数-1) × 1。
+  let text = ''
+  for (let i = 0; i < totalRows; i += 1) text += (i === 0 ? '' : '\n') + 'row'
+  list.textContent = text
+  const more = makeFakeEl()
+  const panel = makeFakeEl()
+  panel.appendChild(list)
+  panel.appendChild(more)
+  return { list: list, more: more, panel: panel }
+}
+// 10 行以内不溢出 → 箭头隐藏、data-overflow=false。
+const fit = makeSmScrollFixture(10)
+serviceMonitorUnderTest.panelSyncMore(fit.list, fit.more)
+check(fit.more.style.display, 'none', '左栏箭头 10 行不溢出时隐藏')
+check(fit.panel.getAttribute('data-overflow'), 'false', '左栏箭头 不溢出时 data-overflow=false')
+// 25 行 → 溢出，初始在顶部 → 向下箭头可见。
+const over = makeSmScrollFixture(25)
+serviceMonitorUnderTest.panelSyncMore(over.list, over.more)
+check(over.more.style.display, '', '左栏箭头 25 行溢出时可见')
+check(over.panel.getAttribute('data-overflow'), 'true', '左栏箭头 溢出时 data-overflow=true')
+check(over.more.getAttribute('data-dir'), 'down', '左栏箭头 顶部时向下')
+check(typeof over.more.getAttribute('aria-label') === 'string'
+  && over.more.getAttribute('aria-label').length > 0, true,
+  '左栏箭头 向下时写入 aria-label 无障碍文案')
+check(typeof over.more.title === 'string' && over.more.title.length > 0, true,
+  '左栏箭头 向下时写入 title 悬停提示')
+// 点击向下翻一屏：一屏 10 行 → 步长 9 行 = 9 × 29 = 261px。
+const overMax = over.list.scrollHeight - over.list.clientHeight
+serviceMonitorUnderTest.panelScrollStep(over.list, over.more)
+check(over.list.scrollTop, Math.min(overMax, 261), '左栏箭头 点击向下翻一屏（9 行步长）')
+check(over.more.getAttribute('data-dir'), 'down', '左栏箭头 翻一屏后仍在向下')
+// 连点到底 → 翻转为向上箭头。
+for (let i = 0; i < 10; i += 1) serviceMonitorUnderTest.panelScrollStep(over.list, over.more)
+check(over.list.scrollTop, overMax, '左栏箭头 连续点击后停在底部（不越界）')
+check(over.more.getAttribute('data-dir'), 'up', '左栏箭头 到底后翻转为向上')
+// 到底后再点 → 回到顶部并翻回向下。
+serviceMonitorUnderTest.panelScrollStep(over.list, over.more)
+check(over.list.scrollTop, 0, '左栏箭头 到底后点击回到顶部')
+check(over.more.getAttribute('data-dir'), 'down', '左栏箭头 回到顶部后恢复向下')
+
 // ---- 服务监控条目操作：同端口判定（排除监控移除自定义项时使用） ----
 check(serviceMonitorUnderTest.serviceHostMatches('127.0.0.1', '127.0.0.1'), true, '服务监控条目操作 同端口判定 精确匹配')
 check(serviceMonitorUnderTest.serviceHostMatches('localhost', '127.0.0.1'), true, '服务监控条目操作 同端口判定 localhost 归一化命中')

@@ -80,10 +80,24 @@ const wrapperEnd = `    exports.inject = ['locale', 'slots', 'sidebarRightTabs']
       orderedPanelEntries: orderedPanelEntries,
       serviceElapsedText: serviceElapsedText,
       serviceHostMatches: serviceHostMatches,
+      panelMoreState: servicePanelMoreState,
+      panelPageRows: servicePanelPageRows,
+      panelScrollStep: servicePanelScrollStep,
+      panelSyncMore: syncMoreFor,
+      panelRowHeight: SERVICE_PANEL_ROW_H,
+      panelRowGap: SERVICE_PANEL_ROW_GAP,
+      panelRows: SERVICE_PANEL_ROWS,
+      panelCss: SERVICE_MONITOR_CSS,
     };
     exports.sessionBatch = {
       pass: runBatchPassForTest,
       selectionSize: batchSelectionSize,
+    };
+    exports.sessionDeleteRows = {
+      pass: runDeletedRowPassForTest,
+      refresh: fetchDeletedSessionIds,
+      clear: clearDeletedRowMarks,
+      size: function () { return deletedSessionIds.size },
     };
     exports.searchCredential = {
       store: searchCredentialStore,

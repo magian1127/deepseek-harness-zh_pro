@@ -45,6 +45,44 @@ function clearBatchSelection() {
   syncBatchChecks()
 }
 
+/**
+ * 多选的归档构成：决定批量菜单给哪些项。
+ *
+ *   - `'empty'`    未选任何会话；
+ *   - `'archived'` 全部已归档 → 只有「批量取消归档」对它们有意义；
+ *   - `'plain'`    全部未归档 → 只有「批量归档」有意义；
+ *   - `'mixed'`    两类混选 → 两个方向都只对一半生效，**只提供「批量删除」**
+ *                  （删除对两类都成立）。
+ *
+ * 归档集合取自官方 workspaces 快照（与官方视图/归档视图同一份真值）；
+ * 快照不可用时按 `'plain'` 处理（退化为原有行为，不误报 mixed）。
+ */
+function batchSelectionArchiveKind(ctx) {
+  if (batchSelection.size === 0) return 'empty'
+  let archived = null
+  try {
+    const workspaces = ctx.get('workspaces')
+    if (workspaces !== undefined && workspaces !== null
+      && workspaces.list !== undefined && workspaces.list !== null
+      && typeof workspaces.list.getSnapshot === 'function') {
+      const snapshot = workspaces.list.getSnapshot()
+      if (snapshot !== null && typeof snapshot === 'object' && Array.isArray(snapshot.archivedSessionIds)) {
+        archived = new Set()
+        for (const id of snapshot.archivedSessionIds) archived.add(String(id))
+      }
+    }
+  } catch { /* 忽略 */ }
+  if (archived === null) return 'plain'
+  let hasArchived = false
+  let hasPlain = false
+  for (const id of batchSelection.keys()) {
+    if (archived.has(String(id))) hasArchived = true
+    else hasPlain = true
+    if (hasArchived && hasPlain) return 'mixed'
+  }
+  return hasArchived ? 'archived' : 'plain'
+}
+
 /** 把勾选态同步回 DOM 上的复选框（状态被 prune/清空后调用）。 */
 function syncBatchChecks() {
   try {

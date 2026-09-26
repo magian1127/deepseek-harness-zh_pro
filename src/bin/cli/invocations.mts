@@ -29,6 +29,12 @@ export function resolveDshInvocation(profileName: string): DshInvocation | null 
 
 /** 转发给 dsh plugin 子命令；失败时若 profile 已存在则退回 profile 目录里的 pnpm。 */
 export function runDshPlugin(profileName: string, pluginArgs: string[]): number {
+  // desktop profile 由桌面应用独占管理：dsh CLI 按名拒绝，且绝不能落入下面的
+  // pnpm 兜底（那会绕过 dsh 的保护、改动 Electron 持有的 profile 状态）。
+  if (profileName.toLowerCase() === 'desktop') {
+    console.error(`[${PKG}] desktop profile 由桌面应用独占管理，CLI 不能改动：请在桌面应用侧栏「插件」页安装/启停本插件`)
+    return 1
+  }
   const cli = resolveDshInvocation(profileName)
   let dshError: NodeJS.ErrnoException | null = null
   if (cli !== null) {

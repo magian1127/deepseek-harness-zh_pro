@@ -173,7 +173,15 @@ async function pruneDeletedSessionIds(deps: DeleteDeps): Promise<void> {
     } catch {
       raw = undefined
     }
-    if (raw === undefined || raw === null) deletedSessionIds.add(id)
+    if (raw === undefined || raw === null) {
+      deletedSessionIds.add(id)
+      continue
+    }
+    // 驻留内存的已删除会话：persistence.stat 会从内存快照成功返回（误报
+    // 「存在」），但物理日志目录已随删除进回收站。以磁盘布局扫描为准——
+    // 扫不到目录即死 id，否则归档视图会把僵尸行显示给用户，且「取消归档」
+    // 会把它捞回主列表成为不可删除的行（2026-09-25 hihi1 实测）。
+    if (await locateSessionDirById(id) === null) deletedSessionIds.add(id)
   }
 }
 
@@ -236,11 +244,23 @@ interface DeleteDeps {
     }>
     archivedSessionIds?: readonly string[]
     archiveSession?(id: string): Promise<void>
+    /**
+     * 上游 2026-09-12（5f773a0ded）起公开：registry 串行链上的官方取消
+     * 归档（全量状态写入 + 内存缓存同步）。存在时必须优先于 storageDomain
+     * 直写——后者绕过 registry 串行器，仅作旧版回退。
+     */
+    unarchiveSession?(id: string): Promise<void>
   }
   storageDomain?: {
     get?(name: string): {
       global?: {
         get(): { archivedSessionIds?: readonly string[] } | undefined
+        /**
+         * 整体替换写入（DSH DomainGlobal.set 无合并）：value 必须是回读到的
+         * 全量 state 加字段覆盖——只写单字段会丢掉 workspace 域 schema 必填
+         * 的 initialized/workspaceIds，下次启动 domain 打开时校验失败，
+         * workspaceRegistry 整体挂载失败、dsh 无法启动（issue #8）。
+         */
         set(value: { archivedSessionIds: readonly string[] }): Promise<void>
       }
     } | undefined
@@ -269,32 +289,53 @@ function routeErrorMessage(code: string): string {
     default: return '操作失败，请稍后重试。'
   }
 }
-let unarchiveWarningIssued = false
+let unarchiveFallbackWarned = false
 
   /**
    * 把会话从工作区归档集合移除（取消归档）。
-   * workspaceRegistry 当前仅公开 archiveSession，没有 unarchive/事务写 API；
-   * 因而只通过 storageDomain 做归档集合持久化，不写 registry 私有 state，
-   * 等待上游公开 API 后再恢复内存缓存同步，避免绕过 registry 串行器。
-   * 写入无事务保障，但 global.set 排队在域的单一 FIFO 写链上：set resolve
-   * 时所有先前写入均已完成，随后的同步 get 读到的是链上权威真值（内存
-   * 即权威，无需穿透介质）。因此写后重读一次，目标 id 仍在则基于真值重放
-   * 一次过滤；无法覆盖的仅剩“排队更晚的官方 archiveSession 落地覆盖本
-   * 写”——那属于归档请求后到、归档生效，语义本应如此。
+   *
+   * 优先走上游公开 API：workspaceRegistry.unarchiveSession（上游 2026-09-12
+   * 起公开）在 registry 串行链上做全量状态写入并同步内存缓存，即官方取消
+   * 归档语义。该 API 缺席（旧版 dsh）才回退 storageDomain 直写——此时
+   * registry 没有公开 unarchive/事务写 API，只能绕过串行器直写持久层；
+   * 且 global.set 是整体替换（无合并）：必须回写「回读到的全量 state +
+   * archivedSessionIds 覆盖」，只写单字段会把 workspace 域 schema 必填的
+   * initialized/workspaceIds 冲掉，下次启动 domain 打开校验失败、整个
+   * workspaceRegistry 挂载失败、dsh 无法启动（issue #8）。
+   *
+   * 回退路径的写入无事务保障，但 global.set 排队在域的单一 FIFO 写链上：
+   * set resolve 时所有先前写入均已完成，随后的同步 get 读到的是链上权威
+   * 真值（内存即权威，无需穿透介质）。因此写后重读一次，目标 id 仍在则
+   * 基于当时的全量真值重放一次覆盖写；无法覆盖的仅剩“排队更晚的官方
+   * archiveSession 落地覆盖本写”——那属于归档请求后到、归档生效，语义
+   * 本应如此。
    */
   export async function unarchiveSession(
     deps: DeleteDeps,
     sessionId: string,
   ): Promise<{ ok: boolean; changed: boolean }> {
-    if (!unarchiveWarningIssued) {
-      unarchiveWarningIssued = true
-      warn(JSON.stringify({
-        code: 'workspace-unarchive-partial',
-        message: 'workspaceRegistry 当前没有公开 unarchive 或事务写 API，仅执行归档集合持久化；等待上游公开 API',
-      }))
+    const registry = deps.workspaceRegistry
+    if (registry !== undefined && typeof registry.unarchiveSession === 'function') {
+      try {
+        const wasArchived = Array.isArray(registry.archivedSessionIds)
+          ? registry.archivedSessionIds.includes(sessionId)
+          : true
+        await registry.unarchiveSession(sessionId)
+        return { ok: true, changed: wasArchived }
+      } catch (error) {
+        warnRouteFailure(`取消归档会话 ${sessionId} 失败`, error)
+        return { ok: false, changed: false }
+      }
     }
     const storage = deps.storageDomain
     if (storage === undefined || typeof storage.get !== 'function') return { ok: false, changed: false }
+    if (!unarchiveFallbackWarned) {
+      unarchiveFallbackWarned = true
+      warn(JSON.stringify({
+        code: 'workspace-unarchive-partial',
+        message: 'workspaceRegistry 未公开 unarchive API，回退 storageDomain 直写归档集合（整体替换写入，保全量 state）',
+      }))
+    }
     try {
       const domain = storage.get('workspace') as { global?: { get(): { archivedSessionIds?: readonly string[] } | undefined; set(value: { archivedSessionIds: readonly string[] }): Promise<void> } } | undefined
       const global = domain?.global
@@ -307,14 +348,16 @@ let unarchiveWarningIssued = false
       }
       const first = removeFrom(archived)
       if (first === null) return { ok: true, changed: false }
-      await global.set({ archivedSessionIds: first })
+      // 整体替换：展开回读到的全量 state，只覆盖 archivedSessionIds 字段。
+      await global.set({ ...state, archivedSessionIds: first })
       // global.set 在域 FIFO 写链上串行：resolve 后重读即链上权威真值。
       // 目标 id 仍在（先前并发的 archiveSession 已落地、被本写覆盖）则基于
       // 真值重放一次过滤；排队更晚的归档写覆盖本结果属于“归档后到、归档生效”。
-      const reread = global.get()?.archivedSessionIds
-      if (reread !== undefined && reread.some(id => String(id) === sessionId)) {
+      const rereadState = global.get()
+      const reread = rereadState?.archivedSessionIds
+      if (rereadState !== undefined && reread !== undefined && reread.some(id => String(id) === sessionId)) {
         const retry = removeFrom(reread)
-        if (retry !== null) await global.set({ archivedSessionIds: retry })
+        if (retry !== null) await global.set({ ...rereadState, archivedSessionIds: retry })
       }
       return { ok: true, changed: true }
     } catch (error) {
@@ -496,20 +539,33 @@ export async function deleteSession(
   //    丢进官方「未分组」桶而日志仍在原地（2026-09-07 DSH 0.1.3-alpha.1
   //    实测定界：sessionPersistence 公开面句柄化后 locate/readRaw 消失）。
   const target = await resolveSessionTarget(deps, sessionId)
-  if (target === null) {
-    warnRouteFailure(`删除会话 ${sessionId} 中止：无法定位会话日志目录`, new Error('not-located'))
-    return {
-      ok: false,
-      code: 'locate-failed',
-      message: '无法定位会话日志目录，已中止删除（未改动任何数据）。',
+  if (target === null || target.dir === null || target.kind === null
+    || !CONFIRMED_JSONL_KINDS.has(target.kind)) {
+    // 幂等完成：会话仍驻留内存而日志目录已不在磁盘 = 此前删除已把日志
+    // 移入回收站（或日志从未落盘），本次属重复删除。重新确保官方归档集合
+    // 隐藏（可能被「取消归档」解除过）并记入已删除集合，返回成功——中止
+    // 会留下「查看得到却删不掉」的僵尸行（2026-09-25 hihi1 实测）。
+    const liveStill = deps.sessions?.get(sessionId)
+    if (liveStill !== undefined && liveStill !== null) {
+      const registryForHide = deps.workspaceRegistry
+      if (registryForHide !== undefined && typeof registryForHide.archiveSession === 'function') {
+        try {
+          await registryForHide.archiveSession(sessionId)
+        } catch (error) {
+          warnRouteFailure(`重新归档已删除的驻留会话 ${sessionId} 失败`, error)
+        }
+      }
+      deletedSessionIds.add(sessionId)
+      return { ok: true, trashed: false, hint: '会话日志已在此前删除，已将其从会话列表隐藏。' }
     }
-  }
-  const cwd = target.header.cwd ?? ''
-  const title = options.title !== undefined && options.title !== '' ? options.title : sessionId
-
-  // 2) 物理移动：目标目录/后端类型不可回收（非 JSONL）时同样中止——
-  //    绝不执行「逻辑删除」（只移账本、不动日志会把会话留在列表/未分组）。
-  if (target.dir === null || target.kind === null || !CONFIRMED_JSONL_KINDS.has(target.kind)) {
+    if (target === null) {
+      warnRouteFailure(`删除会话 ${sessionId} 中止：无法定位会话日志目录`, new Error('not-located'))
+      return {
+        ok: false,
+        code: 'locate-failed',
+        message: '无法定位会话日志目录，已中止删除（未改动任何数据）。',
+      }
+    }
     warnRouteFailure(`删除会话 ${sessionId} 中止：后端类型不支持移入回收站`, new Error(`kind=${String(target.kind)}`))
     return {
       ok: false,
@@ -517,6 +573,9 @@ export async function deleteSession(
       message: '该会话的日志后端不支持移入系统回收站，已中止删除（未改动任何数据）。',
     }
   }
+  const cwd = target.header.cwd ?? ''
+  const title = options.title !== undefined && options.title !== '' ? options.title : sessionId
+
   let trashLocation = ''
   let dirRemoved = false
   try {

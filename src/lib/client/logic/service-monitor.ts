@@ -72,8 +72,19 @@ const SERVICE_MONITOR_CSS = [
   '[data-dsh-zh-sm-count]{margin-left:auto;flex:none;min-width:18px;text-align:center;',
   'padding:0 5px;border-radius:9px;font-weight:500;font-variant-numeric:tabular-nums;',
   'background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,0.14))}',
+  // 列表：行高与行间距提为变量，让「最多显示 N 行」的高度上限可精确算出
+  // （行高 = line-height 18px + 上下 padding 5px × 2 = 28px）。
   '[data-dsh-zh-sm-list]{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:1px;',
+  '--dsh-zh-sm-row-h:28px;--dsh-zh-sm-row-gap:1px;',
   'overflow-y:auto;overscroll-behavior:contain}',
+  // 左栏形态：最多显示 SERVICE_PANEL_ROWS 行，超出部分靠滚轮 / 底部箭头滚动。
+  // **不显示滚动条**（滚动条会挤压 12px 行宽、在侧栏里很吵）：Firefox 用
+  // scrollbar-width、旧 Edge/IE 用 -ms-overflow-style、WebKit/Blink 用伪元素。
+  // 用 :not([data-mount="tab"]) 限定，右栏 tab 维持撑满容器、不限高（原行为）。
+  '[data-dsh-zh-service-monitor]:not([data-mount="tab"]) [data-dsh-zh-sm-list]{',
+  'max-height:calc(var(--dsh-zh-sm-row-h) * 10 + var(--dsh-zh-sm-row-gap) * 9);',
+  'scrollbar-width:none;-ms-overflow-style:none}',
+  '[data-dsh-zh-sm-list]::-webkit-scrollbar{width:0;height:0;display:none}',
   '[data-dsh-zh-sm-empty]{padding:18px 12px;color:var(--dsw-alias-label-tertiary,#666);font-size:12px;line-height:1.7}',
   '[data-dsh-zh-sm-item]{display:flex;align-items:center;gap:8px;padding:5px 8px;margin:0;',
   'border:0;border-radius:8px;background:transparent;cursor:pointer;font:inherit;',
@@ -94,6 +105,21 @@ const SERVICE_MONITOR_CSS = [
   '[data-dsh-zh-sm-addr]{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
   'font-variant-numeric:tabular-nums}',
   '[data-dsh-zh-sm-time]{margin-left:auto;flex:none;color:var(--dsw-alias-label-tertiary,#666);font-size:11px}',
+  // 「还有更多」向下箭头（仅左栏形态、且列表确实溢出时显示）：点击向下翻一屏，
+  // 滚到底部自动翻转成向上箭头（回到顶部）。**走文档流排在列表下方**
+  // （align-self:center），不做绝对定位浮层——浮层要么压住第 10 行的文字、
+  // 要么得给列表加 padding-bottom 逃生位，而那会让可视高度小于 10 行。
+  '[data-dsh-zh-sm-more]{display:none;align-self:center;flex:none;align-items:center;',
+  'justify-content:center;width:20px;height:20px;margin:3px auto 0;padding:0;',
+  'border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,0.28));border-radius:50%;',
+  'background:transparent;color:var(--dsw-alias-label-tertiary,#666);cursor:pointer;',
+  'font:inherit;line-height:0;transition:background .12s ease,color .12s ease}',
+  '[data-dsh-zh-sm-more]:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,0.14));',
+  'color:var(--dsw-alias-label-primary,inherit)}',
+  '[data-dsh-zh-sm-more]:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#4D6BFE);outline-offset:1px}',
+  '[data-dsh-zh-sm-more] svg{width:12px;height:12px;display:block}',
+  '[data-dsh-zh-sm-more][data-dir="up"] svg{transform:rotate(180deg)}',
+  '[data-dsh-zh-service-monitor][data-overflow="true"] [data-dsh-zh-sm-more]{display:inline-flex}',
   // 条目操作按钮组（仅右栏 tab 条目行，时间后面）：hover 显示（触屏常显）。
   '[data-dsh-zh-sm-acts]{flex:none;display:none;align-items:center;gap:2px}',
   '[data-dsh-zh-sm-item]:hover [data-dsh-zh-sm-acts],[data-dsh-zh-sm-item]:focus-within [data-dsh-zh-sm-acts]{display:inline-flex}',
@@ -186,6 +212,11 @@ const SERVICE_MONITOR_COPY = {
     actKillFailed: '终止失败（权限不足或进程已退出）',
     dialogCancel: '取消',
     toastDone: '操作完成',
+    // 左栏面板「还有更多」箭头：点击向下翻一屏 / 回到底部后翻回顶部。
+    moreDown: '还有更多服务',
+    moreUp: '回到顶部',
+    moreDownAria: '查看更多服务（还有 {n} 条）',
+    moreUpAria: '回到服务列表顶部',
   },
   en: {
     title: 'Service monitor',
@@ -236,6 +267,11 @@ const SERVICE_MONITOR_COPY = {
     actKillFailed: 'Failed to kill (insufficient permissions or the process already exited)',
     dialogCancel: 'Cancel',
     toastDone: 'Done',
+    // Left-panel "more" arrow: click scrolls down a page / back to top.
+    moreDown: 'More services',
+    moreUp: 'Back to top',
+    moreDownAria: 'Show more services ({n} remaining)',
+    moreUpAria: 'Back to the top of the service list',
   },
 }
 
@@ -247,9 +283,62 @@ const SERVICE_BASELINE_PAGE = 10
 const SERVICE_RAIL_WIDTH_PX = 120
 // 面板最多显示的条目数（主机同上限；自定义项另计，上限见设置存储）。
 const SERVICE_MAX_ITEMS = 50
+// 左栏面板一屏显示的最大行数（超出靠滚轮 / 底部箭头滚动，不显示滚动条）。
+// 高度上限由 CSS 用行高变量算出（见 SERVICE_MONITOR_CSS），不在这里写死像素。
+const SERVICE_PANEL_ROWS = 10
+// 左栏面板行高与行间距（px），与 CSS 里的 --dsh-zh-sm-row-h / --dsh-zh-sm-row-gap
+// 一一对应；箭头翻页与「是否溢出」判定都按它计算。
+const SERVICE_PANEL_ROW_H = 28
+const SERVICE_PANEL_ROW_GAP = 1
 // 轮询间隔允许范围（秒），与设置页输入框一致。
 const SERVICE_INTERVAL_MIN_SEC = 2
 const SERVICE_INTERVAL_MAX_SEC = 300
+
+// 「还有更多」箭头：按列表当前的滚动几何更新方向（down/up）与无障碍文案。
+// 纯读取 + 就地写属性，可在滚动回调与每轮 render 后安全重复调用。
+function servicePanelScrollStep(listEl, moreEl) {
+  const step = SERVICE_PANEL_ROW_H + SERVICE_PANEL_ROW_GAP
+  const rows = servicePanelPageRows(
+    typeof listEl.clientHeight === 'number' ? listEl.clientHeight : 0,
+  )
+  // 「翻一屏」= 当前可见行数减一（留一行做视觉衔接，避免整屏跳变）。
+  const delta = Math.max(1, rows - 1) * step
+  const max = (listEl.scrollHeight || 0) - (listEl.clientHeight || 0)
+  // 已到底（或接近底部）时回到顶部，否则向下翻一屏。
+  if (listEl.scrollTop >= max - 1) listEl.scrollTop = 0
+  else listEl.scrollTop = Math.min(max, listEl.scrollTop + delta)
+  syncMoreFor(listEl, moreEl)
+}
+
+// 箭头状态的就地同步（按元素直接调用，供滚动回调与点击后刷新共用）。
+function syncMoreFor(listEl, moreEl) {
+  if (moreEl === null || moreEl === undefined) return
+  const state = servicePanelMoreState(
+    typeof listEl.scrollTop === 'number' ? listEl.scrollTop : 0,
+    typeof listEl.scrollHeight === 'number' ? listEl.scrollHeight : 0,
+    typeof listEl.clientHeight === 'number' ? listEl.clientHeight : 0,
+  )
+  const panel = moreEl.parentNode
+  const copy = SERVICE_MONITOR_COPY[smActiveIsZh() ? 'zh' : 'en']
+  if (panel !== null && panel !== undefined) {
+    panel.setAttribute('data-overflow', state === 'none' ? 'false' : 'true')
+  }
+  if (state === 'none') {
+    moreEl.style.display = 'none'
+    moreEl.setAttribute('data-dir', 'down')
+    return
+  }
+  moreEl.style.display = ''
+  moreEl.setAttribute('data-dir', state === 'up' ? 'up' : 'down')
+  const max = (listEl.scrollHeight || 0) - (listEl.clientHeight || 0)
+  // 还差多少行才到底：把剩余可滚动距离按行高换算成行数。
+  const remaining = Math.max(0, Math.ceil((max - listEl.scrollTop) / (SERVICE_PANEL_ROW_H + SERVICE_PANEL_ROW_GAP)))
+  const isUp = state === 'up'
+  moreEl.title = isUp ? copy.moreUp : copy.moreDown
+  moreEl.setAttribute('aria-label', isUp
+    ? copy.moreUpAria
+    : copy.moreDownAria.replace('{n}', String(remaining)))
+}
 
 // 解析自定义监控地址：127.0.0.1:81 / localhost:3000 / [::1]:8080。
 // 返回 { host, port }；格式非法返回 null。设置页「添加」与本模块共用。
@@ -300,6 +389,28 @@ function serviceElapsedText(copy, since, now) {
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return copy.timeHours.replace('{n}', String(hours))
   return copy.timeDays.replace('{n}', String(Math.floor(hours / 24)))
+}
+
+// 左栏面板「还有更多」箭头的状态（纯函数，便于回归）。
+// 输入列表的滚动几何与可见行数，输出箭头该显示哪一种形态：
+//   - `'none'` 不溢出（或几何不可知）→ 不显示箭头；
+//   - `'down'` 下方还有内容 → 向下箭头，点击翻一屏；
+//   - `'up'`   已到底（含容差）→ 向上箭头，点击回到顶部。
+// 容差取 1px：浏览器 1.25/1.5 倍缩放下行高与 max-height 会有小数舍入，
+// 严格等值会让「已到底」判定永不成立、箭头卡在向下形态。
+function servicePanelMoreState(scrollTop, scrollHeight, clientHeight) {
+  if (!(clientHeight > 0) || !(scrollHeight > 0)) return 'none'
+  if (scrollHeight - clientHeight <= 1) return 'none'
+  const max = scrollHeight - clientHeight
+  if (scrollTop >= max - 1) return 'up'
+  return 'down'
+}
+
+// 一屏的行数：按行高与间距算出列表可视高度能容纳多少行（至少 1 行）。
+function servicePanelPageRows(listHeight) {
+  const step = SERVICE_PANEL_ROW_H + SERVICE_PANEL_ROW_GAP
+  if (!(listHeight > 0)) return SERVICE_PANEL_ROWS
+  return Math.max(1, Math.floor((listHeight + SERVICE_PANEL_ROW_GAP) / step))
 }
 
 // 面板排序（纯函数，便于回归）：自动发现条目（主机已按启动时间新→旧）
@@ -556,6 +667,14 @@ function mountServiceMonitorPanel(mode, container) {
 
   const resolveCopy = function () { return SERVICE_MONITOR_COPY[smActiveIsZh() ? 'zh' : 'en'] }
   let lastRendered = null
+  // 箭头状态刷新（仅左栏形态）：行集合变化后列表几何会变，每轮 render 结束时
+  // 与滚动回调里都要重算。元素未创建时是空操作。
+  let moreElRef = null
+  let listElRef = null
+  const syncMore = function () {
+    if (moreElRef === null || listElRef === null) return
+    syncMoreFor(listElRef, moreElRef)
+  }
 
   // ------- 面板骨架（一次性创建，条目行按键复用） -------
   const panel = document.createElement('div')
@@ -571,6 +690,31 @@ function mountServiceMonitorPanel(mode, container) {
     listEl.setAttribute('data-dsh-zh-sm-list', '')
     panel.appendChild(head)
     panel.appendChild(listEl)
+    // 「还有更多」箭头（仅左栏形态）：列表溢出时显示，点击向下翻一屏；
+    // 到底后翻转为向上箭头、点击回到顶部。绝对定位，不占布局高度。
+    let moreEl = null
+    if (!isTab) {
+      moreEl = document.createElement('button')
+      moreEl.type = 'button'
+      moreEl.setAttribute('data-dsh-zh-sm-more', '')
+      moreEl.style.display = 'none'
+      const arrowSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      arrowSvg.setAttribute('viewBox', '0 0 16 16')
+      arrowSvg.setAttribute('fill', 'none')
+      arrowSvg.setAttribute('aria-hidden', 'true')
+      const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      arrowPath.setAttribute('d', 'M4 6.5L8 10.5L12 6.5')
+      arrowPath.setAttribute('stroke', 'currentColor')
+      arrowPath.setAttribute('stroke-width', '1.6')
+      arrowPath.setAttribute('stroke-linecap', 'round')
+      arrowPath.setAttribute('stroke-linejoin', 'round')
+      arrowSvg.appendChild(arrowPath)
+      moreEl.appendChild(arrowSvg)
+      moreEl.addEventListener('click', function () { servicePanelScrollStep(listEl, moreEl) }, false)
+      panel.appendChild(moreEl)
+      moreElRef = moreEl
+    }
+    listElRef = listEl
     // 空态提示与基线端口区都仅右栏 tab 形态创建：左栏空态 = 面板整体隐藏
     // （data-hidden），不需要这两个块；误建会在左栏面板尾部留下空白块。
     let emptyEl = null
@@ -610,7 +754,10 @@ function mountServiceMonitorPanel(mode, container) {
       baselineWrap.appendChild(baselineMoreEl)
       panel.appendChild(baselineWrap)
     }
-    listEl.addEventListener('scroll', function () { hideTip() }, { passive: true })
+    listEl.addEventListener('scroll', function () {
+      if (!isTab) syncMore()
+      hideTip()
+    }, { passive: true })
     if (isTab) {
       // tab 形态：挂入 React 容器，标记 data-mount 隔离两套布局规则。
       panel.setAttribute('data-mount', 'tab')
@@ -1184,6 +1331,8 @@ function mountServiceMonitorPanel(mode, container) {
         ownerStates.clear()
         rowByKeyActs.clear()
         hideTip()
+        // 列表清空 → 几何归零，箭头随之隐藏（面板也已 data-hidden）。
+        syncMore()
         if (isTab) renderBaseline(baselineOf(value))
         return
       }
@@ -1269,6 +1418,8 @@ function mountServiceMonitorPanel(mode, container) {
       if (!keep.has(key)) ownerStates.delete(key)
     }
       syncRows(desired)
+      // 行集合变了 → 列表几何变了：重算箭头显示与方向。
+      syncMore()
       if (isTab) renderBaseline(baselineOf(value))
     }
 

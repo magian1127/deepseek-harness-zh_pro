@@ -269,9 +269,32 @@ const fakeDoc = {
   // document 级查询委托给 body（documentElement 不承载业务节点）。
   querySelector(sel) { return body.querySelector(sel) },
   querySelectorAll(sel) { return body.querySelectorAll(sel) },
+  // 真实 DOM 的同一事件类型可以有多个监听器（pointerdown 上同时挂着
+  // archive-view 与 session-menu 两家）。这里按类型收集成数组，并让
+  // `_handlers[type]` 保持可直接调用的形态（逐个转发），这样既支持
+  // 「直接调 handler 模拟事件」的既有用法，也不会让后注册者覆盖先注册者。
+  _listeners: {},
   _handlers: {},
-  addEventListener(type, fn) { this._handlers[type] = fn },
-  removeEventListener(type) { delete this._handlers[type] },
+  addEventListener(type, fn) {
+    if (this._listeners[type] === undefined) {
+      this._listeners[type] = []
+      const self = this
+      this._handlers[type] = function (event) {
+        for (const listener of self._listeners[type].slice()) listener(event)
+      }
+    }
+    this._listeners[type].push(fn)
+  },
+  removeEventListener(type, fn) {
+    const list = this._listeners[type]
+    if (list === undefined) return
+    const i = list.indexOf(fn)
+    if (i !== -1) list.splice(i, 1)
+    if (list.length === 0) {
+      delete this._listeners[type]
+      delete this._handlers[type]
+    }
+  },
 }
 const body = new FakeEl('body')
 fakeDoc.body = body
@@ -407,6 +430,10 @@ const sessionsService = {
 }
 let bindingIds = []
 const archiveSessionCalls = []
+// 官方取消归档 API 调用记录（真实运行时优先走它，见 unarchiveRemote）。
+let officialUnarchiveCalls = []
+// 置真时把 workspaces.unarchiveSession 摘掉，模拟旧版宿主（走插件回退路由）。
+let hideOfficialUnarchive = false
 let renameCalls = []
 let forkCalls = []
 let wsSnapshot = {
@@ -424,8 +451,26 @@ const workspacesService = {
     wsSnapshot = { ...wsSnapshot, archivedSessionIds: [...wsSnapshot.archivedSessionIds, id] }
     return Promise.resolve()
   },
+  // 官方 IWorkspaces.unarchiveSession：走官方 RPC，并把返回的**完整归档集合**
+  // install 进客户端快照（workspace-controller client model 的
+  // installArchived）。mock 里快照更新受 holdUnarchiveSnapshot 控制——置真
+  // 时只记调用、不改快照，精确模拟「RPC 已成功、快照 install 尚未到达」的
+  // 滞后窗口（7e 用例）。
+  unarchiveSession(id) {
+    if (hideOfficialUnarchive) return undefined
+    officialUnarchiveCalls.push(id)
+    if (officialUnarchiveFails) return Promise.reject(new Error('unarchive rejected'))
+    if (!holdUnarchiveSnapshot) {
+      wsSnapshot = {
+        ...wsSnapshot,
+        archivedSessionIds: wsSnapshot.archivedSessionIds.filter(x => x !== id),
+      }
+    }
+    return Promise.resolve()
+  },
   refresh() { return Promise.resolve() },
 }
+let officialUnarchiveFails = false
 const registeredDicts = {}
 const localeListeners = []
 // 模拟真实 DSH locale：中文补全包装 translate（模板解析时先查 ZH['*'] 通用词
@@ -464,6 +509,8 @@ const localeService = {
 }
 let openedSessions = []
 let fetchCalls = []
+// 模拟「主机写入尚未回灌到客户端快照」的滞后窗口（7e 用例置真）。
+let holdUnarchiveSnapshot = false
 // 已删除会话集合（模拟主机进程内 deletedSessionIds ∪ 回收站清单）。
 const mockDeletedIds = new Set()
 // fetch 返回同步 thenable（立即 resolve），测试可同步断言完整请求链。
@@ -498,14 +545,18 @@ globalThis.fetch = function (url, opts) {
     })
   }
   // 模拟主机行为：取消归档只移出归档集合（账本席位保留，恢复原位）。
+  // holdUnarchiveSnapshot 为真时**不改快照**：模拟真实环境里「主机写入
+  // 尚未经 follow 流回灌到客户端」的滞后窗口（7e 用例）。
   if (url === '/dsh-zh/api/session.unarchive') {
-    try {
-      const body = JSON.parse(opts.body)
-      wsSnapshot = {
-        ...wsSnapshot,
-        archivedSessionIds: wsSnapshot.archivedSessionIds.filter(id => id !== body.sessionId),
-      }
-    } catch { /* 忽略 */ }
+    if (!holdUnarchiveSnapshot) {
+      try {
+        const body = JSON.parse(opts.body)
+        wsSnapshot = {
+          ...wsSnapshot,
+          archivedSessionIds: wsSnapshot.archivedSessionIds.filter(id => id !== body.sessionId),
+        }
+      } catch { /* 忽略 */ }
+    }
   }
   return syncPromise({
     json: function () { return syncPromise({ ok: true, value: { unarchived: true } }) },
@@ -581,6 +632,29 @@ let panel = panelOf()
 check(panel !== null, true, '点击后创建归档行容器（DOM）')
 check(panel !== null && panel.parentNode === group, true, '归档行容器注入官方分组容器末尾（列表流内，无独立滚动条）')
 check(panel.querySelector('[data-dsh-zh-archive-label]'), null, '容器无「工作区.已归档会话」标签行')
+// 4a-0) 菜单卡片样式：半透明底色必须与 backdrop-filter 成对，否则菜单下方
+// 内容直接透出（样式写错是静默失败，用断言钉住官方契约）。
+const styleTexts = fakeDoc.head.children
+  .filter(c => c.tagName === 'STYLE')
+  .map(c => String(c.textContent))
+const viewCss = styleTexts.find(t => t.indexOf('[data-dsh-zh-archive-menu]{') !== -1) || ''
+const menuRule = viewCss.slice(viewCss.indexOf('[data-dsh-zh-archive-menu]{'))
+  .slice(0, viewCss.slice(viewCss.indexOf('[data-dsh-zh-archive-menu]{')).indexOf('}') + 1)
+check(menuRule.indexOf('background:var(--dsw-specific-menu)') !== -1, true,
+  '菜单卡片用官方半透明菜单底色')
+check(menuRule.indexOf('backdrop-filter:var(--dsw-menu-backdrop-filter)') !== -1, true,
+  '菜单卡片配背景模糊（半透明底色的可读性前提）')
+check(menuRule.indexOf('box-shadow:var(--dsw-elevation-prominent)') !== -1, true,
+  '菜单卡片用官方 elevation-prominent 投影')
+check(menuRule.indexOf('border:0') !== -1, true,
+  '菜单卡片无边框（官方高层级表面描边走 box-shadow）')
+check(viewCss.indexOf('[data-dsh-zh-archive-menu-icon] svg{width:14px;height:14px;}') !== -1, true,
+  '菜单图标按官方 .itemIcon svg 收到 14px')
+// 4a-0b) 归档行读作「不活跃」：标题与时间降到 caption 灰，对齐官方
+// Rows.module.css `.sessionRow.archived .title/.time`（样式写错是静默失败）。
+check(viewCss.indexOf(
+  '[data-dsh-zh-archive-title],[data-dsh-zh-archive-time]{color:var(--dsw-alias-label-caption)}') !== -1, true,
+  '归档行标题与时间用官方 caption 灰（与官方归档行同款）')
 // 4a) 切换视图：该工作区的正常会话行被隐藏（归档行顶替其位置），
 // 工作区行本身保持显示。
 check(wsSpan.getAttribute('data-dsh-zh-archive-hides-row'), null, '工作区行不被隐藏')
@@ -625,14 +699,14 @@ check(panelRowsOf().some(r => r.querySelectorAll('[data-dsh-zh-archive-actions]'
 // 7) 行点击 → 静默取消归档 + 打开会话；已打开的行**原位保留、外观
 // 不变**（标题 + 相对时间，无标记），列表零扰动，可继续点击浏览。
 rows = panelRowsOf()
+const beforeOfficial = officialUnarchiveCalls.length
 const beforeCalls = fetchCalls.length
 rows[0].click('click')
 check(panelOf() !== null, true, '点击归档行后归档视图保持显示')
-check(fetchCalls.length, beforeCalls + 1, '行点击发起取消归档请求')
-check(fetchCalls[fetchCalls.length - 1].url, '/dsh-zh/api/session.unarchive', '取消归档路由')
-const unarchiveBody = JSON.parse(fetchCalls[fetchCalls.length - 1].opts.body)
-check(unarchiveBody.sessionId, 'a1', '取消归档目标会话（首行为最近活动的 a1）')
-// 集合已更新（fetch mock 同步移除 a1）：触发重渲染，行原位保留且无
+check(officialUnarchiveCalls.length, beforeOfficial + 1, '行点击走官方 unarchiveSession（不经插件路由）')
+check(officialUnarchiveCalls[officialUnarchiveCalls.length - 1], 'a1', '取消归档目标会话（首行为最近活动的 a1）')
+check(fetchCalls.length, beforeCalls, '行点击不再走插件 /dsh-zh/api/session.unarchive 路由')
+// 集合已更新（官方 mock 同步移除 a1）：触发重渲染，行原位保留且无
 // 「已恢复」之类的标记。
 lastObs.cb(undefined)
 flushRaf()
@@ -649,9 +723,9 @@ if (moreAfter !== null) {
   check(panelRowsOf().length, 7, '展开后仍 7 行（已打开行保留在总数中）')
 }
 // 已打开的行再点一次 = 重新打开（幂等取消归档，行仍保留）。
-const beforeRecall = fetchCalls.length
+const beforeRecall = officialUnarchiveCalls.length
 panelRowsOf()[0].click('click')
-check(fetchCalls.length, beforeRecall + 1, '再点已打开行发起（幂等）取消归档请求')
+check(officialUnarchiveCalls.length, beforeRecall + 1, '再点已打开行发起（幂等）取消归档请求')
 lastObs.cb(undefined)
 flushRaf()
 check(panelRowsOf().length, 7, '再点后行仍保留')
@@ -757,13 +831,112 @@ await flushMicrotasks() // fork 打开副本在微任务中执行
 check(forkCalls.length >= 1 && forkCalls[forkCalls.length - 1].sessionId, 'a2', '分叉会话调用 fork')
 check(forkCalls[forkCalls.length - 1].increaseTitle, true, '分叉自动递增标题（与官方一致）')
 check(openedSessions.includes('forked-1'), true, '分叉后打开副本会话')
-// 取消归档（菜单项）：行从归档列表消失 + 主机路由。
+// 取消归档（菜单项）：行从归档列表消失 + 走官方 API。
 actionsOf('a3').click('click')
 menuOf().querySelectorAll('[data-dsh-zh-archive-menu-item]')[2].click('click')
 check(menuOf(), null, '选择菜单项后菜单关闭')
 check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a3'), false, '取消归档后行从归档列表消失')
-check(fetchCalls.some(c => c.url === '/dsh-zh/api/session.unarchive' && JSON.parse(c.opts.body).sessionId === 'a3'), true, '取消归档调用主机路由')
+check(officialUnarchiveCalls.includes('a3'), true, '取消归档走官方 unarchiveSession')
+check(fetchCalls.some(c => c.url === '/dsh-zh/api/session.unarchive'), false, '取消归档不经插件回退路由（官方 API 在场）')
 check(panelOf() !== null, true, '取消归档不退出归档视图')
+// 7e) 快照回灌滞后：真实环境里主机写入经 follow 流回灌前，客户端
+// archivedSessionIds 仍含该 id。取消归档必须立刻生效，不能被
+// archivedRowsOf 分支重新加回（回归：此前只从 orderedIds 剔除，
+// 表现为「点取消归档没反应」）。
+// 构造：holdUnarchiveSnapshot 让 unarchive 路由**不改快照**，
+// 精确模拟「主机已确认成功、回灌尚未到达」的窗口。
+//
+// **必须展开到全部行再断言**：被取消归档的行在旧实现里只是「掉出收起态
+// 的 5 行窗口」而仍留在列表尾部，只看窗口内会得到假绿（旧 bundle 实测
+// 确认过这一点）。展开后行是否真的不在列表里才可判定。
+const expandAllRows = function () {
+  for (let i = 0; i < 20; i += 1) {
+    const p = panelOf()
+    const btn = p === null ? null : p.querySelector('[data-dsh-zh-archive-more]')
+    if (btn === null || btn.getAttribute('aria-expanded') === 'true') break
+    btn.click('click')
+  }
+}
+holdUnarchiveSnapshot = true
+expandAllRows()
+check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a6'), true,
+  '滞后用例：a6 在取消归档前可见（已展开全部行）')
+actionsOf('a6').click('click')
+menuOf().querySelectorAll('[data-dsh-zh-archive-menu-item]')[2].click('click')
+// 乐观隐藏是同步的（不等 Promise），因此这里先断言「立即消失」。
+check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a6'), false,
+  '滞后用例：取消归档后行立即从列表消失（不等任何异步）')
+check(wsSnapshot.archivedSessionIds.includes('a6'), true,
+  '滞后用例：此时客户端快照仍含 a6（证明断言确实覆盖滞后窗口）')
+// 官方 API 的成功回调（dropRow）在微任务里跑：跑完后行仍不在。
+await flushMicrotasks()
+expandAllRows()
+check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a6'), false,
+  '滞后用例：成功回调后行仍不回来')
+// 手动触发一次同步（快照仍含 a6）也不能把行加回来。
+lastObs.cb(undefined)
+flushRaf()
+expandAllRows()
+check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a6'), false,
+  '滞后用例：重新同步后行仍不回来')
+// 快照更新到达（集合移除 a6）→ 账本自愈清空，行依然不在。
+wsSnapshot = {
+  ...wsSnapshot,
+  archivedSessionIds: wsSnapshot.archivedSessionIds.filter(id => id !== 'a6'),
+}
+holdUnarchiveSnapshot = false
+lastObs.cb(undefined)
+flushRaf()
+expandAllRows()
+check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a6'), false,
+  '滞后用例：快照更新后行仍不在')
+// 账本不长期遮蔽：a6 重新被归档后应重新出现（自愈已清掉旧账本）。
+wsSnapshot = { ...wsSnapshot, archivedSessionIds: [...wsSnapshot.archivedSessionIds, 'a6'] }
+lastObs.cb(undefined)
+flushRaf()
+expandAllRows()
+check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a6'), true,
+  '滞后用例：重新归档后 a6 重新出现（账本不长期遮蔽）')
+// 退出并重进，让收起态与行集合回到基线，供后续用例使用。
+archiveBtn.click('click')
+check(panelOf(), null, '滞后用例：退出归档视图')
+archiveBtn.click('click')
+check(panelOf() !== null, true, '滞后用例：重新进入归档视图（收起态）')
+// 7f) 官方 API 拒绝时撤销乐观隐藏并提示，不制造「行消失但会话没回来」
+// 的假成功（2026-09 审计 D3 同类）。
+// 用 a7（7e 之后仍可见；失败会撤销，不消耗该行，供后续断言继续使用）。
+officialUnarchiveFails = true
+expandAllRows()
+check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a7'), true,
+  '失败用例：a7 在取消归档前可见')
+actionsOf('a7').click('click')
+menuOf().querySelectorAll('[data-dsh-zh-archive-menu-item]')[2].click('click')
+check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a7'), false,
+  '失败用例：点击后先乐观隐藏')
+await flushMicrotasks()
+expandAllRows()
+check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a7'), true,
+  '失败用例：官方 API 拒绝后行恢复显示（不做假成功）')
+const failToast = body.querySelector('.dsh-zh-archive-toast')
+check(failToast !== null && failToast.textContent.indexOf('取消归档失败') === 0, true,
+  '失败用例：显示取消归档失败提示')
+officialUnarchiveFails = false
+// 7g) 旧版宿主回退：官方 unarchiveSession 缺席时走插件主机路由。
+// 用 a5（后续用例只用 a4 与 a2，a5 被消耗无影响）。
+hideOfficialUnarchive = true
+expandAllRows()
+const officialCallsBeforeFallback = officialUnarchiveCalls.length
+check(wsSnapshot.archivedSessionIds.includes('a5'), true, '回退用例：a5 仍在归档集合')
+actionsOf('a5').click('click')
+menuOf().querySelectorAll('[data-dsh-zh-archive-menu-item]')[2].click('click')
+check(officialUnarchiveCalls.length, officialCallsBeforeFallback, '回退用例：未调用官方 API（缺席）')
+check(fetchCalls.some(c => c.url === '/dsh-zh/api/session.unarchive'
+  && JSON.parse(c.opts.body).sessionId === 'a5'), true, '回退用例：改走插件主机路由')
+await flushMicrotasks()
+expandAllRows()
+check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a5'), false,
+  '回退用例：路由成功后行消失')
+hideOfficialUnarchive = false
 // 删除会话：确认框 → 确认 → 主机回收站路由 + 行消失。
 actionsOf('a4').click('click')
 menuOf().querySelectorAll('[data-dsh-zh-archive-menu-item]')[3].click('click')
@@ -888,7 +1061,13 @@ check(ungroupedRow.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !
 check(ungroupedRow.getAttribute('data-dsh-zh-ws-row-standalone'), null, '关闭开关 standalone 标记清除')
 check(registeredDicts['dsh-zh-archive'], undefined, '关闭开关 归档词典注销')
 check(panelOf(), null, '关闭开关 无归档行容器')
-const stylesAfterOff = fakeDoc.head.children.filter(c => c.tagName === 'STYLE')
+// 归档样式按 `data-plugin-css` 识别（head 里还可能有本插件其它模块的样式，
+// 如「已删除会话行隐藏」的 deleted-rows 样式——它与归档视图开关无关）。
+const archiveStylesOf = function () {
+  return fakeDoc.head.children.filter(c => c.tagName === 'STYLE'
+    && String(c.getAttribute('data-plugin-css') || '').indexOf('dsh-zh/archive') === 0)
+}
+const stylesAfterOff = archiveStylesOf()
 check(stylesAfterOff.length, 0, '关闭开关 归档样式移除')
 // 11b) 关闭状态下点击归档按钮不生效（按钮已不存在，直接验证无残留副作用）：
 // 归档视图自己的 observer 已全部 disconnect（真实环境不再注入按钮），
@@ -903,7 +1082,7 @@ lastObs.cb(undefined)
 const archiveBtnRe = wsActions.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !== null)
 check(archiveBtnRe !== undefined, true, '重新开启 工作区行归档按钮恢复')
 check(registeredDicts['dsh-zh-archive'] !== undefined, true, '重新开启 归档词典恢复')
-check(fakeDoc.head.children.filter(c => c.tagName === 'STYLE').length, 2, '重新开启 归档样式恢复（2 个）')
+check(archiveStylesOf().length, 2, '重新开启 归档样式恢复（2 个）')
 archiveBtnRe.click('click')
 check(panelOf() !== null, true, '重新开启 归档视图可用')
 archiveBtnRe.click('click')
@@ -950,32 +1129,51 @@ check(batchChecks[0].checked, false, '批量 初始未勾选')
 // 勾选 → 多选非空 → 三点菜单追加批量项（portal 菜单节点直接交给菜单 observer）。
 r1.children[0].children[0].checked = true
 r1.children[0].children[0].click('change')
+// **官方菜单项夹具必须复刻真实 DOM 的两个要素**（否则测试会假绿）：
+//   1. 文案在 `span[class*=itemLabel]` 里，按钮不是「只有一个 span」；
+//   2. 带快捷键的项还挂一个 `span[aria-hidden=true]` 徽标
+//      （`<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>A</kbd>`），因此真实 DOM 的
+//      `button.textContent` 是「归档会话Ctrl+Alt+A」。
+// 2026-09-24 真实 GUI 回归：官方给会话菜单项加了快捷键徽标后，「删除会话」
+// 与批量项全部消失——锚点用 `button.textContent === '归档会话'` 等值匹配，
+// 徽标一进 textContent 就失配。夹具必须如实拼出这个派生结果。
+function makeOfficialMenuItem(menu, label, shortcutKeys) {
+  const itemWrap = new FakeEl('div', { class: '_itemWrap_gzo7u_90' })
+  const btn = new FakeEl('button', { role: 'menuitem' })
+  if (shortcutKeys !== undefined) btn.setAttribute('aria-keyshortcuts', shortcutKeys.join('+'))
+  const icon = new FakeEl('span', { class: '_itemIcon_gzo7u_148' })
+  const lbl = new FakeEl('span', { class: '_itemLabel_gzo7u_190' })
+  lbl.textContent = label
+  btn.appendChild(icon)
+  btn.appendChild(lbl)
+  if (shortcutKeys !== undefined) {
+    const badge = new FakeEl('span', { class: '_shortcut_gzo7u_198', 'aria-hidden': 'true' })
+    const keys = new FakeEl('span', { class: '_keys_38b9q_1' })
+    for (const key of shortcutKeys) keys.appendChild(new FakeEl('kbd', { class: '_key_38b9q_1' }))
+    badge.appendChild(keys)
+    btn.appendChild(badge)
+  }
+  // FakeEl 的 textContent 不从子节点派生：显式拼出真实 DOM 的派生结果。
+  btn.textContent = shortcutKeys === undefined ? label : label + shortcutKeys.join('+')
+  itemWrap.appendChild(btn)
+  menu.appendChild(itemWrap)
+  return itemWrap
+}
 function makeOfficialMenu() {
   const menu = new FakeEl('div', { role: 'menu' })
-  function addItem(label) {
-    const itemWrap = new FakeEl('div')
-    const btn = new FakeEl('button', { role: 'menuitem' })
-    const icon = new FakeEl('span')
-    const lbl = new FakeEl('span')
-    // FakeEl 的 textContent 不从子节点派生：锚点匹配按按钮整段文本，
-    // 这里显式设置（等价真实 DOM 的派生结果）。
-    lbl.textContent = label
-    btn.textContent = label
-    btn.appendChild(icon)
-    btn.appendChild(lbl)
-    itemWrap.appendChild(btn)
-    menu.appendChild(itemWrap)
-    return itemWrap
-  }
-  addItem('重命名')
-  addItem('分叉会话')
-  addItem('归档会话')
+  makeOfficialMenuItem(menu, '置顶会话')
+  makeOfficialMenuItem(menu, '重命名', ['Ctrl', 'Shift', 'R'])
+  makeOfficialMenuItem(menu, '分叉会话', ['Ctrl', 'Shift', 'F'])
+  makeOfficialMenuItem(menu, '归档会话', ['Ctrl', 'Alt', 'A'])
   return menu
 }
 // 菜单 observer 按行为探测：各模块 observer 的数量与顺序脆弱，
 // 用「注入后给菜单打 data-dsh-zh-delete-session 标记」这一确定事实定位。
+// **必须快照 fakeObs 再遍历**：archive-view 的保活回调会在 cb 内创建新
+// observer，直接遍历活数组会无限循环——而锚点失配时（正是本用例要抓的
+// 回归）探针永远找不到目标、必然走完整个数组，于是挂死而不是报错。
 let menuObs = null
-for (const obs of fakeObs) {
+for (const obs of fakeObs.slice()) {
   const probe = makeOfficialMenu()
   obs.cb([{ addedNodes: [probe], target: body }])
   if (probe.getAttribute('data-dsh-zh-delete-session') !== null) { menuObs = obs; break }
@@ -987,8 +1185,65 @@ const batchItems = officialMenu.querySelectorAll('button[data-dsh-zh-batch-menui
 check(batchItems.length, 2, '批量 多选后菜单注入两个批量项')
 check(batchItems[0].querySelector('span:last-child').textContent, '批量删除（1）', '批量删除文案带计数')
 check(batchItems[1].querySelector('span:last-child').textContent, '批量归档（1）', '批量归档文案带计数')
-// 官方三项原样保留，批量项排在「归档会话」之后。
-check(officialMenu.querySelectorAll('[role="menuitem"]').length, 5, '批量 官方菜单项不被替换')
+// 官方四项原样保留，批量项排在「归档会话」之后。
+check(officialMenu.querySelectorAll('[role="menuitem"]').length, 6, '批量 官方菜单项不被替换')
+check(officialMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]').length, 2,
+  '带快捷键徽标的官方菜单仍注入批量项（锚点只读 itemLabel）')
+// 注：「删除会话」项需要行上下文（lastEllipsisRow），在下面的归档行用例里
+// 连同快捷键徽标一起验证。
+
+// 11d-2) 官方「显示已归档」视图的归档行：菜单锚点是「取消归档」而不是
+// 「归档会话」，此前匹配落空 → 已归档会话拿不到「删除会话」（官方明确不做
+// 删除，这是唯一盲区）。用与官方归档行同构的菜单验证锚点已扩展。
+function makeArchivedOfficialMenu() {
+  const menu = new FakeEl('div', { role: 'menu' })
+  makeOfficialMenuItem(menu, '置顶会话')
+  makeOfficialMenuItem(menu, '重命名', ['Ctrl', 'Shift', 'R'])
+  makeOfficialMenuItem(menu, '分叉会话', ['Ctrl', 'Shift', 'F'])
+  makeOfficialMenuItem(menu, '取消归档', ['Ctrl', 'Alt', 'U'])
+  return menu
+}
+// 归档行上也要能解析出会话 id：行 fiber 与普通行同构。
+const archivedRowForMenu = makeBatchRow('a1', { title: '已归档会话' })
+archivedRowForMenu.setAttribute('class', 'Rows_sessionRow__x Rows_archived__y')
+pluginExports.sessionBatch.pass()
+const archivedRowActions = new FakeEl('button', { 'aria-label': '会话“已归档会话”的操作' })
+archivedRowForMenu.appendChild(archivedRowActions)
+// fakeDoc 的 pointerdown 现在会转发给**全部**注册的监听器（archive-view 与
+// session-menu 两家），与真实 DOM 一致。
+fakeDoc._handlers.pointerdown({ target: archivedRowActions })
+const archivedOfficialMenu = makeArchivedOfficialMenu()
+menuObs.cb([{ addedNodes: [archivedOfficialMenu], target: body }])
+const archivedDeleteItem = archivedOfficialMenu.querySelector('button[data-dsh-zh-delete-session]')
+check(archivedDeleteItem !== null, true,
+  '官方归档行菜单注入「删除会话」（锚点扩展到「取消归档」）')
+// 注入项紧随「取消归档」之后（锚点即插入位置），且官方四项原样保留。
+// 按 label span 读文案（不是 span:last-child——带快捷键的项最后一个是徽标）。
+const menuItemLabelOf = function (btn) {
+  const lbl = btn.querySelector('span[class*="itemLabel"]')
+  if (lbl !== null) return String(lbl.textContent)
+  return String(btn.textContent)
+}
+const archivedMenuLabels = []
+for (const it of archivedOfficialMenu.querySelectorAll('[role="menuitem"]')) {
+  archivedMenuLabels.push(menuItemLabelOf(it))
+}
+check(archivedMenuLabels.slice(0, 5), ['置顶会话', '重命名', '分叉会话', '取消归档', '删除会话'],
+  '官方归档行菜单顺序：官方四项 + 紧随其后的删除项')
+// 插件自建归档菜单（data-dsh-zh-archive-menu）自带取消归档与删除项，
+// 不能再被本 observer 注入一遍（否则出现重复「删除会话」）。
+const ownMenu = new FakeEl('div', { role: 'menu', 'data-dsh-zh-archive-menu': '' })
+const ownItem = new FakeEl('div')
+const ownBtn = new FakeEl('button', { role: 'menuitem' })
+ownBtn.textContent = '取消归档'
+ownItem.appendChild(ownBtn)
+ownMenu.appendChild(ownItem)
+menuObs.cb([{ addedNodes: [ownMenu], target: body }])
+check(ownMenu.querySelector('button[data-dsh-zh-delete-session]'), null,
+  '自建归档菜单不被重复注入删除项')
+check(ownMenu.getAttribute('data-dsh-zh-delete-session'), null,
+  '自建归档菜单不打注入标记')
+batchList.removeChild(archivedRowForMenu)
 
 // 批量删除：确认框 → 确认 → 逐个调用主机删除路由 → 清空多选。
 const deleteCallsBefore = fetchCalls.filter(f => f.url === '/dsh-zh/api/session.delete').length
@@ -1006,21 +1261,75 @@ check(JSON.parse(deleteCallsAfter[deleteCallsAfter.length - 1].opts.body).sessio
 check(batchChecksOf().length === 1 && batchChecksOf()[0].checked, false, '批量删除完成后清空多选（勾选态还原）')
 check(confirmOverlaysOf().length, 0, '批量删除 确认框已关闭')
 
-// 批量归档：确认框 → 确认 → 调官方 archiveSession → 清空多选。
+// 批量归档：此时多选里的 a1 **已归档**（前面「批量取消归档」用例把它重新
+// 归档了），归档方向项因此是「批量取消归档」——先验证该方向，再验证未归档
+// 多选给出「批量归档」。
 r1.children[0].children[0].checked = true
 r1.children[0].children[0].click('change')
 const archiveMenu = makeOfficialMenu()
 menuObs.cb([{ addedNodes: [archiveMenu], target: body }])
 const archiveBatchItems = archiveMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]')
 check(archiveBatchItems.length, 2, '批量 重新打开菜单仍注入批量项')
+check((archiveBatchItems[1].querySelector('span:last-child') || {}).textContent, '批量取消归档（1）',
+  '已归档多选给出「批量取消归档」（归档构成判定）')
+const officialUnarchiveBeforeMenu = officialUnarchiveCalls.length
 archiveBatchItems[1].click('click')
-check(confirmOverlaysOf().length, 1, '批量归档 弹确认框')
+check(confirmOverlaysOf().length, 1, '批量取消归档 弹确认框')
 const archiveConfirmButtons = confirmOverlaysOf()[0].querySelectorAll('button')
 archiveConfirmButtons[archiveConfirmButtons.length - 1].click('click')
+await flushMicrotasks()
+check(officialUnarchiveCalls.length, officialUnarchiveBeforeMenu + 1,
+  '批量取消归档 走官方 unarchiveSession')
+check(officialUnarchiveCalls[officialUnarchiveCalls.length - 1], 'a1', '批量取消归档 目标会话正确')
+check(batchChecksOf()[0].checked, false, '批量取消归档完成后清空多选')
+check(confirmOverlaysOf().length, 0, '批量取消归档 确认框已关闭')
+
+// 批量归档：a1 现已取消归档（上一段的效果），归档方向项翻转为「批量归档」，
+// 确认后走官方 archiveSession。
+r1.children[0].children[0].checked = true
+r1.children[0].children[0].click('change')
+const reArchiveMenu = makeOfficialMenu()
+menuObs.cb([{ addedNodes: [reArchiveMenu], target: body }])
+const reArchiveItems = reArchiveMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]')
+check((reArchiveItems[1].querySelector('span:last-child') || {}).textContent, '批量归档（1）',
+  '未归档多选给出「批量归档」（归档构成判定）')
+reArchiveItems[1].click('click')
+check(confirmOverlaysOf().length, 1, '批量归档 弹确认框')
+const reArchiveConfirmButtons = confirmOverlaysOf()[0].querySelectorAll('button')
+reArchiveConfirmButtons[reArchiveConfirmButtons.length - 1].click('click')
 await flushMicrotasks()
 check(archiveSessionCalls.indexOf('a1') !== -1, true, '批量归档 调用官方 archiveSession')
 check(batchChecksOf()[0].checked, false, '批量归档完成后清空多选')
 check(confirmOverlaysOf().length, 0, '批量归档 确认框已关闭')
+
+// 混选（一个已归档 + 一个未归档）→ 归档方向项消失，只剩「批量删除」：
+// 归档/取消归档都只对一半选中项成立，提供任一项都会误导。
+// a1 刚被批量归档回已归档态；再加一个未归档的 n1 一起勾选。
+// 注意 makeBatchRow 自身已把行 append 进 batchList，不要再 append 一次
+// （FakeEl 的 children 是数组、appendChild 不去重，重复 append 会让
+// removeChild 只摘掉一份、残留的副本继续被扫描到）。
+const n1Batch = makeBatchRow('n1', { title: '未归档会话' })
+pluginExports.sessionBatch.pass()
+const mixedChecks = batchChecksOf()
+check(mixedChecks.length, 2, '混选 两个空闲行都有复选框')
+for (const box of mixedChecks) {
+  box.checked = true
+  box.click('change')
+}
+check(pluginExports.sessionBatch.selectionSize(), 2, '混选 勾选两个会话')
+const mixedMenu = makeOfficialMenu()
+menuObs.cb([{ addedNodes: [mixedMenu], target: body }])
+const mixedItems = mixedMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]')
+check(mixedItems.length, 1, '混选 只注入一个批量项')
+check((mixedItems[0].querySelector('span:last-child') || {}).textContent, '批量删除（2）',
+  '混选 只保留「批量删除」（归档/取消归档都只对一半成立）')
+// 清理：取消混选并移除 n1 行，避免影响后续用例。
+for (const box of batchChecksOf()) {
+  box.checked = false
+  box.click('change')
+}
+batchList.removeChild(n1Batch)
+pluginExports.sessionBatch.pass()
 
 // 行首出现官方图标（如会话开始运行）→ 复选框被移除，选择一并丢弃。
 r1.children[0].children[0].checked = true
@@ -1163,16 +1472,17 @@ a1Actions3.click('click')
 check(menuLabelsOf(menuOf()),
   ['重命名', '分叉会话', '取消归档', '删除会话', '批量取消归档（1）', '批量删除（1）'],
   '归档多选 重新勾选后批量项恢复')
-// 批量取消归档：确认框 → 确认 → 主机 unarchive 路由 → 行消失 → 清空多选。
-const unarchiveCallsBeforeBatch = fetchCalls.filter(c => c.url === '/dsh-zh/api/session.unarchive').length
+// 批量取消归档：确认框 → 确认 → 官方 unarchiveSession → 行消失 → 清空多选。
+const unarchiveOfficialBeforeBatch = officialUnarchiveCalls.length
 const archiveBatchItem = menuOf().querySelectorAll('[data-dsh-zh-archive-menu-item]')[4]
 archiveBatchItem.click('click')
 const batchUnarchiveMask = body.querySelector('[data-dsh-zh-archive-dialog-mask]')
 check(batchUnarchiveMask !== null, true, '归档 批量取消归档弹确认框')
 batchUnarchiveMask.querySelectorAll('button')[1].click('click')
 await flushMicrotasks()
-check(fetchCalls.filter(c => c.url === '/dsh-zh/api/session.unarchive').length,
-  unarchiveCallsBeforeBatch + 1, '归档 批量取消归档调用 unarchive 路由')
+check(officialUnarchiveCalls.length, unarchiveOfficialBeforeBatch + 1,
+  '归档 批量取消归档走官方 unarchiveSession')
+check(officialUnarchiveCalls[officialUnarchiveCalls.length - 1], 'a1', '归档 批量取消归档目标为 a1')
 check(panelRowsOf().some(r => r.getAttribute('data-dsh-zh-archive-id') === 'a1'), false,
   '归档 批量取消归档后 a1 行消失')
 check(pluginExports.sessionBatch.selectionSize(), 0, '归档 批量取消归档后清空多选')
@@ -1284,6 +1594,93 @@ settingsStoreUnderTest.set('batchOpsEnabled', true)
 pluginExports.sessionBatch.pass()
 check(selectAllBtnOf(wsRow) !== null, true, '全选 重新开启批量开关后恢复全选按钮')
 
+// 11g) 官方列表/搜索里的已删除会话行隐藏（2026-09-25 真实 GUI 回归）：
+// 删除驻留内存的会话只能靠官方归档集合隐藏，而归档集合只作用于「隐藏已归档」
+// 视图。用户切到「全部对话（显示已归档）」或「仅显示已归档」时，被删会话会
+// 作为灰色归档行重新出现（最典型是掉进「未分组」桶——账本席位已随删除移除）；
+// 官方内容搜索同样会把它列出来。本模块给命中已删除集合的官方行打标记 +
+// 样式隐藏，并把因此整体变空的分组一并收起。
+check(typeof pluginExports.sessionDeleteRows === 'object'
+  && typeof pluginExports.sessionDeleteRows.pass === 'function'
+  && typeof pluginExports.sessionDeleteRows.refresh === 'function', true,
+  '已删除行隐藏模块已安装并暴露测试入口')
+const deletedRowsPass = pluginExports.sessionDeleteRows.pass
+// 集合真值来自主机路由（fetch mock 读 mockDeletedIds）；改集合后重新拉取，
+// 与真实链路一致（安装时拉一次、删除回包时同步一次）。
+const syncDeletedSet = function () { pluginExports.sessionDeleteRows.refresh(); deletedRowsPass() }
+// 夹具复刻真实 DOM：官方会话行带 `data-row-key="session:<id>"`（Rows.tsx 稳定
+// 输出），搜索结果行无该属性、id 在 fiber 的 `result.id` 上。
+const dlRowA = new FakeEl('div', {
+  role: 'treeitem', class: 'Rows_sessionRow__x', 'data-row-key': 'session:a5',
+})
+const dlRowB = new FakeEl('div', {
+  role: 'treeitem', class: 'Rows_sessionRow__x', 'data-row-key': 'session:a6',
+})
+batchList.appendChild(dlRowA)
+batchList.appendChild(dlRowB)
+// 集合为空：不打标记、不建样式（没删过任何会话时零副作用）。
+mockDeletedIds.clear()
+syncDeletedSet()
+check(dlRowA.getAttribute('data-dsh-zh-deleted-row'), null, '已删除行 集合为空时不打标记')
+check(fakeDoc.head.children.filter(c => c.getAttribute('data-dsh-zh') === 'deleted-rows').length, 0,
+  '已删除行 集合为空时不建样式（零副作用）')
+// a5 进入已删除集合 → 只有 a5 被标记（a6 是对照组）。
+mockDeletedIds.add('a5')
+syncDeletedSet()
+check(dlRowA.getAttribute('data-dsh-zh-deleted-row'), '', '已删除行 命中集合的行打标记')
+check(dlRowB.getAttribute('data-dsh-zh-deleted-row'), null, '已删除行 未命中集合的行不打标记（对照）')
+const deletedRowStyles = fakeDoc.head.children.filter(c => c.getAttribute('data-dsh-zh') === 'deleted-rows')
+check(deletedRowStyles.length, 1, '已删除行 建一个样式标签')
+check(String(deletedRowStyles[0].textContent).indexOf('display:none!important') !== -1, true,
+  '已删除行 样式为 display:none!important（不摘节点，避免 React reconcile 找不到节点）')
+// 幂等：重复 pass 不改变结果（observer 高频触发下的稳定性）。
+deletedRowsPass()
+check(dlRowA.getAttribute('data-dsh-zh-deleted-row'), '', '已删除行 重复 pass 幂等')
+// 搜索行：id 来自 fiber 上的 `result.id`（官方 SearchResultItem 的 props）。
+const dlSearchRow = new FakeEl('div', { role: 'treeitem', class: 'Rows_searchResultRow__x' })
+dlSearchRow['__reactFiber$srch'] = { memoizedProps: { result: { id: 'a5' } }, return: null }
+batchList.appendChild(dlSearchRow)
+deletedRowsPass()
+check(dlSearchRow.getAttribute('data-dsh-zh-deleted-row'), '', '已删除行 搜索结果行按 result.id 命中并打标记')
+// 恢复（集合里移除）→ 标记撤销、样式移除、界面回到官方原生形态。
+mockDeletedIds.clear()
+syncDeletedSet()
+check(dlRowA.getAttribute('data-dsh-zh-deleted-row'), null, '已删除行 集合清空后撤销标记')
+check(dlSearchRow.getAttribute('data-dsh-zh-deleted-row'), null, '已删除行 搜索行标记同样撤销')
+check(fakeDoc.head.children.filter(c => c.getAttribute('data-dsh-zh') === 'deleted-rows').length, 0,
+  '已删除行 集合清空后移除样式')
+// 分组收拾：官方「仅显示已归档」视图里，一个分组只剩被删会话时整个收起。
+// 夹具挂在**官方分组容器所在的同一棵 tree** 上（分组容器的定义是「其父级
+// 正是官方滚动容器 role=tree 的那一层」，另起一棵树不会被识别为分组）。
+const dlGroupEmpty = new FakeEl('div', { class: 'Rows_groupSection__e' })
+const dlGroupKept = new FakeEl('div', { class: 'Rows_groupSection__k' })
+tree.appendChild(dlGroupEmpty)
+tree.appendChild(dlGroupKept)
+const dlOnlyDeleted = new FakeEl('div', {
+  role: 'treeitem', class: 'Rows_sessionRow__x', 'data-row-key': 'session:a7',
+})
+const dlKeptRow = new FakeEl('div', {
+  role: 'treeitem', class: 'Rows_sessionRow__x', 'data-row-key': 'session:a8',
+})
+dlGroupEmpty.appendChild(dlOnlyDeleted)
+dlGroupKept.appendChild(dlKeptRow)
+mockDeletedIds.clear()
+mockDeletedIds.add('a7')
+syncDeletedSet()
+check(dlOnlyDeleted.getAttribute('data-dsh-zh-deleted-row'), '', '已删除行 分组内已删除行打标记')
+check(dlGroupEmpty.getAttribute('data-dsh-zh-deleted-group'), '', '已删除行 只剩已删除行的分组整体收起')
+check(dlGroupKept.getAttribute('data-dsh-zh-deleted-group'), null, '已删除行 仍有可见行的分组不收起')
+// 分组收拾的反向：已删除集合清空后分组标记一并撤销（切回视图要复原）。
+mockDeletedIds.clear()
+syncDeletedSet()
+check(dlGroupEmpty.getAttribute('data-dsh-zh-deleted-group'), null, '已删除行 集合清空后分组标记撤销')
+tree.removeChild(dlGroupEmpty)
+tree.removeChild(dlGroupKept)
+// 卸载前重新打上标记（验证卸载把标记与样式一并清掉）。
+mockDeletedIds.add('a5')
+syncDeletedSet()
+check(dlRowA.getAttribute('data-dsh-zh-deleted-row'), '', '已删除行 卸载前标记存在（卸载清理断言的前提）')
+
 // 12) 卸载清理
 for (const d of disposers) d()
 check(registeredDicts['dsh-zh-archive'], undefined, '卸载后词典注销')
@@ -1293,9 +1690,11 @@ check(wsActions.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !== 
 check(ungroupedRow.children.find(c => c.getAttribute('data-dsh-zh-ws-archive') !== null), undefined, '卸载后未分组行归档按钮移除')
 check(body.querySelectorAll('input[data-dsh-zh-batch-check]').length, 0, '卸载后批量复选框全部移除')
 check(intervals.filter(i => i !== null).length, intervalsBefore, '卸载后无残留定时器')
-// 卸载后两个样式标签都移除（mock 的 querySelector 不支持逗号选择器，直接查 head 子元素）。
+// 卸载后样式标签全部移除（含「已删除行隐藏」样式；mock 的 querySelector
+// 不支持逗号选择器，直接查 head 子元素）。
 const remainingStyles = fakeDoc.head.children.filter(c => c.tagName === 'STYLE')
 check(remainingStyles.length, 0, '卸载后样式移除')
+check(body.querySelectorAll('[data-dsh-zh-deleted-row]').length, 0, '卸载后已删除行标记全部清除')
 
 console.log(fail > 0 ? `FAIL: ${fail}/${total} 项不符` : `OK: 归档视图回归 ${total} 项通过`)
 process.exit(fail > 0 ? 1 : 0)

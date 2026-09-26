@@ -10,11 +10,18 @@ export function warn(message) {
   console.warn(`[${PKG}] ${message}`)
 }
 
-export function argvProfile() {
-  const argv = process.argv
+export function profileNameFrom(argv, electronVersion) {
   const flag = argv.indexOf('--profile')
   if (flag !== -1 && flag + 1 < argv.length && !argv[flag + 1].startsWith('-')) return argv[flag + 1]
+  // 桌面版 Host 以 Electron RunAsNode 运行同一 web 应用，argv 不带 --profile，
+  // profile 固定为 desktop（apps/desktop/src/paths.ts）；此时不能落回 web 默认，
+  // 否则热挂监督器会监视/清理 web profile，造成跨 profile 干扰。
+  if (electronVersion !== undefined) return 'desktop'
   return 'web'
+}
+
+export function argvProfile() {
+  return profileNameFrom(process.argv, process.versions.electron)
 }
 
 export function localProfileDir() {

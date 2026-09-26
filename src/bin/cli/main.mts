@@ -12,6 +12,7 @@ function parseArgs(argv: string[]): ParsedCliArgs {
   let profile = 'web'
   let link: string | null = null
   let port = 3080
+  let portExplicit = false
   const rest: string[] = []
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
@@ -22,6 +23,7 @@ function parseArgs(argv: string[]): ParsedCliArgs {
     } else if (arg === '--port' && argv[i + 1] !== undefined) {
       port = parseInt(argv[i + 1], 10)
       if (!Number.isInteger(port) || port < 1 || port > 65535) port = 3080
+      else portExplicit = true
       i += 1
     } else if (arg === '--link' && argv[i + 1] !== undefined) {
       link = isAbsolute(argv[i + 1]) ? argv[i + 1] : resolve(process.cwd(), argv[i + 1])
@@ -30,6 +32,9 @@ function parseArgs(argv: string[]): ParsedCliArgs {
       rest.push(arg)
     }
   }
+  // 桌面版 Host 固定监听 19387：对 desktop profile 探测运行态时未显式给端口
+  // 则用桌面端口，避免拿 web 的 3080 误判「服务未运行」。
+  if (profile.toLowerCase() === 'desktop' && !portExplicit) port = 19387
   return { profile, link, port, rest }
 }
 

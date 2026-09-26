@@ -67,6 +67,11 @@ const ARCHIVE_VIEW_CSS = [
   'text-overflow:ellipsis;white-space:nowrap;font-size:14px;line-height:20px}',
   '[data-dsh-zh-archive-time]{flex:none;font-size:12px;line-height:20px;',
   'color:var(--dsw-alias-label-tertiary)}',
+  // 归档行读作「不活跃」：标题与时间降到 caption 灰（对齐官方
+  // Rows.module.css `.sessionRow.archived .title/.time` —— 官方特意选
+  // caption 而非 dimmed，后者在侧栏底色上过淡）。行本身保持主色文字，
+  // 只有这两处降级。
+  '[data-dsh-zh-archive-title],[data-dsh-zh-archive-time]{color:var(--dsw-alias-label-caption)}',
   '[data-dsh-zh-archive-empty]{padding:16px 12px;font-size:13px;line-height:20px;',
   'color:var(--dsw-alias-label-tertiary)}',
   '[data-dsh-zh-archive-more]{cursor:pointer;text-align:left;width:100%;height:28px;box-sizing:border-box;',
@@ -85,18 +90,30 @@ const ARCHIVE_VIEW_CSS = [
   'justify-content:center;width:16px;height:16px;border:none;border-radius:4px;padding:0;',
   'background:transparent;cursor:pointer;color:var(--dsw-alias-label-tertiary);}',
   'button[data-dsh-zh-archive-actions-button]:hover{color:var(--dsw-alias-label-primary);}',
-  // 三点菜单卡片：对齐官方 Menu.module.css .portal .list（218px、r12、
-  // 4px 内边距、menu 底色、inverted 边框、shadow-lv3，z 高于弹窗）。
-  '[data-dsh-zh-archive-menu]{position:fixed;z-index:1100;box-sizing:border-box;min-width:218px;',
-  'padding:4px;display:flex;flex-direction:column;',
-  'border:1px solid var(--dsw-alias-border-inverted);border-radius:12px;',
-  'background:var(--dsw-specific-menu);box-shadow:var(--dsw-shadow-lv3);}',
-  'button[data-dsh-zh-archive-menu-item]{display:flex;align-items:center;gap:8px;width:100%;',
-  'min-height:40px;padding:8px 10px;border:none;border-radius:10px;background:transparent;',
-  'cursor:pointer;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary);text-align:left;}',
+  // 三点菜单卡片：逐条对齐官方 Menu.module.css 的 `.portal .list`——r16、
+  // 3px 内边距、min-width 144px、无边框、elevation-prominent（0.5px 发丝
+  // 描边 + 双层柔光）投影，z 高于弹窗。
+  //
+  // **半透明底色必须与 backdrop-filter 成对出现**：`--dsw-specific-menu` 是
+  // 0.58 alpha 的半透明面，官方靠 `var(--dsw-menu-backdrop-filter)`
+  // （blur(40px) saturate(150%)）把它糊成可读的毛玻璃浮层。只取底色、不加
+  // 模糊时菜单下方内容直接透出，表现为「菜单发灰、文字叠字看不清」。
+  // 描边走 elevation 而非 border：官方高层级表面 border:0，0.5px 发丝画在
+  // box-shadow 里（不占布局）；描边色按官方在菜单面重绑最浅的 l1。
+  '[data-dsh-zh-archive-menu]{position:fixed;z-index:1100;box-sizing:border-box;min-width:144px;',
+  'max-width:360px;padding:3px;display:flex;flex-direction:column;border:0;border-radius:16px;',
+  'background:var(--dsw-specific-menu);backdrop-filter:var(--dsw-menu-backdrop-filter);',
+  '--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);}',
+  'button[data-dsh-zh-archive-menu-item]{display:flex;align-items:center;gap:6px;width:100%;',
+  'min-height:34px;padding:6px 8px;border:none;border-radius:8px;background:transparent;',
+  'cursor:pointer;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);text-align:left;}',
   'button[data-dsh-zh-archive-menu-item]:hover{background:var(--dsw-alias-interactive-bg-hover);}',
-  '[data-dsh-zh-archive-menu-icon]{display:inline-flex;flex:none;width:16px;height:16px;',
+  // 键盘导航移动真实焦点，聚焦行给与悬停同一份填充（官方 .item:focus-visible）。
+  'button[data-dsh-zh-archive-menu-item]:focus-visible{background:var(--dsw-alias-interactive-bg-hover);outline:none;}',
+  '[data-dsh-zh-archive-menu-icon]{display:inline-flex;flex:none;width:14px;height:14px;',
   'align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);}',
+  // 图标按官方 .itemIcon svg 收到 14px（SVG 自带 width/height=16，CSS 覆盖）。
+  '[data-dsh-zh-archive-menu-icon] svg{width:14px;height:14px;}',
   '[data-dsh-zh-archive-menu-label]{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
   'button[data-dsh-zh-archive-menu-item][data-dsh-zh-archive-menu-danger="true"]{color:var(--dsw-alias-state-error-primary);}',
   'button[data-dsh-zh-archive-menu-item][data-dsh-zh-archive-menu-danger="true"] [data-dsh-zh-archive-menu-icon]{color:var(--dsw-alias-state-error-primary);}',
@@ -283,12 +300,17 @@ function runArchiveView(ctx) {
         'menu.fork': '分叉会话',
         'menu.unarchive': '取消归档',
         'menu.delete': '删除会话',
+        'unarchive.failed': '取消归档失败：{message}',
         'menu.batchUnarchive': '批量取消归档（{n}）',
+        'menu.batchArchive': '批量归档（{n}）',
         'menu.batchDelete': '批量删除（{n}）',
         'batchUnarchive.title': '批量取消归档会话',
         'batchUnarchive.desc': '将把选中的 {n} 个已归档会话恢复回正常会话列表（取消归档），可继续正常使用。确定继续吗？',
         'batchUnarchive.done': '已取消归档 {n} 个会话',
         'batchUnarchive.partial': '完成 {ok} 个，失败 {failed} 个：{message}',
+        'batchArchive.title': '批量归档会话',
+        'batchArchive.desc': '将把选中的 {n} 个会话加入归档（从列表隐藏，日志原地保留，可随时在归档视图中恢复）。确定继续吗？',
+        'batchArchive.done': '已归档 {n} 个会话',
         'batchDelete.title': '批量删除会话',
         'batchDelete.desc': '将把选中的 {n} 个会话删除：日志移入系统回收站、并从工作区账本移除（不保留恢复位）；运行中的会话会被跳过。确定继续吗？',
         'batchDelete.deleting': '正在批量删除 {n} 个会话…',
@@ -325,12 +347,17 @@ function runArchiveView(ctx) {
         'menu.fork': 'Fork session',
         'menu.unarchive': 'Unarchive',
         'menu.delete': 'Delete session',
+        'unarchive.failed': 'Unarchive failed: {message}',
         'menu.batchUnarchive': 'Unarchive selected ({n})',
+        'menu.batchArchive': 'Archive selected ({n})',
         'menu.batchDelete': 'Delete selected ({n})',
         'batchUnarchive.title': 'Unarchive selected sessions',
         'batchUnarchive.desc': 'The {n} selected archived sessions will be restored to the normal session list (unarchived) and usable as usual. Continue?',
         'batchUnarchive.done': 'Unarchived {n} sessions',
         'batchUnarchive.partial': '{ok} done, {failed} failed: {message}',
+        'batchArchive.title': 'Archive selected sessions',
+        'batchArchive.desc': 'The {n} selected sessions will be archived (hidden from the list, logs kept in place; restore anytime from the archive view). Continue?',
+        'batchArchive.done': 'Archived {n} sessions',
         'batchDelete.title': 'Delete selected sessions',
         'batchDelete.desc': 'The {n} selected sessions will be deleted: logs move to the system recycle bin and workspace ledger slots are removed (no restore position); running sessions are skipped. Continue?',
         'batchDelete.deleting': 'Deleting {n} selected sessions…',
@@ -421,6 +448,22 @@ function runArchiveView(ctx) {
     }
     ensureStyles()
 
+    // ------- 本视图内由用户显式「取消归档」的会话 id -------
+    // 主机的取消归档写要经 follow 流回灌到客户端快照，与点击之间存在一段
+    // 窗口；窗口内 archivedSessionIds 仍含该 id，mergedRowsOf 的
+    // archivedRowsOf 分支会把它**重新加回**列表——只从 orderedIds 里剔除
+    // 是不够的，表现为「点了取消归档没反应」。这里本地记账，让菜单项/批量
+    // 取消归档立即、确定地生效，不依赖快照回灌时序。
+    //
+    // 记账只在主机确认成功后写入（见 unarchiveOnly / runBatchUnarchive），
+    // 且由 renderSectionContent 自愈清理：id 一旦从权威归档集合消失即从
+    // 账本剔除。因此「回灌到达后账本自动清空」，「同一 id 之后再被归档」
+    // 也不会被旧账本错误隐藏。
+    //
+    // 注意：行点击「查看」（unarchiveThen）**不**记账——那条路径的既定语义
+    // 是已打开的行原位保留、列表零扰动。
+    const unarchivedIds = new Set()
+
     // ------- 纯函数：归档行派生（与官方 tree.ts 语义对齐） -------
     // 某工作区（或未分组桶）的归档会话行：官方归档集合 ∩ 账本会话 ∩
     // 列表快照；未分组桶 = 归档集合中不属于任何账本的会话。排序按会话
@@ -454,6 +497,8 @@ function runArchiveView(ctx) {
       // 必须反向排除，否则删除的会话在归档视图里「复活」。
       const rowOf = function (id, byId) {
         if (deletedSessionIds.has(String(id))) return null
+      // 本视图内已被用户取消归档的会话：立刻不再出现（不等主机快照回灌）。
+      if (unarchivedIds.has(String(id))) return null
       const summary = byId !== null && typeof byId === 'object' ? byId[String(id)] : undefined
       if (summary === undefined || summary === null) return null
       if (summary.origin === 'subagent' || summary.blank === true) return null
@@ -631,8 +676,56 @@ function runArchiveView(ctx) {
       }
     }
 
-    // 取消归档（行点击静默）：主机路由改写官方归档集合，成功后刷新
-    // 会话/工作区列表，刷新完成后打开该会话；路由失败时仍尝试直接打开。
+    // ------- 取消归档统一入口 -------
+    // **优先官方客户端 API**（`workspaces.unarchiveSession`）：它走官方 RPC
+    // 通道，并把返回的**完整归档集合** install 进客户端快照
+    // （workspace-controller client model 的 installArchived），因此快照与
+    // 归档集合即时一致，不存在「写入→follow 流回灌」的滞后窗口。官方 API
+    // 缺席（旧版宿主）才回退插件自己的主机路由 /dsh-zh/api/session.unarchive。
+    //
+    // 统一返回 Promise<{ ok, message }>（不抛），调用方按 ok 决定是否保留
+    // 乐观隐藏 / 提示失败。官方 API 的失败是 reject（commandError），
+    // 宿主路由的失败是 ok:false —— 两种都归一成同一形状。
+    const unarchiveRemote = function (sessionId) {
+      let official = null
+      try {
+        const workspaces = ctx.get('workspaces')
+        if (workspaces !== undefined && workspaces !== null
+          && typeof workspaces.unarchiveSession === 'function') {
+          official = workspaces.unarchiveSession(sessionId)
+        }
+      } catch (error) {
+        return Promise.resolve({
+          ok: false,
+          message: error instanceof Error ? error.message : String(error),
+        })
+      }
+      if (official !== null && typeof official === 'object' && typeof official.then === 'function') {
+        return official.then(function () {
+          return { ok: true, message: '' }
+        }, function (error) {
+          return { ok: false, message: error instanceof Error ? error.message : String(error) }
+        })
+      }
+      // 回退：插件主机路由（旧版宿主没有官方 unarchive API）。
+      return fetch('/dsh-zh/api/session.unarchive', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: sessionId }),
+      }).then(function (response) {
+        return response.json().catch(function () { return null })
+      }).then(function (parsed) {
+        if (parsed !== null && parsed.ok === true) return { ok: true, message: '' }
+        const message = parsed !== null && parsed.error !== null && parsed.error !== undefined
+          && parsed.error.message !== undefined
+          ? parsed.error.message : 'rpc'
+        return { ok: false, message: String(message) }
+      }).catch(function (error) {
+        return { ok: false, message: error instanceof Error ? error.message : String(error) }
+      })
+    }
+
+    // 取消归档（行点击静默）：成功后打开该会话；失败仍尝试直接打开。
     const unarchiveThen = function (sessionId) {
       const openSession = function () {
         try {
@@ -642,32 +735,7 @@ function runArchiveView(ctx) {
           }
         } catch { /* 忽略 */ }
       }
-      return fetch('/dsh-zh/api/session.unarchive', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId: sessionId }),
-      }).then(function (response) {
-        return response.json().catch(function () { return null })
-      }).then(function (parsed) {
-        const refreshPromises = []
-        try {
-          const workspaces = ctx.get('workspaces')
-          if (workspaces !== undefined && workspaces !== null && typeof workspaces.refresh === 'function') {
-            refreshPromises.push(workspaces.refresh())
-          }
-        } catch { /* 忽略 */ }
-        try {
-          const sessions = ctx.get('sessions')
-          if (sessions !== undefined && sessions !== null && typeof sessions.refresh === 'function') {
-            refreshPromises.push(sessions.refresh())
-          }
-        } catch { /* 忽略 */ }
-        if (parsed === null || parsed.ok !== true) {
-          openSession()
-          return
-        }
-        void Promise.all(refreshPromises).then(openSession, openSession)
-      }).catch(openSession)
+      return unarchiveRemote(sessionId).then(function () { openSession() })
     }
     // 点击归档行查看：静默取消归档 + 打开会话；归档视图保持显示，已打开
     // 的行原位保留，可连续打开多个会话（再点一次归档按钮切回默认列表）。
@@ -824,28 +892,36 @@ function runArchiveView(ctx) {
     }
     // 取消归档（不打开）：行从归档列表消失，会话回到正常列表（退出归档
     // 视图后可见）。
+    //
+    // 两条状态各管一段，缺一不可：
+    //   - `unarchivedIds` 记账负责**即时**隐藏：取消归档写入与客户端快照
+    //     之间有一段窗口（官方 API 在 resolve 时才 installArchived；回退
+    //     路由要等 follow 流回灌），本函数触发的重渲染发生在窗口内，此刻
+    //     archivedSessionIds 仍含该 id，archivedRowsOf 分支会把行加回来；
+    //     只调 dropRow 时表现为「点了取消归档没反应」。
+    //   - `dropRow`（剔 orderedIds）负责**快照更新之后**的隐藏：记账自愈
+    //     清空后，只有 orderedIds 里没有它，行才不会重新出现。
+    //
+    // 两者都只在确认成功后才提交：失败时撤销记账并提示，否则写入失败会
+    // 退化成「行消失了、会话却没回来」的假成功（2026-09 审计 D3 同类）。
     const unarchiveOnly = function (sessionId) {
-      dropRow(sessionId)
-      void fetch('/dsh-zh/api/session.unarchive', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId: sessionId }),
-      }).then(function (response) {
-        return response.json().catch(function () { return null })
-      }).then(function () {
-        try {
-          const workspaces = ctx.get('workspaces')
-          if (workspaces !== undefined && workspaces !== null && typeof workspaces.refresh === 'function') {
-            void workspaces.refresh()
-          }
-        } catch { /* 忽略 */ }
-        try {
-          const sessions = ctx.get('sessions')
-          if (sessions !== undefined && sessions !== null && typeof sessions.refresh === 'function') {
-            void sessions.refresh()
-          }
-        } catch { /* 忽略 */ }
-      }).catch(function () { /* 忽略 */ })
+      const key = String(sessionId)
+      unarchivedIds.add(key)
+      sectionRenderKey = null
+      renderSectionContent()
+      const revert = function (message) {
+        unarchivedIds.delete(key)
+        sectionRenderKey = null
+        renderSectionContent()
+        showToast(archiveT('unarchive.failed', { message: message }), 5000)
+      }
+      void unarchiveRemote(sessionId).then(function (result) {
+        if (result.ok !== true) {
+          revert(result.message)
+          return
+        }
+        dropRow(sessionId)
+      })
     }
     // 删除会话（回收站）：与会话行菜单同一主机路由与语义。
     const confirmDelete = function (row) {
@@ -954,8 +1030,83 @@ function runArchiveView(ctx) {
           ? summary.displayTitle : '',
       }
     }
-    // 批量取消归档：逐个调用主机 unarchive 路由，成功后行从归档列表消失，
-    // 完成后刷新列表、清空多选并显示汇总提示。
+    // 批量归档：与官方行菜单的批量归档同一通道（workspaces.archiveSession）。
+    // 归档视图里全部未归档的多选只可能来自跨视图勾选，这里与官方行保持
+    // 同一行为，不引入第二套语义。
+    const confirmBatchArchive = function (ids) {
+      const n = String(ids.length)
+      showDialog(function (card, close) {
+        const titleEl = document.createElement('div')
+        titleEl.setAttribute('data-dsh-zh-archive-dialog-title', '')
+        titleEl.textContent = archiveT('batchArchive.title')
+        const descEl = document.createElement('div')
+        descEl.setAttribute('data-dsh-zh-archive-dialog-desc', '')
+        descEl.textContent = archiveT('batchArchive.desc', { n: n })
+        const actions = document.createElement('div')
+        actions.setAttribute('data-dsh-zh-archive-dialog-actions', '')
+        const cancel = document.createElement('button')
+        cancel.type = 'button'
+        cancel.textContent = archiveT('rename.cancel')
+        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:1px solid rgba(127,127,127,0.35);background:transparent;cursor:pointer;font:inherit;font-size:14px'
+        const ok = document.createElement('button')
+        ok.type = 'button'
+        ok.textContent = archiveT('rename.ok')
+        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-business-primary,#4f6ef7);color:#fff;cursor:pointer;font:inherit;font-size:14px'
+        cancel.addEventListener('click', close, false)
+        ok.addEventListener('click', function () { close(); runBatchArchive(ids.slice(), n) }, false)
+        actions.appendChild(cancel)
+        actions.appendChild(ok)
+        card.appendChild(titleEl)
+        card.appendChild(descEl)
+        card.appendChild(actions)
+      })
+    }
+    const runBatchArchive = function (ids, n) {
+      let chain = Promise.resolve()
+      let okCount = 0
+      let failedCount = 0
+      let firstMessage = ''
+      for (const id of ids) {
+        chain = chain.then(function () {
+          let official = null
+          try {
+            const workspaces = ctx.get('workspaces')
+            if (workspaces !== undefined && workspaces !== null
+              && typeof workspaces.archiveSession === 'function') {
+              official = workspaces.archiveSession(id)
+            }
+          } catch (error) {
+            failedCount += 1
+            if (firstMessage === '') firstMessage = error instanceof Error ? error.message : String(error)
+            return
+          }
+          if (official !== null && typeof official === 'object' && typeof official.then === 'function') {
+            return official.then(function () {
+              okCount += 1
+            }, function (error) {
+              failedCount += 1
+              if (firstMessage === '') firstMessage = error instanceof Error ? error.message : String(error)
+            })
+          }
+          failedCount += 1
+          if (firstMessage === '') firstMessage = 'unavailable'
+        })
+      }
+      chain.then(function () {
+        clearBatchSelection()
+        sectionRenderKey = null
+        renderSectionContent()
+        if (failedCount === 0) {
+          showToast(archiveT('batchArchive.done', { n: String(okCount) }), 4000)
+        } else {
+          showToast(archiveT('batchUnarchive.partial', {
+            ok: String(okCount), failed: String(failedCount), message: firstMessage,
+          }), 6000)
+        }
+      })
+    }
+    // 批量取消归档：逐个走统一入口（优先官方 API，旧版宿主回退插件路由），
+    // 成功后行从归档列表消失，完成后清空多选并显示汇总提示。
     const confirmBatchUnarchive = function (ids) {
       const n = String(ids.length)
       showDialog(function (card, close) {
@@ -991,39 +1142,22 @@ function runArchiveView(ctx) {
       let firstMessage = ''
       for (const id of ids) {
         chain = chain.then(function () {
-          return fetch('/dsh-zh/api/session.unarchive', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ sessionId: id }),
-          }).then(function (response) {
-            return response.json().catch(function () { return null })
-          }).then(function (parsed) {
-            if (parsed === null || parsed.ok !== true) {
+          // 与单项取消归档同一入口（优先官方 API，旧版宿主回退插件路由），
+          // 串行执行避免并发压主机。
+          return unarchiveRemote(id).then(function (result) {
+            if (result.ok !== true) {
               failedCount += 1
-              if (firstMessage === '') firstMessage = 'rpc'
+              if (firstMessage === '') firstMessage = result.message
               return
             }
             okCount += 1
+            // 与单项取消归档同一记账：立刻从列表剔除，不等快照更新。
+            unarchivedIds.add(String(id))
             dropRow(id)
-          }).catch(function (error) {
-            failedCount += 1
-            if (firstMessage === '') firstMessage = error instanceof Error ? error.message : String(error)
           })
         })
       }
       chain.then(function () {
-        try {
-          const workspaces = ctx.get('workspaces')
-          if (workspaces !== undefined && workspaces !== null && typeof workspaces.refresh === 'function') {
-            void workspaces.refresh()
-          }
-        } catch { /* 忽略 */ }
-        try {
-          const sessions = ctx.get('sessions')
-          if (sessions !== undefined && sessions !== null && typeof sessions.refresh === 'function') {
-            void sessions.refresh()
-          }
-        } catch { /* 忽略 */ }
         clearBatchSelection()
         sectionRenderKey = null
         renderSectionContent()
@@ -1138,20 +1272,33 @@ function runArchiveView(ctx) {
           appendItem('menu.delete', null, true, function () { confirmDelete(row) })
         }
       } catch { /* 设置读取失败时不提供删除项 */ }
-      // 会话多选（batchOpsEnabled）：多选非空时追加「批量取消归档 / 批量
-      // 删除」。已归档会话本来就在归档集合里，「批量归档」无意义，因此
-      // 对归档行是「批量取消归档」（恢复回正常列表）；「批量删除」跟随
-      // 「会话删除按钮」开关，多选会话与官方行多选是同一份状态，跨视图
-      // 生效。「批量删除」项始终在危险区（红色），排在单项删除之后。
+      // 会话多选（batchOpsEnabled）：多选非空时追加批量项。提供哪些项由多选
+      // 的归档构成决定（batchSelectionArchiveKind，与官方行菜单同一规则）：
+      //   - archived（全已归档）→ 批量取消归档 + 批量删除；
+      //   - plain（全未归档）→ 批量归档 + 批量删除（跨视图勾选后可能如此）；
+      //   - mixed（两类混选）→ **只有批量删除**（归档/取消归档都只对一半成立）。
+      // 多选状态与官方行多选是同一份，跨视图生效。「批量删除」跟随「会话删除
+      // 按钮」开关，且始终在危险区（红色），排在归档方向项之后。
       try {
         if (typeof settingsStore !== 'undefined' && settingsStore !== null
           && settingsStore.getSnapshot().batchOpsEnabled === true
           && batchSelectionSize() > 0) {
           const batchIds = batchSelectionIds()
           const batchCount = String(batchIds.length)
-          appendItem('menu.batchUnarchive', 'archive', false, function () {
-            confirmBatchUnarchive(batchIds.slice())
-          }, { n: batchCount })
+          const kind = batchSelectionArchiveKind(ctx)
+          if (kind !== 'mixed') {
+            const unarchiveDirection = kind !== 'plain'
+            appendItem(
+              unarchiveDirection ? 'menu.batchUnarchive' : 'menu.batchArchive',
+              'archive',
+              false,
+              function () {
+                if (unarchiveDirection) confirmBatchUnarchive(batchIds.slice())
+                else confirmBatchArchive(batchIds.slice())
+              },
+              { n: batchCount },
+            )
+          }
           if (settingsStore.getSnapshot().deleteSessionEnabled === true) {
             appendItem('menu.batchDelete', null, true, function () {
               confirmBatchDelete(batchIds.slice())
@@ -1279,6 +1426,15 @@ function runArchiveView(ctx) {
       const byId = snap.sessions !== null && snap.sessions !== undefined && snap.sessions.byId !== null && typeof snap.sessions.byId === 'object'
         ? snap.sessions.byId
         : {}
+      // 自愈：账本里的 id 已从权威归档集合消失（主机写已回灌）即剔除——
+      // 账本只覆盖「写入到回灌」这段窗口，不长期遮蔽后续的重新归档。
+      if (unarchivedIds.size > 0) {
+        const archivedSet = new Set()
+        for (const id of archivedIds) archivedSet.add(String(id))
+        for (const id of unarchivedIds) {
+          if (!archivedSet.has(id)) unarchivedIds.delete(id)
+        }
+      }
       const rows = mergedRowsOf(archivedIds, items, byId, activeTarget.workspaceId, orderedIds)
       const currentId = snap.sessions !== null && snap.sessions !== undefined ? snap.sessions.current : undefined
       const now = Date.now()

@@ -66,7 +66,8 @@ npm test
 - `src/lib/client/logic/`：状态与逻辑（`settings-store.ts`、`search-credential.ts` 搜索凭据状态、
   `prompt-store.ts`、`format-utils.ts`、
   `settings-section.ts` 设置页组件、`auto-archive.ts`、`register.ts`、`dom-enhance.ts`、
-  `session-menu.ts` 会话删除菜单（含批量项注入与批量执行）、`session-batch.ts` 会话多选与批量操作
+  `session-menu.ts` 会话删除菜单（含批量项注入、批量执行与官方列表/搜索里的已删除会话行隐藏）、
+  `session-batch.ts` 会话多选与批量操作
   （行首复选框 + 多选状态）、`archive-view.ts` 归档视图、`service-monitor.ts` 服务监控（共享轮询 + DOM 面板）、
   `service-monitor-tab.ts` 右栏 tab 两阶段注册（React 容器 + keyed 槽位）、
   `apply.ts`）；
@@ -99,7 +100,11 @@ window.__ModuleLoader__.load({
 `react`。所有 effect、监听器、定时器、Slot、样式和服务包装都必须返回 disposer。
 
 主机半边同样已拆分：`src/lib/index.ts` 只做装配（自迁移、提示词注册、热重载、监督器），
-子系统在 `src/lib/constants.ts`、`src/lib/util.ts`、`src/lib/schemastery.ts`、`src/lib/hot-reload.ts`、
+子系统在 `src/lib/constants.ts`、`src/lib/util.ts`、`src/lib/schemastery.ts`（静态 Config 的
+schemastery 加载：DSH 0.1.7-rc 起宿主组合批次经模块 hooks 管线并发 import ESM，同步
+require(esm) 会撞「not yet fully loaded」且同步重试无效；本模块用 `require.resolve` 只解析、
+读 exports 的 import 条目做异步 `import` 预载（TLA），失败才同步兜底降级为无 schema）、
+`src/lib/hot-reload.ts`、
 `src/lib/chinese-prompt.ts`、`src/lib/assemble-patch.ts`（systemPrompt.assemble 的唯一
 包装管线，chinese-prompt 与 model-locale 都以改写器形式注册）、`src/lib/model-locale.ts`
 （模型请求中文化：persona/系统段落/工具说明/指引段落改写）、
@@ -203,13 +208,24 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
    升版后跑 `node temp/check-section-guards.mjs`：把每条 `match`/`en`/`replacements.en` 片段在部署版
    `packages/` 里搜一遍，**0 命中即失配**。失配的按新原文改 `match` 并同步译文；若某 section 在
    部署树里**已不存在**（如 0.1.7 的 `tool:cordis`，其守卫一直失配、从未生效），整条规则连同
-   专属常量文件一起删。
-   同时按 DSH 的 section 注册表 diff 一遍本表，找出**从未覆盖**的新段落——
+   专属常量文件一起删。**守卫片段里避免用撇号**（源码里写作 `\'`，逐字搜索会落空）；
+   脚本已对 haystack 做反转义兜底，但单行无转义的片段最稳。
+6. **核对段落覆盖（不是守卫是否有效，而是**表里根本没有这一项**）**——与第 5 步互补，漏的是
+   另一种失败：守卫全绿、`npm test` 全绿，但某个官方段落从未被收录，于是一直整段英文。
+   跑 `node temp/audit-section-coverage.mjs`：枚举部署版 `packages/` 里所有
+   `systemPrompt.section({ name: 'X' })` 注册名（跳过 `tests/`、`fixtures/`），减去
+   `model-locale.ts` 已覆盖的名字，剩下的就是「一定显示英文」的段落。
    注册形式是 `ctx.systemPrompt.section({ name, order: ctx.systemPrompt.getSectionOrder('X'), text })`，
    顺序位常量表在 `packages/core/system-prompt/src/index.ts` 的 `SECTION_ORDERS`。
    0.1.7 一次补了 `tool:pty`、`tool:lsp`、`tool:session-query`、`mcp-resource-servers`、
    `tool:structured_output` 五个。带**动态值**的段落（`mcp-resource-servers` 的服务器名 JSON 列表）
    用 `replacements` 分段替换，不要整段覆盖——整段覆盖会把运行时数据抹掉。
+   2026-09-23 实测即此因：`team:policy`（Agent Teams 协作策略）此前被注释误记为
+   「第三方 agent-teams 插件」而排除，导致 Agent Teams 会话的系统提示词整段英文；
+   实际注册者是官方包 `@deepseek-ai/dsh-experimental-tool-agent-team`。
+   **判定标准是「由谁注册」（`@deepseek-ai/*` 即官方），不是「包名里有没有 experimental」。**
+   同一次还发现 `browser-use:stagehand-native` 与 `computer-use:cua-driver-native` 未覆盖
+   （官方 experimental 包，当前 profile 未挂载，暂不收录）。
 
 ## DOM 文本层
 
@@ -345,6 +361,79 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
   全部 listener，前面一个抛错、后面的重建就不跑，表现为「开关变了但归档行没重建」。
   归档视图的设置订阅把按钮注入包在 try/catch 里，再清 `sectionRenderKey` 强制重建
   ——按钮注入失败不阻断行重建。
+- **取消归档要盖住「写入→回灌」窗口**：官方归档集合写与客户端快照之间有一段
+  窗口。**官方客户端 API 是首选通道**：`workspaces.unarchiveSession` 走官方 RPC，
+  并在 resolve 时把返回的完整归档集合 install 进客户端快照
+  （workspace-controller client model 的 `installArchived`）；插件自己的
+  `/dsh-zh/api/session.unarchive` 只在官方 API 缺席（旧版宿主）时回退。
+  `unarchiveRemote` 把两条通道归一成 `Promise<{ ok, message }>`（官方 API 的
+  失败是 reject、路由的失败是 `ok:false`，两种都收敛成同一形状）。
+  注意 `sessions/workspaces.refresh` 在真实客户端服务上**并不存在**
+  （`IWorkspaces` 只公开 list/create/rename/…，`ISessions` 只公开 retain/binding/…），
+  那些 `typeof x.refresh === 'function'` 调用一律落空。
+- **取消归档的两条状态各管一段，缺一不可**：`unarchivedIds` 记账负责「写入已发出、
+  快照尚未更新」窗口内的**即时**隐藏（此刻 `archivedSessionIds` 仍含该 id，
+  `archivedRowsOf` 分支会把行加回来——只剔 `orderedIds` 表现为「点了取消归档没
+  反应」）；`dropRow`（剔 `orderedIds`）负责快照更新**之后**的隐藏。两者都只在
+  确认成功后提交，失败即撤销并提示，不制造「行消失但会话没回来」的假成功
+  （2026-09 审计 D3 同类）。记账由 `renderSectionContent` 自愈清理：id 一旦从
+  权威归档集合消失即剔除，因此不会长期遮蔽同一 id 的后续重新归档。行点击
+  「查看」（`unarchiveThen`）不走记账，那条路径的既定语义是已打开的行原位保留。
+- **批量项集合随多选构成变化**（`batchSelectionArchiveKind`，定义在
+  `session-batch.ts`、被 `session-menu.ts` 与 `archive-view.ts` 共用）：全部未归档
+  → 归档方向项是「批量归档」；全部已归档 → 反转为「批量取消归档」；**两类混选 →
+  只有「批量删除」**（归档/取消归档都只对一半选中项成立，提供任一项都会误导）。
+  官方 API 缺席时批量取消归档回退插件路由。
+- **「删除会话」的菜单锚点要认两组文案**：普通会话行是「归档会话」/Archive session，
+  官方「显示已归档」视图的归档行是「取消归档」/Unarchive session
+  （`SESSION_MENU_UNARCHIVE_MARKS`）。只认前者会让已归档会话拿不到删除入口——
+  官方明确不做删除，这是唯一盲区。同时必须**跳过插件自建的归档菜单**
+  （`data-dsh-zh-archive-menu`）：它也是 `div[role="menu"]`、自带取消归档文案与
+  自己的删除项，不跳过会注入出重复的「删除会话」。
+- **已删除会话行要在官方列表与搜索里一并隐藏**（`session-menu.ts` 的
+  `runDeletedRowPass`）。官方归档集合**只作用于「隐藏已归档」一个视图**：视图切到
+  「全部对话（显示已归档）」或「仅显示已归档」时，删除驻留会话时被加进归档集合的
+  那条会作为灰色归档行重新出现（账本席位已随删除移除，因此落进「未分组」桶），
+  官方内容搜索也会按会话汇总把它列出来（2026-09-25 真实 GUI 实测三处）。实现要点：
+  - **打标记 + 样式隐藏，绝不摘除节点**：这些行由 React 托管，外部 `removeChild`
+    会让下一次 reconcile 找不到节点；`display:none` 后行的父级 span 自然塌陷为
+    0 高，列表不留空位（真实页面实测 32px → 0）。
+  - **样式挂属性选择器，不写内联 `style.display`**：archive-view 的视图切换
+    （`hideWorkspaceSessions` / `restoreHiddenSessions`）也读写同一批行的 inline
+    display，共用会让两边互相覆盖。
+  - **id 只从两个稳定来源取**：`data-row-key="session:<id>"`（官方 `Rows.tsx` 输出）
+    与 fiber 链上的 `node.id`（会话行）/ `result.id`（搜索结果行）。**不要用标题
+    匹配兜底**——重名标题会指错行。
+  - **空分组要自己收拾**：官方「仅显示已归档」视图只丢掉「没有归档成员」的分组，
+    一个分组若只剩被删会话，它会照常渲染出标题。分组容器的定义是「其父级正是官方
+    滚动容器 `role=tree` 的那一层」；收拾时若分组里还有**可见**会话行（或挂着插件
+    自建的 `[data-dsh-zh-archive-section]`）就不能整体隐藏。
+  - **集合为空时零副作用**：`deletedSessionIds` 为空即撤掉全部标记与样式标签，
+    没删过会话的界面与官方完全一致（`verify-archive.cjs` 的 11g 段钉住这一点，
+    它同时解释了为什么「归档样式计数」类断言要按 `data-plugin-css` 过滤）。
+  - **observer 批次要有短路**：`runDeletedRowPass(node)` 先做一次
+    `matches`/`querySelector(DELETED_ROW_SELECTOR)` 快速判定，子树里没有官方行就
+    直接返回——聊天流式输出期间 observer 批次极多，全量 DOM 查询会拖慢页面。
+  - **增量跳过靠版本号**：行上的 `data-dsh-zh-deleted-checked="<集合版本>|<id>"`
+    记录上次判定依据；版本与 id 都没变就跳过该行（fiber 遍历不便宜）。
+- **菜单锚点只读 `span[class*=itemLabel]`，绝不读按钮整段 `textContent`**：官方
+  菜单项在文案之外还有图标 span 与（2026-09 起）`span[aria-hidden=true]` 的快捷键
+  徽标（`<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>A</kbd>`），整段 `textContent` 是
+  「归档会话Ctrl+Alt+A」——等值匹配会**全部失配、在 `if (anchor === null) return`
+  处静默退出**，表现为「删除项与批量项全部消失、无任何报错」。取不到 itemLabel
+  时退回「遍历子节点、跳过 `aria-hidden="true"` 子树」以兼容旧版结构。
+  同理 `buildMenuItem` 用**语义类名**（`itemLabel`/`itemIcon`）定位，不要用
+  `span:first/last-child`（新结构下 `last-child` 是徽标）；注入项要摘掉克隆来的
+  徽标并清 `aria-keyshortcuts`。详见 `troubleshooting.md` 同名章节。
+- **归档行标题/时间用 caption 灰**：对齐官方 `Rows.module.css`
+  `.sessionRow.archived .title/.time` 的 `--dsw-alias-label-caption`（官方特意选
+  caption 而非 dimmed，后者在侧栏底色上过淡）。
+- **归档菜单卡片样式**：`--dsw-specific-menu` 是 0.58 alpha 的半透明面，官方靠
+  `var(--dsw-menu-backdrop-filter)`（blur(40px) saturate(150%)）糊成毛玻璃浮层；
+  只取底色不加模糊时菜单下方内容直接透出（表现为菜单发灰、叠字）。官方高层级表面
+  一律 `border: 0`，描边走 `box-shadow` 里的 `--dsw-elevation-stroke`（菜单面把
+  `--dsw-elevation-stroke-color` 重绑为最浅的 `--dsw-alias-border-l1`），投影用
+  `--dsw-elevation-prominent`。
 
 回归（`verify-archive.cts`）注意：
 
@@ -352,6 +441,22 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
   parts，`[data-dsh-zh-archive-row] input[...]` 永远查不到）。跨结构的计数断言要逐行
   `r.querySelector('input[...]')` 累加，不要写后代选择器——否则查询恒为 0，会被误判成
   「功能缺失」，实际 DOM 里复选框是存在的。
+- **FakeEl 的 `appendChild` 不去重、`textContent` 不从子节点派生**：
+  `makeBatchRow` 自身已 append 行，再 append 一次会让 `removeChild` 只摘掉一份、
+  残留副本继续被扫描到（表现为后续断言莫名多出一个复选框）；读取菜单项文案要按
+  `span[class*="itemLabel"]` 取，不要按 `span:last-child`（带快捷键的项最后一个是
+  徽标），也不要读按钮 `textContent`（会拿到克隆时的原文案）。
+- **官方菜单夹具必须复刻真实 DOM**（`makeOfficialMenuItem`）：文案放
+  `span[class*=itemLabel]`、带快捷键的项再挂 `aria-hidden` 的 `<kbd>` 徽标，并
+  如实拼出「文案 + 快捷键」的 `textContent`。早先夹具只手写 `btn.textContent = label`，
+  与真实派生结果不符——**锚点因快捷键徽标失配时测试照样绿**，这个 bug 就是这样漏过去的
+  （2026-09-24）。改官方 DOM 相关夹具时以真实页面抓到的 DOM 为准，不要手工简化。
+- **按行为探测 observer 时必须快照数组**：`for (const obs of fakeObs.slice())`。
+  archive-view 的保活回调会在 `cb` 内新建 observer，直接遍历活数组会无限循环；而
+  锚点失配时探针必然走完整个数组，于是**挂死而不是报错**（比失败更难定位）。
+- **`fakeDoc` 的 `pointerdown` 要转发给全部监听器**：archive-view 与 session-menu
+  都在 document 上注册 pointerdown，早先「每类型只留最后一个」的实现会让先注册者
+  收不到事件（测试里表现为菜单 observer 拿不到「最近点击的三点行」）。
 - **开关重启会让旧 DOM 按钮引用失效**：`archiveViewEnabled` 关→开会先 dispose 旧实例
   再重新 `runArchiveView`，重启前拿到的按钮引用属于已卸载闭包——点它视图能打开
   （闭包里的函数还能跑），但新实例的 settings 订阅不再响应，表现为「panel 在、
@@ -359,6 +464,53 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
   重启后动态重新获取按钮（`liveWsArchiveBtn`）。
 - **归档行三点按钮是同行 toggle**：同一行第二次点击是关闭菜单（`menuRowId === row.id`
   分支），测试里「重新打开菜单」要么换一行（跨行点击直接重开）、要么先点一次关掉。
+- **「行消失了」必须在展开全部行之后断言**：收起态只渲染 5 行，被取消归档的行在旧
+  实现里只是掉出这个窗口、仍留在列表尾部——只查窗口内会得到**假绿**（已实测确认：
+  旧 bundle 下窗口内断言通过）。`holdUnarchiveSnapshot` 让 unarchive 通道不改快照，
+  用来精确复现「已确认、快照未更新」的窗口。
+- **异步通道要 `await flushMicrotasks()`**：官方 `unarchiveSession` 是 Promise，
+  乐观隐藏是同步的——先断言同步的「立即消失」，再 flush 后断言成功/失败回调的结果。
+- **样式断言用字符串包含**：菜单卡片与归档行灰阶是纯 CSS 常量，写错是静默失败，
+  用 `viewCss.indexOf(...)` 钉住关键声明（已反向验证：删掉声明即失败）。
+
+## 服务监控左栏面板：10 行上限 + 隐藏滚动条 + 翻页箭头
+
+`service-monitor.ts` 的左栏面板一屏最多 10 行，超出靠滚轮或列表下方的箭头翻页，
+且不显示滚动条。三个实现要点：
+
+- **高度上限由行高变量算出，不在 JS 里写死像素**：CSS 用
+  `max-height:calc(var(--dsh-zh-sm-row-h) * 10 + var(--dsh-zh-sm-row-gap) * 9)`，
+  行高 28px（= `line-height:18px` + `padding:5px` × 2）与间距 1px 同时也是
+  JS 里 `SERVICE_PANEL_ROW_H` / `SERVICE_PANEL_ROW_GAP` 的值。**两处必须同步**，
+  改行高的 padding/line-height 就要改这两个常量，否则翻页步长与「是否溢出」判定
+  会偏。注意 10 行需要 289px（`28×10 + 1×9`），按 280px 算会少一行。
+- **隐藏滚动条要三套声明**：`scrollbar-width`（Firefox）、`-ms-overflow-style`
+  （旧 Edge/IE）、`::-webkit-scrollbar`（WebKit/Blink）。只写 webkit 伪元素在
+  Firefox 上仍会露出滚动条（挤压行宽）。
+- **箭头走文档流，不要绝对定位浮层**：最初做成 `position:absolute; bottom:2px`
+  浮在列表下缘——它会压住第 10 行的文字，而给列表加 `padding-bottom` 逃生位又会让
+  可视高度小于 10 行（正是测试里 `panelPageRows(280)` 应为 9 而非 10 暴露的点）。
+  现在箭头 `align-self:center` 排在列表下方，不遮挡、不改变行数上限。
+- **限高与箭头都只作用于左栏**：选择器带 `:not([data-mount="tab"])`，右栏 tab 维持
+  `max-height:none` 撑满容器（原行为）。改这块务必验证 tab 形态没被牵连。
+- **箭头状态判定放在纯函数里**（`servicePanelMoreState`，按 `scrollTop` /
+  `scrollHeight` / `clientHeight` 返回 `none`/`down`/`up`），DOM 侧只做就地写入。
+  这样三分支与 1px 容差可以直接单测（缩放 1.25/1.5 倍时行高会有小数舍入，
+  严格等值会让「已到底」永不成立、箭头卡在向下）。同一原因，
+  `panelPageRows` 对极矮列表返回至少 1 行，避免步长变成 0。
+
+回归技巧：`makeFakeEl` 的 `clientHeight` 由 `style.maxHeight` 派生、`scrollHeight`
+由 `textContent` 的行数派生，所以用「设 `maxHeight='289px'` + 写 N 行文本」就能
+造出任意滚动几何，不必真的挂载面板。断言要覆盖**点击推进、到底不越界、方向翻转、
+回到顶部**四件事，而不只是箭头可见性。
+
+变异验证（`temp/` 下的一次性装置，不入库）：删 `max-height`、分别删三套滚动条声明、
+把翻转判定改成永远 `down`、去掉 `:not([data-mount="tab"])` 限定——六项都应被抓到。
+
+> 注意：用 PowerShell 给源文件做字符串替换来验证时，`String.Replace` 在单引号
+> 内容下容易被解析成字符重载（报「String must be exactly one character long」），
+> 且失败是静默的（源文件没变、测试照样绿）。**变异验证要用 Node 脚本做**，
+> 并在变异后确认构建产物里确实不含被删的字符串。
 
 ## 主机提示词
 
@@ -386,11 +538,15 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
   `'zh'`；锁定后开关翻转不再影响该会话。regime 表是进程内存，随插件实例生命周期存在。
 - **开关1（zhAgentPrompt）**：`deployment:persona` 通过 `PERSONA_ZH` 精确文本匹配，覆盖默认代理；占位符保留。系统级官方段落继续由 `SYSTEM_SECTION_ZH` 处理。persona 匹配键不得带尾部换行；运行时文本先原样查、失败再 trim。
  - **开关2（zhToolDesc）**：工具说明（`TOOL_DESC_ZH` + `TOOL_FLAVOR_DESC_ZH`）+ 官方工具指引
-    段落（`SECTION_ZH`，`tool:*` sections、`tools:ptc-only`、`tools:sdk` 与 `plan:policy`）。
+    段落（`SECTION_ZH`，`tool:*` sections、`tools:ptc-only`、`tools:sdk`、`plan:policy` 与
+    `team:policy`——Agent Teams 协作策略，官方包
+    `@deepseek-ai/dsh-experimental-tool-agent-team` 注册，2026-09-23 补齐；**包名带
+    `experimental` 不等于第三方**，判定看注册者）。
     **只翻译 DSH 官方内容，两层都带官方特征守卫**：工具描述用 `TOOL_MATCH` 单特征表或
     `TOOL_FLAVOR_DESC_ZH` 多 flavor 表（同一工具名的多种官方描述逐 flavor 匹配：极简模式
     persistent `pwsh`/`bash` 的包默认与 preset 覆盖两套、`str_replace_editor` 默认描述、
-    PTC 模式 `run_code` 的 TS/Python 两语言；全未命中再退回单表，如一次性 pwsh），
+    PTC 模式 `run_code` 的 TS/Python 两语言、Agent Teams 与 subagent-control 重名的
+    `send_message`/`list_agents`/`interrupt_agent`；全未命中再退回单表，如一次性 pwsh），
     运行时 `description.includes(特征)` 才替换，被第三方插件（如 hashline 替换的 edit）
     的实现保持英文。段落用 `match` 特征片段守卫——hashline/智谱在 Agent 作用域注册的
     同名阴影段落（`tool:read`/`tool:edit`/`tool:web_search`）不含官方片段，保持原样，
@@ -398,6 +554,8 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
     逐段精确匹配）：固定说明模板翻中文，生成的 SDK 代码声明保留英文，替换不命中即原样。
     `plan:policy` 的文本来自 preset 配置（`{ zh, en }` 条目），仅原文
     逐字一致才替换；section 文本为空（非计划模式）时跳过，绝不凭空注入。
+    `team:policy` 用 `match` 守卫（`TEAM_POLICY_MATCH`），另导出上游逐字副本
+    `TEAM_POLICY_EN` 供回归脚本用真实原文驱动替换。
 - **唯一包装管线（assemble-patch.ts）**：chinese-prompt 与 model-locale 都通过
   `registerAssembleRewriter` 注册改写器，由 `ensureAssemblePatch` 保证
   `systemPrompt.assemble` 只包一层。**禁止再直接对 `systemPrompt.assemble` 赋值**：
@@ -568,10 +726,18 @@ profile patch 只编辑带 `# dsh-zh:begin/end` 的受管块，同时兼容旧�
 6. 用户可见行为同步双语 README 与 `behavior.md`；新的故障模式更新
    `troubleshooting.md`；发布要求只写入 `release.md`。
 
+## 桌面版 DSH 适配（2026-09-27）
+
+- `src/lib/util.ts`：`argvProfile()` 拆出纯函数 `profileNameFrom(argv, electronVersion)`——桌面 Host（Electron RunAsNode）argv 不带 `--profile`，`process.versions.electron` 有值时判 `desktop`；显式 `--profile` 仍最优先。修的是热挂监督器/manifest 监听锚到 web profile 造成跨 profile 干扰的问题。
+- `src/bin/cli/invocations.mts`：`runDshPlugin` 按名拒绝 `desktop` profile（含阻止 pnpm 兜底绕过 dsh CLI 保护）；`src/bin/cli/main.mts`：desktop profile 未显式 `--port` 时默认 19387。
+- 官方 `app:web-surface` 段落按实际端口动态生成（桌面 19387）；`model-locale.ts` 的 URL 提取是正则（`at (https?://…)`），端口无关，无需改动。
+- 回归：`src/verify-cli.mts` 桌面探测块（profile 探测矩阵 + CLI 拦截 spawn 断言）。
+- 共性事实与验收记录见工作区根 `docs/dsh-desktop-support.md`。
+
 ## 安全审计（2026-09）
 
 项目专属要点（完整清单见工作区根 `docs/audit-2026-09.md`，勿在此复制）：
 
-- 已确认高危：host 服务监控快照携带完整进程 cmdline（凭据入快照，修复中）；client 服务监控卸载后轮询复活（修复中）；restore/unarchive 假成功（attach 失败只 warn、返回值忽略）；直写 `workspaceRegistry` 私有 state 绕过串行器；`locate().path` 父目录即会话独占目录的假设在上游 persistence backend 变化时会删错目录。
+- 已确认高危：host 服务监控快照携带完整进程 cmdline（凭据入快照，修复中）；client 服务监控卸载后轮询复活（修复中）；restore/unarchive 假成功（attach 失败只 warn、返回值忽略）；`locate().path` 父目录即会话独占目录的假设在上游 persistence backend 变化时会删错目录。已修复项：直写归档集合绕过 registry 串行器（上游 2026-09-12 公开 `unarchiveSession` 后优先走官方 API；storageDomain 回退改全量 state 展开——只写单字段冲掉 workspace 域必填校验、重启后 dsh 无法启动，issue #8，详见根 `docs/audit-2026-09.md` D4）。
 - 升级脆弱性最重：React Fiber 私有字段、CSS-module 类名（`sessionRow`/`title`/`slot`）、aria 文案锚点、PROMPT_PROVIDER_NAME 精确文案匹配、`hot-mount` 的 `manifest.dsh.profile.bundles`/`parseSimplePatch` 私有形状。升版后按根文档「抗升级通用模式」逐项加探测与回退。
 - 正面范例（保持）：`session-delete.ts` 的 `isTrustedApiRequest` 三重围栏、`session-menu.ts` 三级 ID 回退。

@@ -33,9 +33,9 @@ The rows below follow **DSH Settings → Enhancements** from top to bottom:
 | Expand mode | Button mode | Button mode reveals lines in batches; scroll mode uses a fixed-height scrolling viewport |
 | Auto-archive old sessions | 7 days | Archives inactive sessions when the New Session view opens; range 0–365, with 0 disabling it |
 | Archived-session view | On | Adds a workspace archive view (its button sits after the select-all button) whose rows can be restored, renamed, forked, or deleted, and can be multi-selected for batch unarchive or batch deletion |
-| Session delete button | On | Shows “Delete session” in row menus; the log moves to the OS recycle bin and no list restore slot is retained; deleted sessions never appear in the archive view |
-| Session multi-select | On | Lets idle rows be selected for batch deletion or archiving; running, pending-interaction, and unread-completion rows are not selectable. Archived-session rows in the archive view are selectable too, with batch unarchive and batch deletion; a select-all button on each workspace row checks every selectable session of that workspace at once (click again to clear) |
-| Service monitor | Off | Dual form: keeps the original panel between the session list and Settings in the left sidebar, and adds a "Service monitor" tab in the right sidebar (entry on the guide page); shows local listening services started during the conversation; hover resolves the process on demand and click reveals its location; the tab's "Baseline ports" section lets you bring a baseline port back into monitoring with a click; right-pane entries have three action buttons after the uptime — Exclude (move back to baseline, no confirmation), Always watch (add to custom watch entries in Settings, confirmation required), Kill process (try to terminate with normal privileges, confirmation required); the left panel has no buttons |
+| Session delete button | On | Shows “Delete session” in row menus — on ordinary session rows and on archived rows of the official “Show archived” view alike; the log moves to the OS recycle bin and no list restore slot is retained; deleted sessions never appear in the archive view, nor in the official list under the “All conversations (show archived)” / “Only archived” views, nor in search results (most typically the one that drops into the “Ungrouped” bucket) |
+| Session multi-select | On | Lets idle rows be selected for batch deletion or archiving; running, pending-interaction, and unread-completion rows are not selectable. Archived-session rows in the archive view are selectable too; the batch entries follow the selection's archive make-up — all unarchived gives “Archive selected”, all archived gives “Unarchive selected”, and a mixed selection gives only “Delete selected” (archiving and unarchiving each hold for just half of it). A select-all button on each workspace row checks every selectable session of that workspace at once (click again to clear) |
+| Service monitor | Off | Dual form: keeps the original panel between the session list and Settings in the left sidebar, and adds a "Service monitor" tab in the right sidebar (entry on the guide page); shows local listening services started during the conversation; hover resolves the process on demand and click reveals its location; **the left panel shows at most 10 rows per screen** — scroll with the wheel (no scrollbar shown) or use the arrow below the list to page down, which flips to "back to top" at the end; the tab's "Baseline ports" section lets you bring a baseline port back into monitoring with a click; right-pane entries have three action buttons after the uptime — Exclude (move back to baseline, no confirmation), Always watch (add to custom watch entries in Settings, confirmation required), Kill process (try to terminate with normal privileges, confirmation required); the left panel has no buttons |
 | Refresh interval | 10 seconds | Range 2–300 seconds; polling pauses while the page is hidden |
 | Custom watch entries | Empty | Entries can be added or edited and remain visible as online/offline; maximum 100 |
 
@@ -63,6 +63,15 @@ npx -y deepseek-harness-zh_pro install --profile web
 ```
 
 Bundles are profile-scoped. The headless profile runs only the Host half, with no browser enhancements.
+
+**DSH Desktop (the Electron app)**: supported — same Web application and plugin machinery (desktop Host port 19387). The desktop profile (`~/.dsh/profiles/desktop`) is owned exclusively by the app; the `dsh plugin` CLI rejects it by name, and so does this plugin's `dsh-zh` CLI (`--profile desktop`). For a link dev install (while the desktop app is **not running**), edit `~/.dsh/profiles/desktop/package.json`:
+
+```jsonc
+"dependencies": { "deepseek-harness-zh_pro": "link:<absolute path to this repo>" },
+"dsh": { "profile": { "bundles": [ /* keep official bundles, append */ "deepseek-harness-zh_pro" ] } }
+```
+
+then run `pnpm install` inside the profile directory to materialize the link. Start the desktop app to mount; after source changes run `npm run build` and restart the app; to uninstall, remove both entries and run `pnpm install` again.
 
 Local source development:
 
