@@ -267,7 +267,7 @@ function ensureBatchStyle() {
     batchStyleEl.textContent = [
       // 默认透明：悬停 slot 或聚焦/勾选时显示；勾选后常显。
       'input[' + BATCH_CHECK_MARK + ']{opacity:0;flex:none;width:13px;height:13px;margin:0;',
-      'cursor:pointer;accent-color:var(--dsw-alias-brand-strong, #4b7bff)}',
+      'cursor:pointer;accent-color:var(--dsw-alias-brand-primary, #4b7bff)}',
       'span[class*="slot"]:hover > input[' + BATCH_CHECK_MARK + '],',
       'input[' + BATCH_CHECK_MARK + ']:focus-visible,',
       'input[' + BATCH_CHECK_MARK + ']:checked{opacity:1}',

@@ -435,6 +435,42 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
   `--dsw-elevation-stroke-color` 重绑为最浅的 `--dsw-alias-border-l1`），投影用
   `--dsw-elevation-prominent`。
 
+### 主题令牌纪律（issue #10 的教训）
+
+客户端增强是手写 DOM + 内联样式，颜色只能引用 DSH 主题令牌。**写错令牌名不会报错**：
+CSS 把 `var(--dsw-不存在, #fff)` 静默替换成回退值，于是浅色主题下一切正常、深色主题下
+底色停在浅色而文字令牌正常解析成浅色 → **白底白字**。issue #10 正是如此：
+`--dsw-alias-surface-primary` 在 DSH 主题里**一个定义都没有**（全 checkout 零命中），
+却被用在三处确认框底色上。
+
+**底色与前景必须成对取自主题，且都不得是裸色值**：
+
+| 用途 | 底色 | 前景 | 官方出处 |
+| --- | --- | --- | --- |
+| 弹窗/确认框 | `--dsw-alias-bg-layer-2` | `--dsw-alias-label-primary` | `ui-primitives/Modal.module.css` `.dialog` |
+| 弹窗投影 | `--dsw-elevation-prominent` | — | 同上（高层级表面 `border: 0`，描边画在投影里） |
+| 输入框/下拉 | `--dsw-alias-bg-layer-3` | `--dsw-alias-label-primary` | `ui-primitives/settings-form/fields.module.css` `.input`、`PluginManagerPage` |
+| 开关轨道/旋钮 | `--dsw-alias-brand-primary` | `--dsw-alias-label-primary-foreground` | `ui-primitives/Switch.module.css` |
+| 遮罩 | `--dsw-alias-bg-mask-1` | — | `ui-primitives/Modal.module.css` `.mask::after` |
+| 危险主按钮 | `--dsw-alias-state-error-primary` | `--dsw-alias-label-primary-foreground` | 官方「主按钮重绑」写法（`PluginManagerPage.module.css`） |
+| 普通主按钮 | `--dsw-alias-state-business-primary` | `--dsw-alias-label-primary-foreground` | 同上 |
+
+注意 `--dsw-alias-label-primary-inverted` **不是**通用前景色：它在浅色主题是白、深色
+主题是深色（`bluish-800`），只适合 `--dsw-alias-button-contrast-fill` 那类对比面；
+主按钮前景要用 `--dsw-alias-label-primary-foreground`。
+
+**防回归**：`verify-pairs.cts` 的主题令牌守卫把 bundle 里出现的每个 `--dsw-*` 与
+「已核对存在于 DSH 主题的允许清单」比对，并额外断言确认框底色走 `bg-layer-*` 而非裸色值。
+新增令牌必须先在部署版 checkout 的 `packages/client/ui-theme/src/styles/*.css`（或 client
+源码的 `setProperty`）里确认存在，再加进清单——这是防止再次写错令牌名成本最低的关卡。
+
+核对方式（只读）：把主题 CSS 里的 `--dsw-*:` 定义收集成集合，与插件源码里
+`var(--dsw-*)` 的引用求差；**必须扫描全部主题样式文件**，只扫
+`design-platform.css` 会把 `gradient-shadow-text.css` 里定义的
+`--dsw-shadow-lv3`、`--dsw-menu-backdrop-filter`、`--dsw-elevation-prominent`
+误判为幻影令牌。对比度可用同法验算：解析主题的浅/深两块静态色，按
+WCAG 相对亮度公式算「底色 vs 文字」比值（正文要求 ≥ 4.5）。
+
 回归（`verify-archive.cts`）注意：
 
 - **FakeEl 的 matchSel 不支持 CSS 后代选择器 `A B`**（按「目标→父→祖父」逐级匹配

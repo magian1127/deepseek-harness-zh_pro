@@ -197,6 +197,38 @@ kind 已从 `kind:'plugin'` + `plugin:<名>` 变成生产者自有 kind（如
 - 本插件 `modelState` 由 `chinese-prompt.ts`（`dsh-zh` 命名空间唯一注册者）维护，
   重载后必须保证旧实例的 watch 随 Fiber 释放、新实例重新注册并同步当前值。
 
+## 深色模式下弹窗/输入框看不清字（白底浅字）
+
+**症状**：切到深色主题后，本插件的确认框（批量删除会话、终止进程、重命名、取消归档）、
+设置页输入框或开关出现「白底浅字」或「文字几乎不可见」；浅色主题下一切正常。
+
+**原因**：内联样式写了 DSH 主题里**不存在**的令牌名。CSS 对未定义的自定义属性不报错，
+只会静默采用 `var()` 的回退值——于是底色停在硬编码的浅色（如 `#fff`），而文字令牌
+`--dsw-alias-label-primary` 正常解析成深色主题的浅色文字，两者撞成白底白字。
+issue #10 的命中项是 `--dsw-alias-surface-primary`（全 checkout 零定义）。
+
+**排查顺序**：
+
+1. 从 `lib/client.js` 里抽出所有 `var(--dsw-…)` 引用，与 DSH 主题定义集合求差：
+   ```powershell
+   Select-String -Path lib/client.js -Pattern 'var\((--dsw-[a-z0-9-]+)' -AllMatches
+   ```
+   定义集合来自 `packages/client/ui-theme/src/styles/*.css` 的 `--dsw-*:` 与 client
+   源码的 `setProperty('--dsw-*')`。**必须扫全部主题样式文件**——只扫
+   `design-platform.css` 会把 `gradient-shadow-text.css` 里的 `--dsw-shadow-lv3`、
+   `--dsw-menu-backdrop-filter`、`--dsw-elevation-prominent` 误判为缺失。
+2. 差集非空 → 那些令牌名就是元凶；到官方同名组件（`ui-primitives/Modal.module.css`、
+   `Switch.module.css`、`settings-form/fields.module.css`）取正确令牌。
+3. 差集为空但仍看不清 → 检查「底色/前景是否成对取自主题」：只把底色换成主题令牌、
+   前景仍是裸色值（或反之）同样会撞车。`verify-pairs.cjs` 的令牌守卫能拦住第 1 类。
+
+**处理**：把幻影令牌换成官方同名组件用的令牌（对照表见
+[`development.md`](development.md) 的「主题令牌纪律」）。修复后确认框在深色主题的
+文字对比度由 1.05 提升到 13.34（WCAG AA 要求 ≥ 4.5）。
+
+**注意**：客户端改动由 DSH client HMR 自动换血，但**改的是 `lib/client.js` 构建产物**，
+必须重新 `npm run build`；只改源码不构建时页面加载的仍是旧 bundle。
+
 ## 热重载后提示词被改写两次（动态值清空）
 
 **症状**：开启中文化后，`request/header` 里 `harness:source` 变成「检出目录位于 。」

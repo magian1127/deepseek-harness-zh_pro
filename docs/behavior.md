@@ -611,6 +611,18 @@ dsh 无法启动），此路径下进程重启前官方列表可能仍按旧缓�
 - 提示词设置只经 DSH 官方 settings 服务写入 `settings.yaml`。
 - 默认关闭提示词注入，关闭时没有额外 token 消耗。
 
+## 主题与外观
+
+本插件自建的界面元素（确认框、菜单卡片、设置页卡片与输入框、开关、提示条、归档视图）
+不固定颜色，全部引用 DSH 主题令牌，因此**随 DSH 的浅色/深色主题自动切换**，无需单独设置。
+自建元素与官方同名组件使用同一组令牌，外观与官方保持一致（弹窗用 `--dsw-alias-bg-layer-2`
++ `--dsw-elevation-prominent`，输入框用 `--dsw-alias-bg-layer-3`，开关用
+`--dsw-alias-brand-primary` 轨道 + `--dsw-alias-label-primary-foreground` 旋钮）。
+
+已知的低对比（沿用 DSH 官方调色板既有取值，非本插件引入）：次要说明文字
+（`--dsw-alias-label-tertiary`）与归档行的 caption 灰（`--dsw-alias-label-caption`）在
+浅色主题下低于 WCAG AA 4.5。这些是官方语义令牌本身的取值，本插件不另行覆盖。
+
 ## 已知限制
 
 硬编码英文只覆盖内置清单。未收录文本和第三方插件内容保持原样，以避免误改用户正文。

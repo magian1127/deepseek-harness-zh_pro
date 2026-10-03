@@ -540,14 +540,19 @@ function installSessionMenu(ctx) {
       const overlay = document.createElement('div')
       overlay.style.cssText = [
         'position:fixed;inset:0;z-index:1200;display:flex;align-items:center;justify-content:center;',
-        'background:rgba(0,0,0,0.35)',
+        'background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,0.35))',
       ].join('')
       const card = document.createElement('div')
+      // 底色必须走主题令牌：官方弹窗（ui-primitives/Modal.module.css .dialog）用
+      // --dsw-alias-bg-layer-2 + --dsw-elevation-prominent。历史上这里写的是
+      // --dsw-alias-surface-primary，该令牌在 DSH 主题里**并不存在**，于是永远
+      // 落到硬编码 #fff，而 color 的 --dsw-alias-label-primary 正常解析成深色
+      // 主题的浅色文字 → 深色模式下白底白字，即 issue #10。
       card.style.cssText = [
         'width:min(440px,calc(100vw - 48px));border-radius:16px;padding:20px;',
-        'background:var(--dsw-alias-surface-primary, #fff);',
+        'background:var(--dsw-alias-bg-layer-2, #fff);',
         'color:var(--dsw-alias-label-primary, #1f2329);',
-        'box-shadow:var(--dsw-shadow-lv3, 0 8px 24px rgba(0,0,0,0.18))',
+        'box-shadow:var(--dsw-elevation-prominent, 0 8px 24px rgba(0,0,0,0.18))',
       ].join('')
       const titleEl = document.createElement('div')
       titleEl.textContent = title
@@ -560,11 +565,16 @@ function installSessionMenu(ctx) {
       const cancel = document.createElement('button')
       cancel.type = 'button'
       cancel.textContent = currentCopy !== null ? currentCopy.cancel : '取消'
-      cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:1px solid rgba(127,127,127,0.35);background:transparent;cursor:pointer;font:inherit;font-size:14px'
+      // 幽灵/描边按钮对齐官方 ui-primitives/Button.module.css .outline：
+      // 0.5px 的 --dsw-alias-border-l3 + 显式主色文字（不依赖继承，卡片底色
+      // 换成主题令牌后继承也可用，但显式声明可避免宿主改样式时再次失控）。
+      cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:0.5px solid var(--dsw-alias-border-l3,rgba(127,127,127,0.35));background:transparent;color:var(--dsw-alias-label-primary,inherit);cursor:pointer;font:inherit;font-size:14px'
       const ok = document.createElement('button')
       ok.type = 'button'
       ok.textContent = currentCopy !== null ? currentCopy.ok : '删除'
-      ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:#d93026;color:#fff;cursor:pointer;font:inherit;font-size:14px'
+      // 危险主按钮：底色/前景都走主题令牌，深色主题下自动换成红 400 + 深色前景
+      // （官方 PluginManagerPage 重绑 --dsw-alias-button-primary-fill 的同一语义）。
+      ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-error-primary,#d93026);color:var(--dsw-alias-label-primary-foreground,#fff);cursor:pointer;font:inherit;font-size:14px'
       cancel.addEventListener('click', removeConfirm, false)
       ok.addEventListener('click', function () {
         removeConfirm()
@@ -713,7 +723,7 @@ function installSessionMenu(ctx) {
           }
         } catch { /* 忽略 */ }
         itemButton.removeAttribute('aria-keyshortcuts')
-        if (danger === true) itemButton.style.color = 'var(--dsw-alias-danger-strong, #d93026)'
+        if (danger === true) itemButton.style.color = 'var(--dsw-alias-state-error-primary, #d93026)'
         return { wrap: itemWrap, button: itemButton }
       }
       const insertMenuItem = function (item) {

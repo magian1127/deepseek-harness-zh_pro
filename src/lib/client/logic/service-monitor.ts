@@ -995,13 +995,17 @@ function mountServiceMonitorPanel(mode, container) {
   const showActionConfirm = function (title, desc, okText, onOk) {
     removeActionConfirm()
     const overlay = document.createElement('div')
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:1200;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.35)'
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:1200;display:flex;align-items:center;justify-content:center;background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,0.35))'
     const card = document.createElement('div')
+    // 与 session-menu 的确认框同源：底色/投影走官方弹窗令牌
+    // （--dsw-alias-bg-layer-2 + --dsw-elevation-prominent）。原先的
+    // --dsw-alias-surface-primary 在 DSH 主题里不存在，深色模式下会落到
+    // 硬编码 #fff 造成白底浅字（issue #10）。
     card.style.cssText = [
       'width:min(440px,calc(100vw - 48px));border-radius:16px;padding:20px;',
-      'background:var(--dsw-alias-surface-primary,#fff);',
+      'background:var(--dsw-alias-bg-layer-2,#fff);',
       'color:var(--dsw-alias-label-primary,#1f2329);',
-      'box-shadow:var(--dsw-shadow-lv3,0 8px 24px rgba(0,0,0,0.18))',
+      'box-shadow:var(--dsw-elevation-prominent,0 8px 24px rgba(0,0,0,0.18))',
     ].join('')
     const titleEl = document.createElement('div')
     titleEl.textContent = title
@@ -1014,11 +1018,11 @@ function mountServiceMonitorPanel(mode, container) {
     const cancel = document.createElement('button')
     cancel.type = 'button'
     cancel.textContent = resolveCopy().dialogCancel
-    cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:1px solid rgba(127,127,127,0.35);background:transparent;cursor:pointer;font:inherit;font-size:14px'
+    cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:0.5px solid var(--dsw-alias-border-l3,rgba(127,127,127,0.35));background:transparent;color:var(--dsw-alias-label-primary,inherit);cursor:pointer;font:inherit;font-size:14px'
     const ok = document.createElement('button')
     ok.type = 'button'
     ok.textContent = okText
-    ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-business-primary,#4D6BFE);color:var(--dsw-alias-label-primary-inverted,#fff);cursor:pointer;font:inherit;font-size:14px'
+    ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-business-primary,#4D6BFE);color:var(--dsw-alias-label-primary-foreground,#fff);cursor:pointer;font:inherit;font-size:14px'
     cancel.addEventListener('click', removeActionConfirm, false)
     ok.addEventListener('click', function () {
       removeActionConfirm()

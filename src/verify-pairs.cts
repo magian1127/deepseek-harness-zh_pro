@@ -1513,6 +1513,55 @@ check(locale.translate('settings.models', 'deleteDescriptionWithCredential'),
   '删除 {provider} 将移除其配置与保存的接口密钥，此操作不可恢复。', 'zh partial follows upstream')
 UPSTREAM['settings.models'].deleteDescriptionWithCredential = ORIGINAL_UPSTREAM
 
+// ---------- 主题令牌守卫（issue #10：深色模式弹窗白底浅字） ----------
+// 背景：客户端增强是手写 DOM/CSS，颜色靠 var(--dsw-*) 主题令牌。写错令牌名
+// （DSH 主题里不存在）时 CSS 不报错，只是静默落到 var() 的硬编码回退值——
+// 深色主题下「底色回退成浅色、文字令牌正常解析成浅色」→ 白底白字。
+// 历史命中：--dsw-alias-surface-primary（0 处定义）用于确认框底色。
+//
+// 守卫方式：把本 bundle 用到的每个 --dsw-* 令牌与「已核对存在于 DSH 主题的
+// 允许清单」比对。新增令牌必须先在部署版 checkout 的
+// packages/client/ui-theme/src/styles/*.css（或 client 源码 setProperty）里
+// 确认存在，再加进本清单——这正是防止再次写错令牌名的成本最低的关卡。
+const THEME_TOKENS = new Set([
+  '--dsw-alias-bg-layer-1',
+  '--dsw-alias-bg-layer-2',
+  '--dsw-alias-bg-layer-3',
+  '--dsw-alias-bg-mask-1',
+  '--dsw-alias-bg-module-platform',
+  '--dsw-alias-border-l1',
+  '--dsw-alias-border-l2',
+  '--dsw-alias-border-l3',
+  '--dsw-alias-brand-primary',
+  '--dsw-alias-button-contrast-fill',
+  '--dsw-alias-interactive-bg-hover',
+  '--dsw-alias-interactive-bg-hover-danger',
+  '--dsw-alias-label-caption',
+  '--dsw-alias-label-dimmed',
+  '--dsw-alias-label-primary',
+  '--dsw-alias-label-primary-foreground',
+  '--dsw-alias-label-primary-inverted',
+  '--dsw-alias-label-secondary',
+  '--dsw-alias-label-tertiary',
+  '--dsw-alias-state-business-primary',
+  '--dsw-alias-state-error-primary',
+  '--dsw-alias-state-success-primary',
+  '--dsw-alias-switch-thumb',
+  '--dsw-elevation-prominent',
+  '--dsw-menu-backdrop-filter',
+  '--dsw-shadow-lv3',
+  '--dsw-specific-menu',
+])
+const usedTokens = new Set()
+const tokenRe = /var\((--dsw-[a-z0-9-]+)/gi
+for (const match of src.matchAll(tokenRe)) usedTokens.add(match[1])
+const phantomTokens = Array.from(usedTokens).filter(function (token) { return !THEME_TOKENS.has(token) })
+// check 是恒等比较（!==），这里比字符串，失败时能直接读出是哪个令牌。
+check(phantomTokens.join(', '), '', 'client bundle 只使用已核对存在的主题令牌')
+// 深色模式下必须成对出现的表面：弹窗底色（bg-layer-*）与文字（label-*）都必须是
+// 主题令牌，不能是裸色值——裸 #fff 会在深色主题下与浅色文字撞车。
+check(/background:var\(--dsw-alias-bg-layer-2/.test(src), true, '确认框底色走主题令牌而非裸色值')
+
 // 卸载前：archiveViewEnabled 开关在上面的测试里关闭→开启过一次（归档词典
 // 注册→注销→重新注册），因此卸载时归档词典 disposer 累计调用 2 次，
 // 加上设置词典 1 次，共 3 次。

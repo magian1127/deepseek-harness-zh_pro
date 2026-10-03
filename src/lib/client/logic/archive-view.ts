@@ -59,7 +59,7 @@ const ARCHIVE_VIEW_CSS = [
   // 默认透明，悬停 slot 或聚焦/勾选时显示，勾选后常显（规则独立于官方行
   // 的 span[class*="slot"]，归档行 slot 是 data-dsh-zh-archive-slot）。
   '[data-dsh-zh-archive-slot]>input[data-dsh-zh-batch-check]{opacity:0;flex:none;width:13px;height:13px;',
-  'margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-strong,#4b7bff)}',
+  'margin:0;cursor:pointer;accent-color:var(--dsw-alias-brand-primary,#4b7bff)}',
   '[data-dsh-zh-archive-slot]:hover>input[data-dsh-zh-batch-check],',
   '[data-dsh-zh-archive-slot]:focus-within>input[data-dsh-zh-batch-check],',
   '[data-dsh-zh-archive-slot]>input[data-dsh-zh-batch-check]:checked{opacity:1}',
@@ -118,19 +118,22 @@ const ARCHIVE_VIEW_CSS = [
   'button[data-dsh-zh-archive-menu-item][data-dsh-zh-archive-menu-danger="true"]{color:var(--dsw-alias-state-error-primary);}',
   'button[data-dsh-zh-archive-menu-item][data-dsh-zh-archive-menu-danger="true"] [data-dsh-zh-archive-menu-icon]{color:var(--dsw-alias-state-error-primary);}',
   'button[data-dsh-zh-archive-menu-item][data-dsh-zh-archive-menu-danger="true"]:hover{background:var(--dsw-alias-interactive-bg-hover-danger);}',
-  // 重命名/删除对话框与提示条。
+  // 重命名/删除对话框与提示条。底色与投影走官方弹窗令牌
+  // （--dsw-alias-bg-layer-2 + --dsw-elevation-prominent，见
+  // ui-primitives/Modal.module.css .dialog）；原 --dsw-alias-surface-primary
+  // 在 DSH 主题里不存在，深色模式下落到 #fff 造成白底浅字（issue #10）。
   '[data-dsh-zh-archive-dialog-mask]{position:fixed;inset:0;z-index:1200;display:flex;',
-  'align-items:center;justify-content:center;background:rgba(0,0,0,0.35);}',
+  'align-items:center;justify-content:center;background:var(--dsw-alias-bg-mask-1,rgba(0,0,0,0.35));}',
   '[data-dsh-zh-archive-dialog]{width:min(440px,calc(100vw - 48px));border-radius:16px;padding:20px;',
-  'background:var(--dsw-alias-surface-primary, #fff);color:var(--dsw-alias-label-primary, #1f2329);',
-  'box-shadow:var(--dsw-shadow-lv3, 0 8px 24px rgba(0,0,0,0.18));}',
+  'background:var(--dsw-alias-bg-layer-2, #fff);color:var(--dsw-alias-label-primary, #1f2329);',
+  'box-shadow:var(--dsw-elevation-prominent, 0 8px 24px rgba(0,0,0,0.18));}',
   '[data-dsh-zh-archive-dialog-title]{font-size:16px;line-height:24px;font-weight:600;margin-bottom:10px;}',
   '[data-dsh-zh-archive-dialog-desc]{font-size:13px;line-height:20px;',
   'color:var(--dsw-alias-label-tertiary,#666);margin-bottom:18px;}',
   'input[data-dsh-zh-archive-rename-input]{width:100%;box-sizing:border-box;height:36px;',
   'padding:0 12px;margin-bottom:18px;border-radius:10px;font:inherit;font-size:14px;',
   'border:1px solid var(--dsw-alias-border-l2,#c9cdd4);outline:none;',
-  'background:var(--dsw-alias-surface-primary,#fff);color:var(--dsw-alias-label-primary,#1f2329);}',
+  'background:var(--dsw-alias-bg-layer-3,#fff);color:var(--dsw-alias-label-primary,#1f2329);}',
   '[data-dsh-zh-archive-dialog-actions]{display:flex;justify-content:flex-end;gap:10px;}',
   '.dsh-zh-archive-toast{position:fixed;top:120px;left:50%;z-index:1300;pointer-events:none;',
   'display:flex;align-items:center;gap:10px;max-width:min(560px,calc(100vw - 48px));',
@@ -820,11 +823,11 @@ function runArchiveView(ctx) {
         const cancel = document.createElement('button')
         cancel.type = 'button'
         cancel.textContent = archiveT('rename.cancel')
-        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:1px solid rgba(127,127,127,0.35);background:transparent;cursor:pointer;font:inherit;font-size:14px'
+        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:0.5px solid var(--dsw-alias-border-l3,rgba(127,127,127,0.35));background:transparent;color:var(--dsw-alias-label-primary,inherit);cursor:pointer;font:inherit;font-size:14px'
         const ok = document.createElement('button')
         ok.type = 'button'
         ok.textContent = archiveT('rename.ok')
-        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-business-primary,#4f6ef7);color:#fff;cursor:pointer;font:inherit;font-size:14px'
+        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-business-primary,#4f6ef7);color:var(--dsw-alias-label-primary-foreground,#fff);cursor:pointer;font:inherit;font-size:14px'
         const submit = function () {
           const title = input.value.trim()
           if (title === '') return
@@ -937,11 +940,11 @@ function runArchiveView(ctx) {
         const cancel = document.createElement('button')
         cancel.type = 'button'
         cancel.textContent = archiveT('delete.cancel')
-        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:1px solid rgba(127,127,127,0.35);background:transparent;cursor:pointer;font:inherit;font-size:14px'
+        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:0.5px solid var(--dsw-alias-border-l3,rgba(127,127,127,0.35));background:transparent;color:var(--dsw-alias-label-primary,inherit);cursor:pointer;font:inherit;font-size:14px'
         const ok = document.createElement('button')
         ok.type = 'button'
         ok.textContent = archiveT('delete.ok')
-        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:#d93026;color:#fff;cursor:pointer;font:inherit;font-size:14px'
+        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-error-primary,#d93026);color:var(--dsw-alias-label-primary-foreground,#fff);cursor:pointer;font:inherit;font-size:14px'
         cancel.addEventListener('click', close, false)
         ok.addEventListener('click', function () {
           close()
@@ -1047,11 +1050,11 @@ function runArchiveView(ctx) {
         const cancel = document.createElement('button')
         cancel.type = 'button'
         cancel.textContent = archiveT('rename.cancel')
-        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:1px solid rgba(127,127,127,0.35);background:transparent;cursor:pointer;font:inherit;font-size:14px'
+        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:0.5px solid var(--dsw-alias-border-l3,rgba(127,127,127,0.35));background:transparent;color:var(--dsw-alias-label-primary,inherit);cursor:pointer;font:inherit;font-size:14px'
         const ok = document.createElement('button')
         ok.type = 'button'
         ok.textContent = archiveT('rename.ok')
-        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-business-primary,#4f6ef7);color:#fff;cursor:pointer;font:inherit;font-size:14px'
+        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-business-primary,#4f6ef7);color:var(--dsw-alias-label-primary-foreground,#fff);cursor:pointer;font:inherit;font-size:14px'
         cancel.addEventListener('click', close, false)
         ok.addEventListener('click', function () { close(); runBatchArchive(ids.slice(), n) }, false)
         actions.appendChild(cancel)
@@ -1121,11 +1124,11 @@ function runArchiveView(ctx) {
         const cancel = document.createElement('button')
         cancel.type = 'button'
         cancel.textContent = archiveT('rename.cancel')
-        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:1px solid rgba(127,127,127,0.35);background:transparent;cursor:pointer;font:inherit;font-size:14px'
+        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:0.5px solid var(--dsw-alias-border-l3,rgba(127,127,127,0.35));background:transparent;color:var(--dsw-alias-label-primary,inherit);cursor:pointer;font:inherit;font-size:14px'
         const ok = document.createElement('button')
         ok.type = 'button'
         ok.textContent = archiveT('rename.ok')
-        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-business-primary,#4f6ef7);color:#fff;cursor:pointer;font:inherit;font-size:14px'
+        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-business-primary,#4f6ef7);color:var(--dsw-alias-label-primary-foreground,#fff);cursor:pointer;font:inherit;font-size:14px'
         cancel.addEventListener('click', close, false)
         ok.addEventListener('click', function () { close(); runBatchUnarchive(ids.slice(), n) }, false)
         actions.appendChild(cancel)
@@ -1186,11 +1189,11 @@ function runArchiveView(ctx) {
         const cancel = document.createElement('button')
         cancel.type = 'button'
         cancel.textContent = archiveT('delete.cancel')
-        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:1px solid rgba(127,127,127,0.35);background:transparent;cursor:pointer;font:inherit;font-size:14px'
+        cancel.style.cssText = 'padding:6px 16px;border-radius:10px;border:0.5px solid var(--dsw-alias-border-l3,rgba(127,127,127,0.35));background:transparent;color:var(--dsw-alias-label-primary,inherit);cursor:pointer;font:inherit;font-size:14px'
         const ok = document.createElement('button')
         ok.type = 'button'
         ok.textContent = archiveT('delete.ok')
-        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:#d93026;color:#fff;cursor:pointer;font:inherit;font-size:14px'
+        ok.style.cssText = 'padding:6px 16px;border-radius:10px;border:none;background:var(--dsw-alias-state-error-primary,#d93026);color:var(--dsw-alias-label-primary-foreground,#fff);cursor:pointer;font:inherit;font-size:14px'
         cancel.addEventListener('click', close, false)
         ok.addEventListener('click', function () {
           close()

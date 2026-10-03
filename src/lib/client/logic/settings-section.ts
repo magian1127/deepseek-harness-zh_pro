@@ -50,14 +50,19 @@ const zhSwitchTrack = function (on) {
   return {
     position: 'relative', display: 'inline-block', flex: 'none',
     width: 28, height: 16, borderRadius: 8,
-    background: on ? 'var(--dsw-alias-state-business-primary, #4D6BFE)' : 'var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.45))',
+    // 对齐官方 ui-primitives/Switch.module.css：开态用 brand-primary（不是
+    // state-business-primary），关态用 border-l3。
+    background: on ? 'var(--dsw-alias-brand-primary, #4D6BFE)' : 'var(--dsw-alias-border-l3, rgba(127, 127, 127, 0.45))',
     transition: 'background-color 120ms',
   }
 }
 const zhSwitchKnob = function (on) {
   return {
     position: 'absolute', top: 2, left: 2, width: 12, height: 12, borderRadius: '50%',
-    background: 'var(--dsw-alias-bg-layer-1, #ffffff)',
+    // 旋钮必须与轨道成对比：官方用 label-primary-foreground（浅色主题白、
+    // 深色主题深）。原先的 bg-layer-1 在深色主题是 rgb(35,35,36)，压在同为
+    // 深色的轨道上几乎看不见（同类「底色/前景不成对」缺陷）。
+    background: on ? 'var(--dsw-alias-label-primary-foreground, #ffffff)' : 'var(--dsw-alias-switch-thumb, #ffffff)',
     transition: 'transform 120ms',
     transform: on ? 'translateX(12px)' : 'translateX(0px)',
   }
@@ -190,7 +195,7 @@ const ZhSettingsSection = function (props) {
   const inputStyle = {
     width: 72, padding: '4px 8px', borderRadius: 8,
     border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
-    background: 'var(--dsw-specific-input-minor, transparent)',
+    background: 'var(--dsw-alias-bg-layer-3, transparent)',
     color: 'var(--dsw-alias-label-primary, inherit)',
     fontSize: 14, lineHeight: '20px', textAlign: 'center',
   }
@@ -209,7 +214,7 @@ const ZhSettingsSection = function (props) {
   const svcTextNameStyle = {
       flex: '0 1 120px', minWidth: 0, boxSizing: 'border-box',
     border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
-    background: 'var(--dsw-specific-input-minor, transparent)',
+    background: 'var(--dsw-alias-bg-layer-3, transparent)',
     color: 'var(--dsw-alias-label-primary, inherit)',
     fontSize: 13, lineHeight: '20px',
   }
@@ -223,7 +228,10 @@ const ZhSettingsSection = function (props) {
   const svcAddButtonStyle = {
     flex: 'none', padding: '4px 14px', borderRadius: 8, border: 0,
     background: 'var(--dsw-alias-state-business-primary, #4D6BFE)',
-    color: 'var(--dsw-alias-label-primary-inverted, #fff)',
+    // 主按钮前景用 label-primary-foreground（官方 Button.module.css .primary 的写法）。
+    // 不要用 label-primary-inverted：它在深色主题是深色、浅色主题是白色，语义是
+    // 「与对比面相反」，与主按钮底色的配对关系不一致。
+    color: 'var(--dsw-alias-label-primary-foreground, #fff)',
     cursor: 'pointer', font: 'inherit', fontSize: 13, lineHeight: '20px',
   }
   // 「网络搜索」卡片：Key 状态行（真错误标红）与保存/清除按钮的禁用态。
@@ -388,7 +396,7 @@ const ZhSettingsSection = function (props) {
             style: {
               flex: 'none', padding: '4px 8px', borderRadius: 8,
               border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
-              background: 'var(--dsw-specific-input-minor, transparent)',
+              background: 'var(--dsw-alias-bg-layer-3, transparent)',
               color: 'var(--dsw-alias-label-primary, inherit)',
               fontSize: 13, lineHeight: '20px',
               opacity: promptReady === false ? 0.55 : 1,
@@ -412,7 +420,7 @@ const ZhSettingsSection = function (props) {
             width: '100%', boxSizing: 'border-box', resize: 'vertical',
             padding: '8px 10px', borderRadius: 8,
             border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
-            background: 'var(--dsw-specific-input-minor, transparent)',
+            background: 'var(--dsw-alias-bg-layer-3, transparent)',
             color: 'var(--dsw-alias-label-primary, inherit)',
             fontFamily: 'inherit', fontSize: 13, lineHeight: '20px',
             opacity: promptReady === false ? 0.55 : 1,
@@ -462,7 +470,7 @@ const ZhSettingsSection = function (props) {
               style: {
                 flex: 'none', padding: '4px 8px', borderRadius: 8,
                 border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
-                background: 'var(--dsw-specific-input-minor, transparent)',
+                background: 'var(--dsw-alias-bg-layer-3, transparent)',
                 color: 'var(--dsw-alias-label-primary, inherit)',
                 fontSize: 13, lineHeight: '20px',
               },
@@ -480,7 +488,7 @@ const ZhSettingsSection = function (props) {
             style: {
               flex: 'none', padding: '4px 8px', borderRadius: 8,
               border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
-              background: 'var(--dsw-specific-input-minor, transparent)',
+              background: 'var(--dsw-alias-bg-layer-3, transparent)',
               color: 'var(--dsw-alias-label-primary, inherit)',
               fontSize: 13, lineHeight: '20px',
             },
