@@ -115,8 +115,10 @@ runtime-context 正文（contexts）改写 + 注入消息的 agent/pre-step 行�
 （服务监控：本机监听端口扫描 + 基线 diff + 进程归属解析 + 快照与目录打开）、
 `src/lib/diagnostics.ts`（`GET /dsh-zh/api/diagnostics`）、`src/lib/search-credential.ts`
 （`GET|POST /dsh-zh/api/search-credential`：设置页「网络搜索」卡片的 API Key 读写；
-provider → 凭据 ref 走服务端白名单，响应只回脱敏提示，明文只落凭据文件）、
-`src/lib/credentials.ts`（凭据三层解析 + 凭据文件读写）；CLI 实现拆在 `src/bin/cli/`，`src/bin/dsh-zh.mts`
+  provider → 凭据 ref 走服务端白名单，响应只回脱敏提示，明文只落凭据文件）、
+  `src/lib/plugin-sync.ts`（`GET|POST /dsh-zh/api/plugin-sync`：设置页「插件同步」卡片的差异计算与执行编排，
+  见下文专节）、
+  `src/lib/credentials.ts`（凭据三层解析 + 凭据文件读写）；CLI 实现拆在 `src/bin/cli/`，`src/bin/dsh-zh.mts`
 是转发导出并保留入口守卫的聚合入口。编译后对应的 `.js`/`.mjs` 文件供 DSH 和 npm 消费。
 
 client-modules 会缓存某个包名是否为有效客户端包。结构错误被判定为非客户端包后，本插件应先修正格式，再走受控动态 Client 通道或等待自然重启，不把重启作为开发动作。
@@ -783,6 +785,62 @@ profile patch 只编辑带 `# dsh-zh:begin/end` 的受管块，同时兼容旧�
 - 官方 `app:web-surface` 段落按实际端口动态生成（桌面 19387）；`model-locale.ts` 的 URL 提取是正则（`at (https?://…)`），端口无关，无需改动。
 - 回归：`src/verify-cli.mts` 桌面探测块（profile 探测矩阵 + CLI 拦截 spawn 断言）。
 - 共性事实与验收记录见工作区根 `docs/dsh-desktop-support.md`。
+
+## 插件同步（跨 profile 一键同步）
+
+`src/lib/plugin-sync.ts` 实现「把**当前 profile 的另一侧**已装的插件同步进当前 profile」：
+在 `web` 里跑方向为「桌面版 → 网页端」，在 `desktop` 里跑为「网页端 → 桌面版」
+（`sourceCandidates(target)` / `defaultSourceProfile(target)`，请求参数 `source` 可覆盖）。
+主机半边提供差异计算 `planPluginSync()`、执行编排 `runPluginSync()` 与路由 `handlePluginSyncRoute()`；
+路由挂在 `session-delete.ts` 的 `/dsh-zh/api` 分发器上（GET 与 POST 两处各一行），
+沿用同一套回环 + 同源信任围栏。
+
+**关键决策：不自己 spawn pnpm，而是复用官方 `pluginManager` Service。**
+三个硬理由（改实现前必读）：
+
+1. 桌面 Host 的 PATH **不含 node/pnpm**（`apps/desktop-host/src/index.ts` 只把 `process.argv[6]`
+   拼进 PATH），官方实现经 `profileContext.packageManager` 用 Electron 可执行文件代跑内置 pnpm；
+   自己 spawn 在桌面版直接找不到命令。
+2. 官方实现自带 peer 兼容检查（`incompatible-version`）、失败时把 `package.json` 与
+   `pnpm-lock.yaml` 回滚、profile 文件锁（`withFileLock`）与构建脚本审批（`pendingBuilds` /
+   `approvedBuilds`），自研要重造这些且极易遗漏。
+3. 与桌面应用侧栏「插件」页、`dsh plugin` 是**同一个** Service，不绕过 CLI 的 desktop 保护——
+   本路由只操作插件自己所在的 profile，从不触碰其它 profile。
+
+差异规则（`planPluginSync`）：参考有、当前无 → `install`；两边都有且**参考版本更高** → `upgrade`；
+版本等价但参考选了 bundle、当前未选 → `enable`；两边都有且**当前版本不低于参考** → `skipped`
+（界面单独列出，不进 `entries`）；其余归入 `current`（不产生动作）。
+**只增不减**——从不卸载，也**绝不降级**：同名包只取版本号更高的一侧。参考 profile 全程只读。
+
+版本比较（`versionCore` / `compareVersions` / `compareRecorded`，纯字符串实现，不引 semver 依赖）：
+先从记录值抽出可比较的版本核心（剥掉 `^`/`~`/`>=` 等范围前缀，`npm:别名@~2.0.0` 取 `@` 之后），
+按 semver 逐段比数字、再比预发布（带预发布的小于同号正式版，`1.0.0-beta.2` > `1.0.0-beta.1`，
+build metadata 忽略）。`link:`/`file:`/`portal:`/`workspace:`/git/https 等返回 `null` 表示无法
+按版本号比较，此时退回「记录值不同即按参考同步」。比较结果为等价（0）时不判 `upgrade`，
+因此 `^4.0.0` 与 `4.0.0` 这类纯写法差异不会触发无意义的安装。
+
+`specFor()` 把参考 profile 记录的依赖值还原成 install spec：`link:`/`file:` 原样保留
+（profile 里已是绝对路径），git/tarball/`npm:` 别名原样保留，`workspace:` 退化为包名，
+其余（版本范围）拼成 `name@range`。`link:` 由 pnpm 自己规范化，不必预转换。
+
+安全围栏（`resolveSource`）：参考 profile 名必须是 `profiles/` 下已存在的单层安全目录名
+（复用 CLI 的 `validateProfileName`，拒绝 `/`、`\`、`.`、`..`、`node_modules`），
+且不得等于当前 profile；未显式指定 `source` 时按 `sourceCandidates(target)` 顺序（当前 profile
+的另一侧优先）逐个试，第一个通过校验的即参考；`pluginManager` 缺席时 `runPluginSync` 直接失败而非静默成功。
+
+客户端半边：`src/lib/client/logic/plugin-sync.ts`（store + fetch，已登记进
+`scripts/build-client.mts` 的 `BODY_ORDER` 与 `exports.pluginSync`），UI 在
+`src/lib/client/logic/settings-section.ts` 的「插件同步」收缩卡片
+（复用 `collapseCard`；文案在 `data/settings-dicts.ts` 的 `SETTINGS_ZH`/`SETTINGS_EN`）。
+
+回归：`src/verify-cli.mts` 末尾的「插件同步」块——用临时 `DSH_HOME` 搭两个伪造 profile
+（覆盖 install/upgrade/enable/一致/跳过五类），断言方向翻转（`sourceCandidates` /
+`defaultSourceProfile` 对 `web` 与 `desktop` 互为镜像）、差异计算、最高版本选择
+（参考更高判 `upgrade`、当前更高进 `skipped` 且不进 `entries`、`^6.1.0` 与 `6.1.0` 视为等价、
+预发布按 semver 排序、`link:` 不比版本）、`specFor` 各形态、安全围栏、
+路由命中与不接管、无 `pluginManager` 时失败、逐条调用分派（`installBundle` vs
+`setBundleEnabled`）、失败态不透传为 `complete`、`only` 过滤，以及夹具全程未被改写。
+
 
 ## 安全审计（2026-09）
 

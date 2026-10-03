@@ -21,6 +21,7 @@ const BODY_ORDER = [
   'data/settings-dicts.ts',
   'logic/settings-store.ts',
   'logic/search-credential.ts',
+  'logic/plugin-sync.ts',
   'logic/prompt-store.ts',
   'data/terms.ts',
   'data/zh-dict.ts',
@@ -98,6 +99,13 @@ const wrapperEnd = `    exports.inject = ['locale', 'slots', 'sidebarRightTabs']
       refresh: fetchDeletedSessionIds,
       clear: clearDeletedRowMarks,
       size: function () { return deletedSessionIds.size },
+    };
+    exports.pluginSync = {
+      store: pluginSyncStore,
+      errorText: pluginSyncErrorText,
+      failure: pluginSyncFailure,
+      fromPlan: pluginSyncFromPlan,
+      endpoint: PLUGIN_SYNC_ENDPOINT,
     };
     exports.searchCredential = {
       store: searchCredentialStore,

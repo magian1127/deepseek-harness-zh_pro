@@ -346,6 +346,9 @@ if (captured === null || captured.id !== 'deepseek-harness-zh_pro') {
 }
 // 搜索凭据快照覆盖（见 mock React 的 useSyncExternalStore）；null = 用组件真实默认值。
 let credSnapshotOverride: any = null
+// 插件同步快照覆盖（同上：该 store 的更新走异步 fetch，同步脚本里无法自然驱动）。
+// 区分依据是搜索凭据快照带 configured 字段、插件同步快照带 entries 字段。
+let syncSnapshotOverride: any = null
 const pluginExports = captured.factory(function (name) {
   // 本 bundle 唯一允许的跨包引用是 react（设置页组件用）；其余跨包 require 视为回归。
   if (name === 'react') {
@@ -356,6 +359,9 @@ const pluginExports = captured.factory(function (name) {
         //（该 store 的更新走异步 fetch，同步脚本里无法自然驱动）。
         if (credSnapshotOverride !== null && snapshot !== null && typeof snapshot === 'object' && 'configured' in snapshot) {
           return credSnapshotOverride
+        }
+        if (syncSnapshotOverride !== null && snapshot !== null && typeof snapshot === 'object' && 'entries' in snapshot) {
+          return syncSnapshotOverride
         }
         return snapshot
       },
@@ -814,6 +820,107 @@ check(findElement(settingsRender(), function (node) {
   return node.type === 'div' && hasChildText(node, credText('searchApiKeyRouteMissing'))
 }) !== null, true, '状态行 路由未就绪时显示重启提示')
 credSnapshotOverride = null
+
+// ---- 「插件同步」卡片：文案、错误码映射、状态行与逐条结果渲染 ----
+const syncApi = pluginExports.pluginSync
+const syncText = function (key) { return locale.lookup('dsh-zh-settings', key) }
+check(typeof syncApi.store, 'object', '插件同步 store 已导出')
+check(syncApi.endpoint, '/dsh-zh/api/plugin-sync', '插件同步 端点与主机路由一致')
+check(syncApi.endpoint, require(__dirname + '/lib/plugin-sync.js').PLUGIN_SYNC_PATH, '插件同步 端点与主机常量一致')
+check(syncText('pluginSyncRun'), '一键同步', '插件同步卡 中文文案')
+check(syncText('pluginSyncActionInstall'), '待安装', '插件同步 待安装文案')
+check(syncText('pluginSyncActionUpgrade'), '待更新', '插件同步 待更新文案')
+check(syncText('pluginSyncActionEnable'), '待启用', '插件同步 待启用文案')
+
+// 错误码映射：与搜索凭据同款约定——not-found 是「主机需重启」而非「同步失败」。
+check(typeof syncApi.errorText, 'function', '插件同步 错误映射已导出')
+check(syncApi.errorText(syncText, { error: 'not-found' }), syncText('pluginSyncRouteMissing'), '插件同步 not-found → 重启提示')
+check(syncApi.errorText(syncText, { error: 'unreachable' }), syncText('pluginSyncUnreachable'), '插件同步 unreachable → 无法连接主机')
+check(syncApi.errorText(syncText, { error: 'internal' }), syncText('pluginSyncFailed') + ' (internal)', '插件同步 internal → 通用失败 + 错误码')
+check(syncApi.errorText(syncText, { error: null }), null, '插件同步 无错误 → null')
+check(syncApi.failure({}, { body: { ok: false, error: { code: 'not-found' } } }).routeMissing, true, '插件同步 not-found 标记路由未就绪')
+check(syncApi.failure({}, { body: null }).error, 'unknown', '插件同步 缺 body 归一化为 unknown')
+
+// 计划 → 快照归一化：缺字段/脏数据不得让界面报错。
+const syncPlanSnap = syncApi.fromPlan({ source: 'web', target: 'desktop', available: true, reason: null, entries: [{ name: 'a', action: 'install' }], current: ['b'], results: [], complete: false })
+check(syncPlanSnap.status, 'ready', '插件同步 计划归一化为 ready')
+check(syncPlanSnap.source, 'web', '插件同步 计划回源 profile')
+check(syncPlanSnap.target, 'desktop', '插件同步 计划回目标 profile')
+check(syncPlanSnap.entries.length, 1, '插件同步 计划携带条目')
+check(syncApi.fromPlan(null).entries.length, 0, '插件同步 空计划不回条目')
+check(syncApi.fromPlan({}).available, false, '插件同步 缺字段计划 available=false')
+// 只取最高版本：当前不低于参考的包走 skipped（不降级），界面单独列出。
+check(syncApi.fromPlan(null).skipped.length, 0, '插件同步 空计划 skipped 为空')
+check(syncApi.fromPlan({}).skipped.length, 0, '插件同步 缺字段计划 skipped 为空')
+check(syncApi.fromPlan({ skipped: 'dirty' }).skipped.length, 0, '插件同步 skipped 脏数据归一化为空')
+check(syncApi.fromPlan({ skipped: [{ name: 'a', requested: '^1.0.0', current: '^2.0.0' }] }).skipped.length, 1, '插件同步 计划携带 skipped')
+check(typeof syncText('pluginSyncSkipped'), 'string', '插件同步 跳过提示文案存在')
+
+// 卡片默认收起：body 只在展开时渲染（与其余三卡一致，展开态持久化在 settingsStore）。
+pluginExports.settingsStore.set('pluginSyncSettingsOpen', true)
+// 卡片渲染：展开后状态行随快照变化（已一致 / 部分未生效 / 构建脚本待审批 / 路由未就绪）。
+syncSnapshotOverride = {
+  status: 'ready', loading: false, running: false, source: 'web', target: 'desktop',
+  available: true, reason: null, entries: [], current: ['x'], results: [], complete: false,
+  error: null, errorMessage: null, routeMissing: false, updatedAt: null,
+}
+check(findElement(settingsRender(), function (node) {
+  return node.type === 'div' && hasChildText(node, syncText('pluginSyncNone'))
+}) !== null, true, '插件同步 无差异时显示已一致提示')
+
+// 只取最高版本：当前版本不低于参考的包在界面上单独列出（说明为何没出现在待同步清单里）。
+syncSnapshotOverride = {
+  status: 'ready', loading: false, running: false, source: 'web', target: 'desktop',
+  available: true, reason: null, entries: [], current: [], results: [], complete: false,
+  skipped: [{ name: 'newer-plugin', requested: '^1.0.0', current: '^2.0.0' }],
+  error: null, errorMessage: null, routeMissing: false, updatedAt: null,
+}
+const syncSkipTree = settingsRender()
+const syncSkipText = syncText('pluginSyncSkipped') + '：newer-plugin（^2.0.0 ≥ ^1.0.0）'
+check(findElement(syncSkipTree, function (node) {
+  return node.type === 'div' && hasChildText(node, syncSkipText)
+}) !== null, true, '插件同步 跳过的更高版本包单独列出')
+
+syncSnapshotOverride = {
+  status: 'ready', loading: false, running: false, source: 'web', target: 'desktop',
+  available: true, reason: null, current: [], complete: false,
+  entries: [{ name: 'dsh-better-sidebar', action: 'install', spec: 'dsh-better-sidebar@0.24.1', requested: '0.24.1', current: null, bundle: true }],
+  results: [{ name: 'dsh-better-sidebar', action: 'install', ok: false, application: 'failed', code: 'incompatible-version', message: '运行时版本不满足 peer 要求', pendingBuilds: [] }],
+  error: null, errorMessage: null, routeMissing: false, updatedAt: null,
+}
+const syncFailTree = settingsRender()
+check(findElement(syncFailTree, function (node) {
+  return node.type === 'span' && hasChildText(node, 'dsh-better-sidebar')
+}) !== null, true, '插件同步 列出待同步包名')
+check(findElement(syncFailTree, function (node) {
+  return node.type === 'span' && hasChildText(node, syncText('pluginSyncActionInstall'))
+}) !== null, true, '插件同步 条目显示动作徽标')
+check(findElement(syncFailTree, function (node) {
+  return node.type === 'div' && hasChildText(node, syncText('pluginSyncPartial'))
+}) !== null, true, '插件同步 部分未生效时提示部分完成')
+
+// 构建脚本待审批：出现「允许构建脚本并重试」按钮。
+syncSnapshotOverride = {
+  status: 'ready', loading: false, running: false, source: 'web', target: 'desktop',
+  available: true, reason: null, current: [], complete: false,
+  entries: [{ name: 'needs-build', action: 'install', spec: 'needs-build@1.0.0', requested: '1.0.0', current: null, bundle: true }],
+  results: [{ name: 'needs-build', action: 'install', ok: false, application: 'failed', code: 'build-blocked', message: 'blocked', pendingBuilds: ['needs-build'] }],
+  error: null, errorMessage: null, routeMissing: false, updatedAt: null,
+}
+check(findElement(settingsRender(), function (node) {
+  return node.type === 'button' && hasChildText(node, syncText('pluginSyncApproveBuilds'))
+}) !== null, true, '插件同步 有 pendingBuilds 时提供允许构建脚本按钮')
+
+// 路由未就绪：显示重启提示，且不得归因为同步失败。
+syncSnapshotOverride = {
+  status: 'error', loading: false, running: false, source: null, target: null,
+  available: false, reason: null, entries: [], current: [], results: [], complete: false,
+  error: 'not-found', errorMessage: 'unknown method', routeMissing: true, updatedAt: null,
+}
+check(findElement(settingsRender(), function (node) {
+  return node.type === 'div' && hasChildText(node, syncText('pluginSyncRouteMissing'))
+}) !== null, true, '插件同步 路由未就绪时显示重启提示')
+syncSnapshotOverride = null
 
 // 构造一个超过行数上限的思考块假 DOM（data-state=ok 避免触发自动展开）。
 const thinkBody = makeFakeEl()

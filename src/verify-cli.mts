@@ -1370,6 +1370,172 @@ try {
     check(desktopGuard.status, 1, 'CLI install --profile desktop 返回失败状态')
     check(desktopGuard.stderr.includes('desktop profile 由桌面应用独占管理'), true, 'CLI desktop 拦截给出桌面应用插件页指引')
   }
+
+  // ---- 「插件同步」：差异计算、安全围栏、执行编排（全部在临时 DSH_HOME 内）----
+  {
+    const syncRoot = tempRoot('plugin-sync')
+    const previousHome = process.env.DSH_HOME
+    const previousArgv = process.argv
+    process.env.DSH_HOME = syncRoot
+    try {
+      // 两个伪造 profile：web（参考）与 desktop（目标），均为只读夹具。
+      const writeProfile = (name: string, manifest: Record<string, unknown>) => {
+        const dir = join(syncRoot, 'profiles', name)
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest, null, 2))
+      }
+      writeProfile('web', {
+        name: 'dsh-profile-web',
+        dependencies: {
+          'plain-plugin': '^1.2.3',
+          'linked-plugin': 'link:D:/somewhere/linked-plugin',
+          'same-plugin': '^4.0.0',
+          'upgradable-plugin': '^2.0.0',
+          'unselected-plugin': '^3.0.0',
+          'enable-plugin': '^5.0.0',
+          // 同名只取最高版本：参考更高 → upgrade；参考更低 → 跳过（不降级）；
+          // 版本等价但写法不同（^x 与 x）→ 视为一致；预发布按 semver 比较。
+          'newer-plugin': '^1.0.0',
+          'equal-plugin': '^6.1.0',
+          'prerelease-plugin': '1.0.0-beta.2',
+          'both-linked-plugin': 'link:D:/from/web',
+        },
+        dsh: { profile: { bundles: ['plain-plugin', 'same-plugin', 'upgradable-plugin', 'linked-plugin', 'enable-plugin', 'newer-plugin', 'equal-plugin', 'prerelease-plugin', 'both-linked-plugin'] } },
+      })
+      writeProfile('desktop', {
+        name: 'dsh-profile-desktop',
+        // enable-plugin 已装且记录一致，但未被选为 bundle；unselected-plugin 未装（判 install）。
+        dependencies: {
+          'same-plugin': '^4.0.0',
+          'upgradable-plugin': '^1.0.0',
+          'enable-plugin': '^5.0.0',
+          'newer-plugin': '^2.0.0',
+          'equal-plugin': '6.1.0',
+          'prerelease-plugin': '1.0.0-beta.1',
+          'both-linked-plugin': 'link:D:/from/desktop',
+        },
+        dsh: { profile: { bundles: ['same-plugin', 'upgradable-plugin', 'newer-plugin', 'equal-plugin', 'prerelease-plugin', 'both-linked-plugin'] } },
+      })
+      // 让 argvProfile() 判为 desktop。
+      process.argv = ['node', 'verify', '--profile', 'desktop']
+      const sync = await import(`./lib/plugin-sync.js?verify=sync-${Date.now()}-${Math.random()}`)
+
+      // 方向随当前 profile 翻转：在桌面版里跑，参考取网页端。
+      check(sync.sourceCandidates('web')[0], 'desktop', '插件同步 在网页端跑参考取桌面版')
+      check(sync.sourceCandidates('desktop')[0], 'web', '插件同步 在桌面版跑参考取网页端')
+      check(sync.defaultSourceProfile('web'), 'desktop', '插件同步 默认参考随目标翻转（web → desktop）')
+      check(sync.defaultSourceProfile('desktop'), 'web', '插件同步 默认参考随目标翻转（desktop → web）')
+      check(sync.sourceCandidates('custom').length, 2, '插件同步 自定义 profile 两个候选都试')
+
+      const plan = sync.planPluginSync()
+      check(plan.source, 'web', '插件同步 目标为 desktop 时参考默认 web')
+      check(plan.target, 'desktop', '插件同步 目标为当前 profile')
+      check(plan.available, true, '插件同步 两个 profile 可读时可用')
+      const byName = new Map(plan.entries.map((e: { name: string }) => [e.name, e]))
+      check(byName.size, 7, '插件同步 差异条目数（install 3 + upgrade 3 + enable 1）')
+      check(byName.get('plain-plugin')?.action, 'install', '插件同步 新增包判 install')
+      check(byName.get('plain-plugin')?.spec, 'plain-plugin@^1.2.3', '插件同步 版本范围拼成 name@range')
+      check(byName.get('linked-plugin')?.spec, 'link:D:/somewhere/linked-plugin', '插件同步 link: 原样保留')
+      check(byName.get('upgradable-plugin')?.action, 'upgrade', '插件同步 参考版本更高判 upgrade')
+      check(byName.get('upgradable-plugin')?.current, '^1.0.0', '插件同步 upgrade 带当前值')
+      // enable-plugin：两边都装了且记录一致，但参考选了 bundle、目标没选 → 判 enable。
+      check(byName.get('enable-plugin')?.action, 'enable', '插件同步 已装但未选 bundle 判 enable')
+      check(byName.get('enable-plugin')?.spec, '', '插件同步 enable 不带安装 spec')
+      // unselected-plugin：目标未装 → 仍算 install（参考未选为 bundle 不改变这点）。
+      check(byName.get('unselected-plugin')?.action, 'install', '插件同步 目标未装的包一律判 install')
+      check(byName.get('unselected-plugin')?.bundle, false, '插件同步 未选为 bundle 的包 bundle=false')
+      // 最高版本：当前版本更高 → 跳过，绝不降级。
+      check(byName.has('newer-plugin'), false, '插件同步 当前版本更高的包不进条目')
+      const skippedNames = plan.skipped.map((s: { name: string }) => s.name)
+      check(skippedNames.join(','), 'newer-plugin', '插件同步 只把当前更高的包列入 skipped')
+      check(plan.skipped[0]?.current, '^2.0.0', '插件同步 skipped 带当前更高版本')
+      check(plan.skipped[0]?.requested, '^1.0.0', '插件同步 skipped 带参考较低版本')
+      // 版本等价（`^6.1.0` 与 `6.1.0`）不因写法差异判 upgrade。
+      check(byName.has('equal-plugin'), false, '插件同步 版本等价不因写法差异判 upgrade')
+      check(plan.current.includes('equal-plugin'), true, '插件同步 版本等价归入已一致')
+      check(plan.current.includes('same-plugin'), true, '插件同步 记录一致归入已一致')
+      // 预发布按 semver 比较：1.0.0-beta.2 > 1.0.0-beta.1。
+      check(byName.get('prerelease-plugin')?.action, 'upgrade', '插件同步 预发布版本按 semver 比较')
+      // 无版本号来源（link:）不比版本，仍按参考记录同步。
+      check(byName.get('both-linked-plugin')?.action, 'upgrade', '插件同步 link: 无法比版本时按参考记录同步')
+
+      // 安全围栏：非法/不存在/自身 一律不可用，且不改动任何文件。
+      check(sync.planPluginSync('../evil').available, false, '插件同步 拒绝路径穿越名')
+      check(sync.planPluginSync('node_modules').available, false, '插件同步 拒绝 node_modules')
+      check(sync.planPluginSync('nope').available, false, '插件同步 拒绝不存在的 profile')
+      check(sync.planPluginSync('desktop').available, false, '插件同步 拒绝自身作参考')
+      const desktopManifest = readFileSync(join(syncRoot, 'profiles', 'desktop', 'package.json'), 'utf8')
+      check(desktopManifest.includes('same-plugin'), true, '插件同步 计算计划不修改目标 profile')
+
+      // 路由：GET 回计划；非本路径不接管。
+      const call = async (method: string, pathname: string, payload: Record<string, unknown> | null, ctx: unknown) => {
+        let status = 0
+        let body = ''
+        const res = {
+          statusCode: 0,
+          writeHead(code: number, _headers?: Record<string, string>): void { status = code },
+          end(text?: string | Uint8Array): void { body = typeof text === 'string' ? text : '' },
+        }
+        const handled = await sync.handlePluginSyncRoute({ method, url: pathname }, res, pathname, payload, ctx)
+        return { handled, status, body, json: body === '' ? null : JSON.parse(body) }
+      }
+      const fakeCtx = { get: () => undefined, effect: () => undefined, on: () => undefined, off: () => undefined }
+      const got = await call('GET', sync.PLUGIN_SYNC_PATH, null, fakeCtx)
+      check(got.handled, true, '插件同步路由 命中本路径')
+      check(got.status, 200, '插件同步路由 GET 200')
+      check(got.json.value.target, 'desktop', '插件同步路由 回目标 profile')
+      check((await call('GET', '/dsh-zh/api/other', null, fakeCtx)).handled, false, '插件同步路由 非本路径不接管')
+
+      // 无 pluginManager 时执行必须失败而不是静默成功。
+      const run = await sync.runPluginSync(fakeCtx, plan)
+      check(run.ok, false, '插件同步 无 pluginManager 时执行失败')
+      check(run.results.length, 0, '插件同步 无 pluginManager 时不产生结果')
+
+      // 有 pluginManager 时逐条调用：install 走 installBundle、enable 走 setBundleEnabled。
+      const calls: Array<{ method: string; spec: string }> = []
+      const managerCtx = {
+        get: (name: string) => name !== 'pluginManager' ? undefined : {
+          installBundle: (spec: string) => { calls.push({ method: 'installBundle', spec }); return Promise.resolve({ application: 'applied' }) },
+          setBundleEnabled: (name: string) => { calls.push({ method: 'setBundleEnabled', spec: name }); return Promise.resolve({ application: 'applied' }) },
+        },
+      }
+      const ok = await sync.runPluginSync(managerCtx, plan)
+      check(ok.ok, true, '插件同步 有 pluginManager 时执行成功')
+      check(ok.complete, true, '插件同步 全部 applied 时 complete')
+      check(ok.results.length, 7, '插件同步 逐条结果与计划条目数一致')
+      check(calls.filter(c => c.method === 'setBundleEnabled').length, 1, '插件同步 enable 条目走 setBundleEnabled')
+      check(calls.filter(c => c.method === 'installBundle').length, 6, '插件同步 install/upgrade 走官方 installBundle')
+      check(calls.filter(c => c.method === 'installBundle').map(c => c.spec).includes('plain-plugin@^1.2.3'), true, '插件同步 传给 installBundle 的是拼好的 spec')
+
+      // 失败/需重启不得被判为 complete。
+      const failingCtx = {
+        get: () => ({
+          installBundle: () => Promise.resolve({ application: 'failed', error: { code: 'incompatible-version', incompatible: [{ peers: { '@deepseek-ai/dsh-llm': '^9.0.0' } }] } }),
+          setBundleEnabled: () => Promise.resolve({ application: 'restart-required' }),
+        }),
+      }
+      const bad = await sync.runPluginSync(failingCtx, plan)
+      check(bad.ok, true, '插件同步 失败态仍回 ok（逐条结果携带原因）')
+      const failedRow = bad.results.find((r: { name: string }) => r.name === 'plain-plugin')
+      check(failedRow?.ok, false, '插件同步 failed 条目 ok=false')
+      check(failedRow?.code, 'incompatible-version', '插件同步 透传 incompatible-version')
+      check(typeof failedRow?.message === 'string' && failedRow.message.includes('dsh-llm'), true, '插件同步 peer 不满足时给出可读提示')
+
+      // only 过滤：只执行指定包。
+      const onlyCalls: string[] = []
+      const onlyCtx = { get: () => ({ installBundle: (spec: string) => { onlyCalls.push(spec); return Promise.resolve({ application: 'applied' }) }, setBundleEnabled: () => Promise.resolve({ application: 'applied' }) }) }
+      await sync.runPluginSync(onlyCtx, plan, { only: 'plain-plugin' })
+      check(onlyCalls.length, 1, '插件同步 only 只执行一个条目')
+      check(onlyCalls[0], 'plain-plugin@^1.2.3', '插件同步 only 执行命中的条目')
+
+      // 夹具仍未被改写（整段只读）。
+      check(readFileSync(join(syncRoot, 'profiles', 'web', 'package.json'), 'utf8').includes('unselected-plugin'), true, '插件同步 参考 profile 全程只读')
+    } finally {
+      process.argv = previousArgv
+      if (previousHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previousHome
+    }
+  }
   console.log(`OK: CLI/主机全部 ${checks} 项校验通过`)
 } finally {
   if (originalHome === undefined) delete process.env.DSH_HOME

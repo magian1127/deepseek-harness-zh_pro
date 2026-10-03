@@ -39,6 +39,7 @@
 | 服务监控 | 服务监控 `serviceMonitorEnabled` | 关 | localStorage | 中文/英文界面；关闭时面板不工作 |
 | 服务监控 | 刷新间隔 `serviceMonitorIntervalSec` | 10 秒 | localStorage | 范围 2–300 秒 |
 | 服务监控 | 自定义监控项 `serviceMonitorTargets` | 空 | localStorage | 每项 `{ name, host, port }`，最多 100 项 |
+| 插件同步 | 参考 profile（请求参数 `source`） | 当前 profile 的另一侧 | 无（不持久化） | 只读参考 profile；同步动作本身由官方 pluginManager 写当前 profile |
 
 localStorage 键为 `deepseek-harness-zh_pro:enhancements`；主机配置持久化在行 id `dsh-zh` 的
 profile 行 config（DSH 0.1.7 起）。`configForms` 不可用时，四个模型请求中文化开关及自动归档字段不可写；
@@ -589,6 +590,27 @@ dsh 无法启动），此路径下进程重启前官方列表可能仍按旧缓�
 - 刷新间隔：`serviceMonitorIntervalSec`（默认 10 秒，范围 2–300）是**唯一的节奏设置**——网页把它随每次轮询带给主机，作为扫描缓存的允许年龄：距上次扫描超过它才重扫，否则直接返回缓存；修改即时生效（setTimeout 自循环）。自动发现条目的信息延迟 ≤ 一个刷新间隔；页面不可见时浏览器暂停轮询 = 完全零扫描。
 - 平台与环境需求（归属/定位为尽力而为）：端口扫描与探活在 Windows / macOS / Linux 都可用——Windows `netstat` 内置，macOS `netstat` 内置，Linux 需 iproute2 的 `ss`（缺失时回退 net-tools 的 `netstat`，两者都没有则面板无数据）。悬停进程归属：Windows 用系统自带 PowerShell（需 PowerShell 3+/Win8+，`Get-CimInstance`），macOS 用系统 `ps`，Linux 读 `/proc`（仅当目标进程与 DSH 运行用户一致、或对 `/proc/<pid>` 有读权限时能取到名称/路径，否则显示「未定位到监听进程」）；PID 4 内核端点的 http.sys 反查（`netsh`）为 Windows 独有。点击定位进程目录：Windows `explorer /select`、macOS Finder 均内置可用，Linux 需桌面环境的 `xdg-open`。自定义监控项仅接受本机回环地址（`localhost` / `127.0.0.0/8` / `[::1]`）：设置页添加或修改地址时，非回环地址会被标红拒绝；历史遗留的非回环条目不发起 TCP 连接、恒显示为离线（探活不对非环回目标发起连接，避免被用作内网/公网扫描器），且不影响其余条目与快照返回。
 - 数据流：浏览器按刷新间隔轮询 `POST /dsh-zh/api/service-monitor`（请求体携带自定义监控项与当前 `intervalSec`；主机对比扫描缓存年龄——超过间隔才重扫，否则返回缓存，再逐项探活自定义监控项：仅环回项发起 TCP connect，非环回项直接按离线返回，单项异常不拒绝整个请求；回环主机 + 同源信任围栏，与「删除会话」路由同一策略）；页面不可见时暂停轮询，回到前台下一轮补上。GET 同路径为调试入口（`?intervalSec=` 可选，缺省要求最新）。悬停走 `POST /dsh-zh/api/service-monitor/resolve` 按需解析并缓存归属；点击走 `POST /dsh-zh/api/service-monitor/open`，主机读取已缓存归属后执行平台 reveal 命令；路径永远来自主机进程枚举，不接受请求传入。条目操作走 `POST /dsh-zh/api/service-monitor/rebaseline`（排除监控；`persist:true` 时为「永久监控」主机半步）与 `POST /dsh-zh/api/service-monitor/kill`（普通权限终止，PID 来自已缓存归属，同样不接受请求传入）。不注册模型工具、不上传数据；自定义监控项只存浏览器 localStorage，不落主机磁盘。
+
+## 插件同步
+
+设置页「插件同步」是与上述各卡并列的独立收缩卡片（同一套官方插件卡样式，默认收起；展开状态不持久化，也不占用 localStorage 字段）。它解决的是「同一个 DSH 装了多份 profile（`web` / `desktop` / 自定义），插件却要分别安装」的问题：以**当前 profile 的另一侧**为参考，把其中已安装的插件同步进当前 profile。
+
+- **方向随当前环境自动确定**：在网页端（`web`）运行就是「桌面版 → 网页端」，在桌面版（`desktop`）运行就是「网页端 → 桌面版」。桌面版与 `dsh web` 共用同一套插件机制，两侧互为参照，因此不需要（也不提供）固定方向。其它自定义 profile 先试 `web`、再试 `desktop`；请求参数 `source` 可显式指定参考 profile 覆盖默认方向。
+- **一键操作**：展开卡片后点「检查差异」拉取计划，点「一键同步」执行；卡片头部徽标显示待同步条目数。同步中按钮变为「同步中…」并禁用，避免并发操作。
+- **同名包只取最高版本**（只增不减，绝不卸载也绝不降级）：
+  - 参考有、当前没有 → **待安装**（`install`）；
+  - 两边都装了且**参考版本更高** → **待更新**（`upgrade`）；
+  - 两边都装了且版本等价，但参考把该包选为 bundle、当前没选 → **待启用**（`enable`）；
+  - 两边都装了但**当前版本不低于参考** → 跳过（界面上单独列出「当前 ≥ 参考」，说明为何不在待同步清单里）；
+  - 其余归入「已一致」，不产生动作。
+  - 版本比较只看版本核心（`^4.0.0` 与 `4.0.0` 视为等价，不因写法差异判更新）；预发布按 semver 规则排序（`1.0.0-beta.2` > `1.0.0-beta.1`）；`link:` / `file:` / `workspace:` / git 等无法按版本号比较的来源不参与比高低，仍按参考记录同步。
+- **只读参考**：参考 profile 的 `package.json` 只用于计算差异，全程不被改写；计算计划也不写任何文件。
+- **安装通道**：复用 DSH 官方 `pluginManager` 服务（与桌面应用侧栏「插件」页、`dsh plugin` 同一实现）。因此自动获得它的全部保护：profile 文件锁、peer 兼容检查（不满足时回 `incompatible-version` 并说明缺哪个 peer）、失败时把 `package.json` 与 `pnpm-lock.yaml` 回滚、构建脚本需显式允许。桌面版 Host 的 PATH 不含 node/pnpm，官方实现会改用应用内置的 pnpm（经 `profileContext.packageManager`），这也是本功能不自行调用 pnpm 的原因。
+- **逐条结果**：每个条目显示自己的落点——已生效（`applied` / `overridden`）、需重启（`restart-required`，如启用了一个启动期生效的 bundle）、失败（带原因）。全部落地才提示「同步完成」，否则提示「部分未生效」。
+- **构建脚本**：若某包的安装被构建脚本拦下（pnpm 返回 `pendingBuilds`），该条目旁会出现「允许构建脚本并重试」，由用户显式确认后仅对该包重试（对应官方 `approvedBuilds`）。
+- **路径**：`GET /dsh-zh/api/plugin-sync` 回差异计划；`POST /dsh-zh/api/plugin-sync` 执行同步（请求体可选 `source` 覆盖参考 profile、`only` 限定单个包名、`approvedBuilds` 允许构建脚本）。与 `/dsh-zh/api` 其余路由共用回环 + 同源信任围栏。
+- **安全围栏**：参考 profile 名必须是 `profiles/` 下的单层安全目录名（拒绝 `/`、`\`、`.`、`..`、`node_modules`），且必须已存在；不允许把当前 profile 自身当参考；`pluginManager` 缺席时执行直接失败而非静默成功。
+- **不注册模型工具、不上传数据**：本功能只读写本机 profile 文件，不涉及凭据，也不写 localStorage 或 `settings.yaml`。
 
 ## 数据与信任边界
 

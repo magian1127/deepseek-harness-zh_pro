@@ -59,6 +59,7 @@ import { log, warn } from './util.js'
 import { trashItem, restoreItem } from './trash.js'
 import { handleDiagnosticsRoute } from './diagnostics.js'
 import { handleSearchCredentialRoute } from './search-credential.js'
+import { handlePluginSyncRoute } from './plugin-sync.js'
 import { ensureFreshScan, getServiceMonitorSnapshot, killServiceOwner, openServiceOwnerDirectory, persistEndpointToBaseline, probeTargets, rebaselineEndpoint, resolveServiceOwner, unbaselineEndpoint } from './service-monitor.js'
 import type { HostContext } from './types.js'
 
@@ -792,6 +793,7 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
         if (req.method === 'GET') {
           if (handleDiagnosticsRoute(req, res, pathname)) return
           if (handleSearchCredentialRoute(req, res, pathname, null)) return
+          if (await handlePluginSyncRoute(req, res, pathname, null, ctx)) return
           if (await handleServiceMonitorRoutes(req, res, pathname, {}, url)) return
           writeJson(res, 404, { ok: false, error: { code: 'not-found', message: 'unknown method' } })
           return
@@ -814,8 +816,9 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
         }
 
         try {
-        if (handleSearchCredentialRoute(req, res, pathname, payload)) return
-        if (await handleServiceMonitorRoutes(req, res, pathname, payload, url)) return
+          if (handleSearchCredentialRoute(req, res, pathname, payload)) return
+          if (await handlePluginSyncRoute(req, res, pathname, payload, ctx)) return
+          if (await handleServiceMonitorRoutes(req, res, pathname, payload, url)) return
           if (pathname === '/dsh-zh/api/service-monitor/unbaseline') {
             // 把基线端点移出基线（右栏 tab「基线端口」区点击恢复监控）：
             // 请求体 { address, port }；命中基线则立即入监控列表并返回

@@ -38,9 +38,10 @@ The rows below follow **DSH Settings → Enhancements** from top to bottom:
 | Service monitor | Off | Dual form: keeps the original panel between the session list and Settings in the left sidebar, and adds a "Service monitor" tab in the right sidebar (entry on the guide page); shows local listening services started during the conversation; hover resolves the process on demand and click reveals its location; **the left panel shows at most 10 rows per screen** — scroll with the wheel (no scrollbar shown) or use the arrow below the list to page down, which flips to "back to top" at the end; the tab's "Baseline ports" section lets you bring a baseline port back into monitoring with a click; right-pane entries have three action buttons after the uptime — Exclude (move back to baseline, no confirmation), Always watch (add to custom watch entries in Settings, confirmation required), Kill process (try to terminate with normal privileges, confirmation required); the left panel has no buttons |
 | Refresh interval | 10 seconds | Range 2–300 seconds; polling pauses while the page is hidden |
 | Custom watch entries | Empty | Entries can be added or edited and remain visible as online/offline; maximum 100 |
+| Plugin sync | Direction follows the current environment | Uses the **other** profile as the reference and copies its installed plugins into the current profile with one click: running in the web app means desktop → web, running in the desktop app means web → desktop (the `source` request field can override this). For the same package only the **highest version** is kept — if this profile is already at or above the reference it is left alone and never downgraded; additive only, nothing already installed is removed; the reference profile is read-only; runs through the official DSH plugin manager (the same channel as the desktop app sidebar "Plugins" page) with its peer checks and rollback |
 
-Chat display, Session list, and Service monitor use the same collapsible plugin-card style. They
-start collapsed and remember their open state independently. See the
+Chat display, Session list, Service monitor, and Plugin sync use the same collapsible plugin-card
+style. They start collapsed and remember their open state independently. See the
 [behavior contract](https://github.com/magian1127/deepseek-harness-zh_pro/blob/main/docs/behavior.md)
 for full interaction, data, and safety boundaries.
 
@@ -72,6 +73,15 @@ Bundles are profile-scoped. The headless profile runs only the Host half, with n
 ```
 
 then run `pnpm install` inside the profile directory to materialize the link. Start the desktop app to mount; after source changes run `npm run build` and restart the app; to uninstall, remove both entries and run `pnpm install` again.
+
+**Syncing plugins between desktop and Web**: you do not need to reinstall plugins one by one in
+both profiles — open **Settings → Enhancements → Plugin sync** on the side you want to fill in,
+click "Check differences" to see the list, then "Sync now". The direction follows the current
+environment automatically: running in the web app it is desktop → web, running in the desktop app
+it is web → desktop. For the same package only the higher version is kept — if this profile is
+already at or above the reference it is left alone (never downgraded), and nothing is removed. The
+feature reuses the official DSH plugin manager, so it is equivalent to installing from the desktop
+app sidebar "Plugins" page, and it inherits the same peer checks and rollback.
 
 Local source development:
 

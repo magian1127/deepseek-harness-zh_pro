@@ -129,6 +129,66 @@ const ZhSettingsSection = function (props) {
   React.useEffect(function () {
     if (credBinding.savedAt !== null) setCredKeyDraft('')
   }, [credBinding.savedAt])
+  // ---- 「插件同步」卡片：差异计划与逐条结果全部来自主机；展开态与其余三卡一致，
+  //      持久化在 settingsStore（而非组件 useState），以便折叠态可测且刷新后保留。 ----
+  const syncOpen = snapshot.pluginSyncSettingsOpen === true
+  const syncBinding = React.useSyncExternalStore(pluginSyncStore.subscribe, pluginSyncStore.getSnapshot)
+  const syncBusy = syncBinding.running === true
+  const syncRouteMissing = syncBinding.routeMissing === true
+  const syncErrorText = pluginSyncErrorText(t, syncBinding)
+  const syncEntries = syncBinding.entries
+  const syncResults = syncBinding.results
+  // 只取最高版本：当前不低于参考、被跳过的包（老快照缺该字段时按空处理）。
+  const syncSkipped = Array.isArray(syncBinding.skipped) ? syncBinding.skipped : []
+  const syncResultOf = function (name) {
+    for (let i = 0; i < syncResults.length; i += 1) {
+      if (syncResults[i].name === name) return syncResults[i]
+    }
+    return null
+  }
+  const syncActionText = function (action) {
+    if (action === 'upgrade') return t('pluginSyncActionUpgrade')
+    if (action === 'enable') return t('pluginSyncActionEnable')
+    return t('pluginSyncActionInstall')
+  }
+  // 逐条结果文案：applied/overridden 视为已生效，restart-required 单独提示重启。
+  const syncResultText = function (row) {
+    if (row === null) return null
+    if (row.ok === true) return t('pluginSyncResultApplied')
+    if (row.application === 'restart-required') return t('pluginSyncResultRestart')
+    return t('pluginSyncResultFailed') + (row.message !== null && row.message !== undefined ? '：' + row.message : '')
+  }
+  // 展开卡片时按需拉一次计划（与网络搜索卡片同款：只在需要时发请求）。
+  const toggleSyncOpen = function () {
+    const next = !syncOpen
+    settingsStore.set('pluginSyncSettingsOpen', next)
+    if (next === true && syncBinding.status === 'idle') pluginSyncStore.load()
+  }
+  // 卡片头部徽标：待同步条目数（无待同步项时不显示）。
+  const syncBadge = syncEntries.length > 0 ? syncEntries.length : null
+  // 状态行：路由缺失 / 错误 / 无差异 / 已完成 / 部分未生效。
+  let syncStatusText = null
+  let syncStatusError = false
+  if (syncRouteMissing === true) {
+    syncStatusText = t('pluginSyncRouteMissing')
+  } else if (syncErrorText !== null) {
+    syncStatusText = syncErrorText
+    syncStatusError = true
+  } else if (syncBinding.status === 'ready') {
+    if (syncBinding.available !== true) {
+      syncStatusText = t('pluginSyncUnavailable') + (typeof syncBinding.reason === 'string' ? '：' + syncBinding.reason : '')
+    } else if (syncResults.length > 0) {
+      syncStatusText = syncBinding.complete === true ? t('pluginSyncComplete') : t('pluginSyncPartial')
+    } else if (syncEntries.length === 0) {
+      syncStatusText = t('pluginSyncNone')
+    }
+  }
+  const syncStatusStyle = {
+    fontSize: 12, lineHeight: '18px',
+    color: syncStatusError === true
+      ? 'var(--dsw-alias-state-error-primary, #d93026)'
+      : 'var(--dsw-alias-label-tertiary, #666)',
+  }
   const searchToggleOn = promptReady && promptSnapshot.value.zhWebSearch !== false
   const submitSearchCredential = function () {
     const key = credKeyDraft.trim()
@@ -600,6 +660,89 @@ const ZhSettingsSection = function (props) {
           credBinding.source === 'environment'
             ? React.createElement('div', { style: zhDescStyle }, t('searchApiKeyEnvNote'))
             : null),
+      ]),
+      // ---- 「插件同步」卡片：把另一侧 profile 已装的插件同步到当前 profile ----
+      // 差异计划与逐条结果全部来自主机；按钮禁用态覆盖未就绪/无差异/进行中。
+      collapseCard('pluginSyncGroup', syncOpen === true, function () { toggleSyncOpen() },
+        t('pluginSyncGroup'), t('pluginSyncGroupDesc'), syncBadge, [
+        React.createElement('div', { key: 'syncIntro', style: zhDescStyle }, t('pluginSyncIntro')),
+        React.createElement('div', {
+          key: 'syncEndpoints',
+          style: Object.assign({}, zhDescStyle, { marginTop: '8px', display: 'flex', gap: '8px', flexWrap: 'wrap' }),
+        },
+          React.createElement('span', null, t('pluginSyncSource') + '：' + String(syncBinding.source === null ? '—' : syncBinding.source)),
+          React.createElement('span', null, '→'),
+          React.createElement('span', null, t('pluginSyncTarget') + '：' + String(syncBinding.target === null ? '—' : syncBinding.target))),
+        syncStatusText !== null
+          ? React.createElement('div', { key: 'syncStatus', style: Object.assign({ marginTop: '6px' }, syncStatusStyle) }, syncStatusText)
+          : null,
+        // 只取最高版本：当前版本不低于参考的包被跳过，逐条列出，避免用户以为漏了。
+        syncSkipped.length > 0
+          ? React.createElement('div', {
+            key: 'syncSkipped',
+            style: Object.assign({ marginTop: '6px' }, syncStatusStyle),
+          }, t('pluginSyncSkipped') + '：' + syncSkipped.map(function (row) {
+            return String(row.name) + '（' + String(row.current) + ' ≥ ' + String(row.requested) + '）'
+          }).join('、'))
+          : null,
+        React.createElement('div', {
+          key: 'syncActions',
+          style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '10px' },
+        },
+          React.createElement('button', {
+            type: 'button',
+            onClick: function () { pluginSyncStore.load() },
+            disabled: syncBusy === true || syncRouteMissing === true,
+            style: Object.assign({}, svcGhostButtonStyle,
+              syncBusy === true || syncRouteMissing === true ? { opacity: 0.45, cursor: 'not-allowed' } : {}),
+          }, t('pluginSyncCheck')),
+          React.createElement('button', {
+            type: 'button',
+            onClick: function () { pluginSyncStore.sync({}) },
+            disabled: syncBusy === true || syncRouteMissing === true || syncEntries.length === 0,
+            style: Object.assign({}, svcAddButtonStyle,
+              syncBusy === true || syncRouteMissing === true || syncEntries.length === 0
+                ? { opacity: 0.45, cursor: 'not-allowed' }
+                : {}),
+          }, syncBusy === true ? t('pluginSyncRunning') : t('pluginSyncRun'))),
+        syncEntries.length > 0
+          ? React.createElement('div', {
+            key: 'syncEntries',
+            style: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '12px' },
+          }, syncEntries.map(function (entry) {
+            const resultRow = syncResultOf(entry.name)
+            const resultText = syncResultText(resultRow)
+            const pending = resultRow !== null && Array.isArray(resultRow.pendingBuilds) ? resultRow.pendingBuilds : []
+            return React.createElement('div', {
+              key: 'sync-entry-' + entry.name,
+              style: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', fontSize: 13, lineHeight: '20px' },
+            },
+              React.createElement('span', { style: { fontWeight: 500, color: 'var(--dsw-alias-label-primary, inherit)' } }, entry.name),
+              React.createElement('span', { style: svcCardBadgeStyle }, syncActionText(entry.action)),
+              resultText !== null
+                ? React.createElement('span', {
+                  style: {
+                    fontSize: 12, lineHeight: '18px',
+                    color: resultRow !== null && resultRow.ok === true
+                      ? 'var(--dsw-alias-state-success-primary, #2f9e44)'
+                      : 'var(--dsw-alias-state-error-primary, #d93026)',
+                  },
+                }, resultText)
+                : null,
+              pending.length > 0
+                ? React.createElement('button', {
+                  type: 'button',
+                  title: t('pluginSyncPendingBuilds'),
+                  onClick: function () {
+                    pluginSyncStore.sync({ only: entry.name, approvedBuilds: pending })
+                  },
+                  disabled: syncBusy === true,
+                  style: Object.assign({}, svcGhostButtonStyle,
+                    syncBusy === true ? { opacity: 0.45, cursor: 'not-allowed' } : {}),
+                }, t('pluginSyncApproveBuilds'))
+                : null)
+          }))
+          : null,
       ]),
       // ---- 「服务监控」卡片（复刻官方插件设置卡的收缩样式，位于设置页最下方） ----
         React.createElement('div', {
