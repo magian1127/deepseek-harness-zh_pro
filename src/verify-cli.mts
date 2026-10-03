@@ -259,7 +259,33 @@ try {
       signal: { throwIfAborted: function () {} },
     }, async function () { return { kind: 'enter', messages: [claimed] } })
   check(decision.messages.length, 2, 'user 目标插入一条上下文消息')
-  check(decision.messages[1].source, { kind: 'plugin', plugin: 'deepseek-harness-zh_pro', form: 'notice', summary: '提示词注入：只用中文' }, 'user 目标上下文来源正确')
+  check(decision.messages[1].source, { kind: 'plugin:deepseek-harness-zh_pro', form: 'notice', summary: '提示词注入：只用中文' }, 'user 目标上下文来源正确')
+  // 会话格式 v4 准入规则（@deepseek-ai/dsh-session-format-v3-to-v4 的 source()）：
+  // source.kind 必须是非空字符串且不得等于 'plugin'，否则实时新消息被拒
+  // （v3→v4 迁移只重写已落盘历史），表现为「每一轮都失败」。
+  const ownSource = decision.messages[1].source
+  check(typeof ownSource.kind === 'string' && ownSource.kind.length > 0, true, '注入消息 source.kind 非空字符串')
+  check(ownSource.kind !== 'plugin', true, '注入消息 source.kind 不使用已废弃的 plugin 包装')
+  check(Object.hasOwn(ownSource, 'plugin'), false, '注入消息 source 不带 plugin 字段')
+  // 去重必须认历史 wrapper 形态（0.1.6 落盘、未迁移的行）：同文本的旧形态
+  // 自身消息已在 decision 中时不重复插入。
+  const legacyOwn = { role: 'user', id: 'legacy-own', content: [{ type: 'text', text: '只用中文' }], source: { kind: 'plugin', plugin: 'deepseek-harness-zh_pro', form: 'notice' } }
+  const legacyDecision = await dispatchPreStep({
+    agent: { session: { surface: { nodes: [] }, events: [], id: 'main-zh' }, inbox: {} },
+    messages: [claimed],
+    step: 1,
+    signal: { throwIfAborted: function () {} },
+  }, async function () { return { kind: 'enter', messages: [claimed, legacyOwn] } })
+  check(legacyDecision.messages.length, 2, '历史 wrapper 形态的自身消息仍被识别、不重复插入')
+  // 当前形态同理：同文本的自身消息已在 decision 中时不重复插入。
+  const currentOwn = { role: 'user', id: 'current-own', content: [{ type: 'text', text: '只用中文' }], source: { kind: 'plugin:deepseek-harness-zh_pro', form: 'notice' } }
+  const currentDecision = await dispatchPreStep({
+    agent: { session: { surface: { nodes: [] }, events: [], id: 'main-zh' }, inbox: {} },
+    messages: [claimed],
+    step: 1,
+    signal: { throwIfAborted: function () {} },
+  }, async function () { return { kind: 'enter', messages: [claimed, currentOwn] } })
+  check(currentDecision.messages.length, 2, '当前 kind 形态的自身消息被识别、不重复插入')
   for (let i = effects.length - 1; i >= 0; i -= 1) await effects[i]()
   check(systemPrompt.assemble, originalAssemble, '卸载后恢复 systemPrompt.assemble')
   check((handlers['loader/volatile-update'] ?? []).length, 0, '卸载后取消 volatile 监听')
@@ -534,7 +560,7 @@ try {
             '',
             '# injected by fake core injector',
             '</system-reminder>'].join('\n')
-          const fakeInjectorMsg = { role: 'user', id: 'ctx-fake', content: [{ type: 'text', text: fakeInjectorFrame }], source: { kind: 'plugin', plugin: 'agent-instructions' } }
+          const fakeInjectorMsg = { role: 'user', id: 'ctx-fake', content: [{ type: 'text', text: fakeInjectorFrame }], source: { kind: 'agent-instructions', form: 'instructions', changes: [] } }
           ctxLocaleCtx.on('agent/pre-step', async function (args, next) {
             const decision = await next()
             if (decision === null || typeof decision !== 'object' || decision.kind === 'reject') return decision
@@ -600,13 +626,13 @@ try {
           return { role: 'user', id: `ctx-m${makeMsg.seq += 1}`, content: [{ type: 'text', text }], source }
         }
         makeMsg.seq = 0
-        const wsMsg = makeMsg({ kind: 'plugin', plugin: 'agent-instructions' }, wsFrame)
+        const wsMsg = makeMsg({ kind: 'agent-instructions', form: 'instructions', changes: [] }, wsFrame)
         const skillMsg = makeMsg({ kind: 'skill-catalog', form: 'catalog' }, skillFrame)
-        const approvalMsg = makeMsg({ kind: 'plugin', plugin: 'user-approval' }, 'The approval policy changed from "ask" to "never" (changed by the user).')
+        const approvalMsg = makeMsg({ kind: 'user-approval' }, 'The approval policy changed from "ask" to "never" (changed by the user).')
         const budgetMsg = makeMsg({ kind: 'agent-instructions', form: 'instructions', changes: [] }, 'Workspace instruction budget 4096 bytes: omitted AGENTS.md, docs/x.md; truncated big.md from 8000 to 300 bytes')
-        const runtimeMsg = makeMsg({ kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt', form: 'snapshot' }, runtimeZh)
+        const runtimeMsg = makeMsg({ kind: 'runtime-context', form: 'snapshot' }, runtimeZh)
         const userMsg = makeMsg({ kind: 'user' }, '用户消息保持原样')
-        const ownMsg = makeMsg({ kind: 'plugin', plugin: 'deepseek-harness-zh_pro', form: 'notice' }, '提示词注入：只用中文')
+        const ownMsg = makeMsg({ kind: 'plugin:deepseek-harness-zh_pro', form: 'notice' }, '提示词注入：只用中文')
         const input = [userMsg, wsMsg, skillMsg, approvalMsg, budgetMsg, runtimeMsg, ownMsg]
           const zhDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: input.slice() } })
         check(zhDecision.kind, 'enter', 'pre-step 返回 enter decision')
@@ -618,12 +644,31 @@ try {
         check(outRuntime.content[0].text.includes('当前运行时上下文。本快照取代更早的运行时上下文快照。'), true, 'runtime 快照头部行换成中文')
         check(outRuntime.content[0].text.includes('当前 DSH 文件策略：danger-full-access'), true, 'runtime 快照正文保持中文')
         check(outRuntime.content[0].text.includes('Current runtime context'), false, 'runtime 快照头部英文不再出现')
-        const planModeMsg = makeMsg({ kind: 'plugin', plugin: 'plan-mode', form: 'notice' }, 'The user switched this session to plan mode.')
+        const planModeMsg = makeMsg({ kind: 'plan-mode', form: 'notice' }, 'The user switched this session to plan mode.')
         const planModeDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: [planModeMsg] } })
         check(planModeDecision.messages[0].content[0].text, '用户已将本会话切换到计划模式。', '计划模式切换通知换成中文')
-        const runnerMsg = makeMsg({ kind: 'plugin', plugin: 'cordis-host-runner' }, 'Cordis run zhre-1/pkg-1 completed successfully. currentPackageId is pkg-1. Continue using the running Plugin.')
+        const runnerMsg = makeMsg({ kind: 'cordis-host-runner' }, 'Cordis run zhre-1/pkg-1 completed successfully. currentPackageId is pkg-1. Continue using the running Plugin.')
         const runnerDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: [runnerMsg] } })
         check(runnerDecision.messages[0].content[0].text, 'Cordis run zhre-1/pkg-1 已成功完成。currentPackageId 为 pkg-1。继续使用正在运行的 Plugin。', '动态插件激活成功通知换成中文')
+        // 历史 wrapper 形态（0.1.6 落盘、未经迁移的行）：kind 'plugin' + plugin 名
+        // 仍须被识别并翻译，否则老会话升级后这些注入会漏过。
+        const legacyWsMsg = makeMsg({ kind: 'plugin', plugin: 'agent-instructions' }, wsFrame)
+        const legacyApprovalMsg = makeMsg({ kind: 'plugin', plugin: 'user-approval' }, 'The approval policy changed from "ask" to "never" (changed by the user).')
+        const legacyRuntimeMsg = makeMsg({ kind: 'plugin', plugin: '@deepseek-ai/dsh-system-prompt', form: 'snapshot' }, runtimeZh)
+        const legacyCompactMsg = makeMsg({ kind: 'plugin', plugin: 'compact' }, 'This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.')
+        const legacyCtxDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: [legacyWsMsg, legacyApprovalMsg, legacyRuntimeMsg, legacyCompactMsg] } })
+        check(legacyCtxDecision.messages[0].content[0].text.includes('以下工作区指令可能与你的工作相关'), true, '历史 wrapper 工作区指令仍被翻译')
+        check(legacyCtxDecision.messages[1].content[0].text, '审批策略已从 "ask" 切换为 "never"（由用户更改）。', '历史 wrapper 审批通知仍被翻译')
+        check(legacyCtxDecision.messages[2].content[0].text.includes('当前运行时上下文。'), true, '历史 wrapper runtime 快照头部仍被翻译')
+        check(legacyCtxDecision.messages[3].content[0].text.includes('这是一个自动生成的检查点'), true, '历史 wrapper 压缩检查点前言仍被翻译')
+        // 当前生产者自有 kind 的压缩检查点前言（v3→v4 迁移后的形态）
+        const compactMsg = makeMsg({ kind: 'compact-checkpoint' }, 'This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.')
+        const compactDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: [compactMsg] } })
+        check(compactDecision.messages[0].content[0].text.includes('这是一个自动生成的检查点'), true, 'compact-checkpoint 前言换成中文')
+        // 非白名单来源（未知第三方插件）一律不动
+        const foreignMsg = makeMsg({ kind: 'plugin:some-third-party', form: 'notice' }, 'Third-party injected context stays English.')
+        const foreignDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: [foreignMsg] } })
+        check(foreignDecision.messages[0], foreignMsg, '未知来源注入消息引用不变')
         check(outWs.source, wsMsg.source, '工作区指令消息 source 引用不变')
         check(outWs.id, wsMsg.id, '工作区指令消息 id 不变')
         check(outWs.content[0].text.includes('以下工作区指令可能与你的工作相关'), true, '工作区指令 intro 换成中文')

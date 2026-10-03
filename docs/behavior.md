@@ -326,6 +326,10 @@ execute 走官方 web seam，因此自动获得上述后端级联与智谱联动
   写入最终 system prompt，不产生可见上下文消息。
 - `user`：不修改 system sections，在 `agent/pre-step` 插入一条来源为
   `deepseek-harness-zh_pro`、form 为 `notice` 的 `user/message`；聊天记录可展开查看全文。
+  该消息的 `source.kind` 为 `plugin:deepseek-harness-zh_pro`（DSH 0.1.7 起会话格式 v4
+  要求 source.kind 为生产者自有标识并拒绝 `plugin`；写入与识别同时兼容旧会话已落盘的
+  `kind:'plugin'` 形态）。聊天记录的上下文行标签取自 `source.kind`，因此该行显示为
+  `plugin:deepseek-harness-zh_pro`（DSH 0.1.7 之前落盘的历史消息仍显示 `plugin`）。
 
 旧值 `context` 读取时归一化为 `user`。文本框本地即时回显，静默 600ms 后写入 settings，
 失焦时立即写入。开关关闭或文本为空时两条通道都不注入。

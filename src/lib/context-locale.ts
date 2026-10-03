@@ -388,25 +388,56 @@ function localizeText(text: string): string {
 
 // ============ 注入消息识别（source 白名单） ============
 // 只认 DSH 官方注入的 source。用户消息（kind 'user'）、本插件自身消息
-// （plugin 'deepseek-harness-zh_pro'）与任何未知来源一律不动。
-const INJECT_PLUGINS = new Set([
-  'agent-instructions', // 工作区指令帧（workspaceContextMessage 的 source.plugin）
+// （plugin:deepseek-harness-zh_pro）与任何未知来源一律不动。
+//
+// DSH 0.1.7（会话格式 v4）起，source.kind 必须是「生产者自有」的非空字符串
+// 且显式拒绝 'plugin'；内核同时把历史 v3 的 `kind:'plugin'` + `plugin:<名>`
+// 迁移成生产者自有 kind（@deepseek-ai/dsh-session-format-v3-to-v4 的
+// producerKind()）。因此识别必须按「当前 kind」为主、兼容旧 wrapper 形态，
+// 否则 0.1.7 下这些官方注入会全部漏过、本功能静默失效。
+//
+// 映射来源（部署版 checkout 逐字核对，packages/*/src）：
+//   agent-instructions      → kind 'agent-instructions'
+//   user-approval           → kind 'user-approval'
+//   compact                 → kind 'compact-checkpoint'（RENAMED_PRODUCERS）
+//   @deepseek-ai/dsh-system-prompt → kind 'runtime-context'（RENAMED_PRODUCERS）
+//   plan-mode               → kind 'plan-mode'
+//   cordis-host-runner      → kind 'cordis-host-runner'
+//   tool-cordis             → kind 'tool-cordis'
+//   schedule                → kind 'schedule'
+/** 当前生产者自有 kind（0.1.7+ 新产出的官方注入）。 */
+const INJECT_KINDS = new Set([
+  'agent-instructions', // 工作区指令帧（workspaceContextMessage）
   'user-approval', // 审批策略切换通知
-  'compact', // 压缩检查点
-  '@deepseek-ai/dsh-system-prompt', // runtime-context 快照（头部行由行级规则翻译）
+  'compact-checkpoint', // 压缩检查点前言
+  'runtime-context', // 运行时上下文快照（头部行由行级规则翻译）
   'plan-mode', // 计划模式切换通知
   'cordis-host-runner', // 动态 Cordis 插件激活/失败通知
   'tool-cordis', // @pluginId 引用注入（创作模式）
   'schedule', // 定时提醒注入
+])
+/** 旧 wrapper 形态的 plugin 名（0.1.6 及更早落盘、未经迁移的行）。 */
+const INJECT_PLUGINS = new Set([
+  'agent-instructions',
+  'user-approval',
+  'compact',
+  '@deepseek-ai/dsh-system-prompt',
+  'plan-mode',
+  'cordis-host-runner',
+  'tool-cordis',
+  'schedule',
 ])
 
 function isDshInjection(message: unknown): boolean {
   const source = (message as { source?: unknown } | undefined)?.source
   if (source === null || typeof source !== 'object') return false
   const entry = source as { kind?: unknown; plugin?: unknown }
-  if (entry.kind === 'agent-instructions') return true
+  if (typeof entry.kind !== 'string') return false
+  // 当前形态：kind 即生产者自有标识。
+  if (INJECT_KINDS.has(entry.kind)) return true
   if (entry.kind === 'skill-catalog') return true
   if (entry.kind === 'subagent-settled') return true // 后台子代理结束/转述通知（高频）
+  // 旧 wrapper 形态：kind 'plugin' + plugin 名（历史行兼容）。
   if (entry.kind === 'plugin' && typeof entry.plugin === 'string') return INJECT_PLUGINS.has(entry.plugin)
   return false
 }

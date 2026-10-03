@@ -130,10 +130,43 @@ subagent 验收即全部命中）。用普通 `subagent`（无种子）或 GUI �
 | Models 出现内部提供方行 | 目录用于 settings allowlist；中文界面的 DOM 隐藏效果可能未加载，刷新 bundle |
 | 修改后 UI 不刷新 | 检查 store 是否在 scope 通知时返回新的绑定对象引用 |
 | `system` 不注入 | 检查 `systemPrompt` 服务和 assemble 包装警告 |
-| `user` 重复或缺失 | 检查 source/form、会话 surface 去重和 `agent/pre-step` 决策 |
+| `user` 重复或缺失 | 检查 source/form、会话 surface 去重和 `agent/pre-step` 决策；DSH 0.1.7 起自身消息的 `source.kind` 是 `plugin:deepseek-harness-zh_pro`，去重同时兼容旧 `kind:'plugin'` 形态 |
 | 临时热装时报重复注册 | 确认 `dsh-zh-hot` 没有注册 settings 或 pre-step 监听 |
 
 真实模型请求仍是主机提示词变更的最终验收；语法检查不能覆盖全部运行时服务形状。
+
+## 开启提示词注入后「每一轮都失败」（producer-owned source kind）
+
+**症状**：DSH 0.1.7 起，只要把提示词注入目标设为 `user`（首用户提示词）并开启开关，
+本轮就失败：
+
+```
+本轮运行失败 format v4 message requires a producer-owned source kind
+```
+
+底层为 `SessionFormatError: format v4 message requires a producer-owned source kind`。
+
+**原因**：会话格式 v4 要求消息 `source.kind` 是「生产者自有」的非空字符串，且**显式拒绝
+`'plugin'`**（`@deepseek-ai/dsh-session-format-v3-to-v4` 的 `source()`）。`v3 → v4` 迁移
+**只重写已落盘的历史**，实时新产出的消息不过迁移、直接过 v4 准入——所以插件只要还在实发
+`kind:'plugin'`，消息一进会话就被拒，表现为「启动、开会话、发消息都正常，一到本轮就失败」。
+
+**处理**：本修复后写入侧发 `kind: 'plugin:<包名>'`（与内核迁移对未知插件名合成的形态一致），
+并去掉 `plugin` 字段；读取侧同时认当前形态与旧 wrapper 形态。**0.9.5 及更早版本发的是旧写法**，
+在该版本上遇到本错误时升级插件即可，不需要卸载插件或回退 DSH。
+
+**自检**：用内核自己的断言过一遍产出消息，避免自造规则造成误判：
+
+```js
+import { assertV4RowAdmission } from '@deepseek-ai/dsh-session-format-v3-to-v4'
+assertV4RowAdmission(row) // 抛 producer-owned source kind 即为命中
+```
+
+**同源隐患**：`context-locale.ts` 的注入消息识别按 source 白名单工作。0.1.7 起官方注入的
+kind 已从 `kind:'plugin'` + `plugin:<名>` 变成生产者自有 kind（如
+`@deepseek-ai/dsh-system-prompt` → `runtime-context`、`compact` → `compact-checkpoint`），
+只认旧形态会让「上下文注入中文化」**静默失效**（不报错、只是不再本地化）。识别代码必须
+两种形态都认。
 
 ## 开关关闭但新会话仍按旧值生效
 

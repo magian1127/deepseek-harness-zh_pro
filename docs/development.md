@@ -605,10 +605,24 @@ Host 半边的热通道现状（2026-09 起，`hot-reload.ts` + `esm-cache.ts`�
   中文（workspace-write 的动态路径用正则提取拼入）。改写发生在渲染前，快照投影
   两次渲染得到同一中文文本，`RuntimeContextProjection` 的 retained 比较稳定、不重复注入。
 - **注入消息**：`agent/pre-step` 监听在 decision.messages append 进会话之前做行级模板
-  替换（整行锚定正则 + 捕获组重建动态值），按 source 白名单（`agent-instructions` /
-  `skill-catalog` / `user-approval` / `compact` / `@deepseek-ai/dsh-system-prompt`）识别
-  官方注入；source 与 id 原样保留——agent-instructions 的基线/变更去重、skill 目录
-digest、runtime-context 投影归属全部由 source 驱动。
+  替换（整行锚定正则 + 捕获组重建动态值），按 source 白名单识别官方注入
+  （`agent-instructions` / `skill-catalog` / `user-approval` / `compact-checkpoint` /
+  `runtime-context` / `plan-mode` / `cordis-host-runner` / `tool-cordis` / `schedule` /
+  `subagent-settled`）；source 与 id 原样保留——agent-instructions 的基线/变更去重、
+  skill 目录 digest、runtime-context 投影归属全部由 source 驱动。
+
+**source.kind 的两代形态（DSH 0.1.7 起必读）**：会话格式 v4 要求消息 `source.kind` 是
+「生产者自有」的非空字符串，且**显式拒绝 `'plugin'`**——`v3 → v4` 迁移只重写**已落盘**的
+历史，实时新消息直接过 v4 准入，用旧写法会让整轮运行抛
+`SessionFormatError: format v4 message requires a producer-owned source kind`。
+内核把历史 v3 的 `kind:'plugin'` + `plugin:<名>` 迁移为生产者自有 kind
+（`@deepseek-ai/dsh-session-format-v3-to-v4` 的 `producerKind()`：已知一方名保留或改名，
+未知插件合成 `plugin:<完整原名>`）。本插件因此：
+
+- **写入侧**（`chinese-prompt.ts`）发 `kind: 'plugin:<包名>'`，与迁移对未知插件合成的形态
+  一致，历史与新消息的 kind 因此统一；不再写 `plugin` 字段。
+- **读取侧**（`isOwnMessage` 与 `context-locale` 的 `isDshInjection`）两种形态都认
+  （当前自有 kind 优先，兼容旧 wrapper），否则升级后老会话的注入会漏过、功能静默失效。
 
 **链序是本模块的生死线**：Cordis waterfall **先注册的监听器在外层**。zh_pro 晚于核心
 注入器注册，默认落在最内层——其 `next()` 直达 executor，官方注入发生在更外层，

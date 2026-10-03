@@ -116,9 +116,21 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
 
     // 注入上下文消息：只在模型真正开始新一步前插入，并复用 agent-instructions
     // 的「插到最后一个 claimed 消息之后」位置，保证用户消息仍在最前。
+    //
+    // source.kind 兼容两代形态（DSH 0.1.7 起会话格式 v4 要求 kind 是
+    // 「生产者自有」的非空字符串，且显式拒绝 'plugin'；实时新消息不过迁移，
+    // 用旧写法会每轮抛 SessionFormatError）：
+    // - 当前：`plugin:<包名>`——与内核迁移对未知插件名合成的形态一致
+    //   （@deepseek-ai/dsh-session-format-v3-to-v4 的 producerKind()），
+    //   因此历史迁移后的 kind 与新消息一致；
+    // - 历史：`kind: 'plugin'` + `plugin: <包名>`（0.1.6 及更早落盘的行）。
+    const OWN_KIND = `plugin:${PKG}`
     const isOwnMessage = function (message) {
       const source = message?.source
-      return source?.kind === 'plugin' && source.plugin === PKG && source.form === 'notice'
+      if (source === null || typeof source !== 'object') return false
+      if (source.form !== 'notice') return false
+      if (source.kind === OWN_KIND) return true
+      return source.kind === 'plugin' && source.plugin === PKG
     }
     const textOfMessage = function (message) {
       const block = message?.content?.[0]
@@ -138,8 +150,8 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
         id: randomUUID(),
         content: [{ type: 'text', text: state.text }],
         source: {
-          kind: 'plugin',
-          plugin: PKG,
+          // 生产者自有 kind（见 isOwnMessage 注释）：不带 plugin 字段。
+          kind: `plugin:${PKG}`,
           form: 'notice',
           summary: `提示词注入：${summary}`,
         },
