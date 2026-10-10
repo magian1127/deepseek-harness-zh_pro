@@ -463,6 +463,24 @@ function installChineseEnhance(ctx) {
         }
         return s
       }
+      // 表头识别：披露行本身、以及任何「包含披露行」的包裹层都算表头。
+      // 只按属性名排除会随上游包裹层级变化而失效，因此以「是否含披露行」为
+      // 结构判据兜底。
+      const isThinkHeader = function (child) {
+        if (typeof child.hasAttribute === 'function'
+          && (child.hasAttribute('data-disclosure-row') || child.hasAttribute('data-disclosure-header'))) return true
+        if (typeof child.querySelector !== 'function') return false
+        try {
+          return child.querySelector('[data-disclosure-row]') !== null
+        } catch {
+          return false
+        }
+      }
+      // 思考正文识别：[data-open]（DisclosureRow 根）下第一个「非表头、非本插件
+      // 注入」的元素即正文。上游 2026-10-08（1f87f2561d）在 [data-open] 与
+      // [data-disclosure-row] 之间插入了 data-disclosure-header 包裹层（ReasoningRow
+      // 借它把表头做成 sticky），只排除 data-disclosure-row 会把表头误当正文——
+      // 表头行数恒为 1，永远不超过上限，折叠、滚动条与「再展开」按钮全部消失。
       const thinkBodyDiv = function (root) {
         if (root === null || typeof root.querySelector !== 'function') return null
         const open = root.querySelector('[data-variant="think"] [data-open]')
@@ -470,7 +488,7 @@ function installChineseEnhance(ctx) {
         let child = open.firstElementChild
         while (child !== null) {
           if (typeof child.hasAttribute === 'function'
-            && !child.hasAttribute('data-disclosure-row')
+            && !isThinkHeader(child)
             && !child.hasAttribute(THINK_CTRL_ATTR)
             && !child.hasAttribute(THINK_LIVE_ATTR)) return child
           child = child.nextElementSibling

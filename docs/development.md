@@ -255,6 +255,15 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
   **CSS 裁剪**：正文全文保持不动，`max-height + overflow:hidden + scrollTop` 底/顶对齐显示最后/前
   N 行（行高用 `getComputedStyle` 探测，流式每帧把 scrollTop 对齐到底部）。自定义按钮作为正文的
   **相邻兄弟**注入并打上标记属性，正文扫描时跳过它。
+- **正文识别要按结构判据，不要枚举属性名**：思考正文是 `[data-open]`（DisclosureRow 根）下
+  第一个「非表头、非本插件注入」的元素。上游 2026-10-08（`1f87f2561d`）在 `[data-open]` 与
+  `[data-disclosure-row]` 之间插入了 `data-disclosure-header` 包裹层（ReasoningRow 借它把表头
+  做成 sticky），当时只排除 `data-disclosure-row`，于是**表头被当成正文**：表头行数恒为 1，
+  永远不超过上限 → 折叠、滚动条、「再展开」按钮全部消失（真实症状：思考会自动展开，但没有滚动条）。
+  现在表头判据是「自身带 `data-disclosure-row`/`data-disclosure-header`，**或子树内含披露行**」，
+  上游再套一层匿名包裹层也不会复发。上游 DOM 契约见 `packages/client/ui-primitives/src/DisclosureRow.tsx`
+  与 `ui-chat/src/client/chat/ReasoningRow.tsx`；回归在 `verify-pairs.cts` 的「新版 DisclosureRow 结构」
+  与「嵌套表头包裹层」两组。
 - **React 条件渲染会卸载正文元素**：思考块的展开/收起是 `{open && children}`，收起时正文元素连同
   挂在它身上的自定义属性一起销毁。需要跨折叠/展开保留的状态（如「用户已点展开全部」）要放在
   **不会被卸载的祖先节点**上（如思考块根节点 `data-variant="think"`），而不是正文元素。

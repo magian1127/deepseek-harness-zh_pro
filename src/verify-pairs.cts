@@ -1193,6 +1193,77 @@ check(scrollBody.__dshZhControl !== undefined, true, '展开模式 切回按钮�
 check(scrollBody.style.overflowY, '', '展开模式 按钮模式无滚动条样式残留')
 injectedThinkRoots = []
 
+// ---- 上游新版 DisclosureRow 结构：data-disclosure-header 表头包裹层 ----
+// 上游 2026-10-08（1f87f2561d「fix(web): simplify reasoning translation controls」）
+// 在 DisclosureRow 的 [data-open] 与 [data-disclosure-row] 之间插入了
+// data-disclosure-header 包裹层（ReasoningRow 借它做 sticky 表头）。正文识别必须
+// 跳过这一层：否则表头被当成正文，其行数恒为 1 → 永不折叠，「默认展开行数」的裁剪、
+// 滚动条与「再展开」按钮全部消失（真实 GUI 症状：会自动展开，但没有滚动条）。
+const newHeaderWrap = makeFakeEl()
+newHeaderWrap.setAttribute('data-disclosure-header', '')
+const newHeaderRow = makeFakeEl()
+newHeaderRow.setAttribute('data-disclosure-row', '')
+newHeaderWrap.appendChild(newHeaderRow)
+const newBody = makeFakeEl()
+const newOpen = makeFakeEl()
+newOpen.setAttribute('data-open', '')
+newOpen.appendChild(newHeaderWrap)
+newOpen.appendChild(newBody)
+// 手写 sibling 链：makeFakeEl 的 appendChild 只维护 firstElementChild 与 nextSibling。
+newHeaderWrap.nextElementSibling = newBody
+const newRoot = makeFakeEl()
+newRoot.setAttribute('data-variant', 'think')
+newRoot.setAttribute('data-state', 'ok')
+newRoot.querySelector = function (selector) {
+  return selector === '[data-variant="think"] [data-open]' ? newOpen : null
+}
+injectedThinkRoots = [newRoot]
+newBody.textContent = Array.from({ length: 25 }, function (_, i) { return 'n ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(shownOf(newBody), 20, '新版 DisclosureRow 结构 折叠为 20 行')
+check(newBody.style.maxHeight, '480px', '新版 DisclosureRow 结构 max-height 为 20 行')
+check(newBody.scrollTop, 120, '新版 DisclosureRow 结构 latest 方向滚动到底')
+check(newBody.getAttribute('data-dsh-zh-think'), 'clamped', '新版 DisclosureRow 结构 标记折叠态')
+check(newBody.__dshZhControl !== undefined, true, '新版 DisclosureRow 结构 显示「再展开」按钮')
+check(newHeaderWrap.getAttribute('data-dsh-zh-think'), null, '新版 DisclosureRow 结构 表头包裹层不被当作正文（无折叠标记）')
+check(newHeaderWrap.__dshZhThink === undefined, true, '新版 DisclosureRow 结构 表头包裹层无正文折叠状态')
+// 再套一层匿名包裹层（无任何 data-disclosure-* 属性）：靠「是否含披露行」的结构
+// 判据识别为表头，避免上游再次加层时复发同类失效。
+const anonWrap = makeFakeEl()
+anonWrap.querySelector = function (selector) { return selector === '[data-disclosure-row]' ? newHeaderRow : null }
+const anonHeaderWrap = makeFakeEl()
+anonHeaderWrap.setAttribute('data-disclosure-header', '')
+anonHeaderWrap.appendChild(anonWrap)
+const anonBody = makeFakeEl()
+const anonOpen = makeFakeEl()
+anonOpen.setAttribute('data-open', '')
+anonOpen.appendChild(anonHeaderWrap)
+anonOpen.appendChild(anonBody)
+anonHeaderWrap.nextElementSibling = anonBody
+const anonRoot = makeFakeEl()
+anonRoot.setAttribute('data-variant', 'think')
+anonRoot.setAttribute('data-state', 'ok')
+anonRoot.querySelector = function (selector) {
+  return selector === '[data-variant="think"] [data-open]' ? anonOpen : null
+}
+injectedThinkRoots = [anonRoot]
+anonBody.textContent = Array.from({ length: 30 }, function (_, i) { return 'a ' + (i + 1) }).join('\n')
+fakeObserverCbs[0].cb(undefined)
+check(shownOf(anonBody), 20, '嵌套表头包裹层 仍识别出正文并折叠为 20 行')
+check(anonBody.style.maxHeight, '480px', '嵌套表头包裹层 max-height 为 20 行')
+check(anonBody.__dshZhControl !== undefined, true, '嵌套表头包裹层 显示「再展开」按钮')
+injectedThinkRoots = []
+// 滚动模式：正文限定高度并自带滚动条（用户报告失效的那一项）。
+injectedThinkRoots = [newRoot]
+if (modeSelect !== null) modeSelect.props.onChange({ target: { value: 'scroll' } })
+fakeObserverCbs[0].cb(undefined)
+check(shownOf(newBody), 20, '新版 DisclosureRow 结构 滚动模式折叠为设置行数')
+check(newBody.style.maxHeight, '480px', '新版 DisclosureRow 结构 滚动模式高度为 20 行')
+check(newBody.style.overflowY, 'auto', '新版 DisclosureRow 结构 滚动模式正文自带滚动条')
+if (modeSelect !== null) modeSelect.props.onChange({ target: { value: 'button' } })
+fakeObserverCbs[0].cb(undefined)
+injectedThinkRoots = []
+
 // 结束思考块夹具：后续 pass（英文还原/卸载）不应再扫描该夹具。
 injectedThinkRoots = []
 

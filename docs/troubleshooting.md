@@ -297,6 +297,24 @@ git ls-files bin/dsh-zh.mjs
 
 DSH profile 自己安装的 `dshmarket` 与本项目依赖属于不同范围，不应把 profile 依赖写进本仓库。
 
+## 思考块会自动展开，但没有滚动条 / 「再展开」按钮（上游 DisclosureRow 加了表头包裹层）
+
+**症状**：`thinkingAuto` 的自动展开照常工作，但「默认展开行数」失效——长思考展开后不再裁剪为
+20 行、滚动模式没有滚动条、按钮模式也不出现「再展开」；`thinkMaxLines` 设成任何值都一样。
+
+**原因（2026-10-10 修复）**：上游 2026-10-08（`1f87f2561d`「fix(web): simplify reasoning translation
+controls」）在 `DisclosureRow` 的 `[data-open]` 与 `[data-disclosure-row]` 之间插入了
+`data-disclosure-header` 包裹层（ReasoningRow 借它把表头做成 `position:sticky`）。插件识别思考正文
+时只排除了 `data-disclosure-row`，于是把**表头**当成正文：表头 `textContent` 恒为 1 行，永远不超过
+上限 → `total <= max` 直接走「无需折叠」分支，静默什么都不做（无报错）。
+
+**判据**：`lib/client.js` 里 `thinkBodyDiv` 是否排除 `data-disclosure-header`（或表头判据是否为
+「自身带 `data-disclosure-row`/`data-disclosure-header`，或子树内含披露行」）。回归见
+`verify-pairs.cjs` 的「新版 DisclosureRow 结构」「嵌套表头包裹层」两组。
+
+**修复后无需重启**：Client 半边由 `dsh-client-hmr` 每 500 ms 轮询自动换血，新 bundle 在页面内替换；
+重挂时旧 Fiber 会 `restoreAllThinkLines` 还原、新 Fiber 立即跑一次全量 pass，已渲染的思考块随之重新折叠。
+
 ## 校验全绿但运行时报未定义变量
 
 `node --check` 只验证语法，不执行标识符求值。常量改名后必须全局搜索旧名和新名；主机路径还要
