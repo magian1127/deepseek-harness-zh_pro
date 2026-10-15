@@ -228,6 +228,21 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
    **判定标准是「由谁注册」（`@deepseek-ai/*` 即官方），不是「包名里有没有 experimental」。**
    同一次还发现 `browser-use:stagehand-native` 与 `computer-use:cua-driver-native` 未覆盖
    （官方 experimental 包，当前 profile 未挂载，暂不收录）。
+   2026-10-15（0.2.1-alpha.3）再次执行：新增覆盖 `tool:read` 段落改写（`cat, sed, head, or
+   tail`）；`harness:source` / `app:web-surface` 变为**变体列表**（0.2.1 把路径 / URL 从
+   段落搬进同名 context，旧段落形态仍可能被老会话持有）；审计脚本输出里
+   `tool:subagent:depth` / `tool:subagent_fork:depth` 两个 context 名会被报为未覆盖，
+   属预期——它们按内容正则（`DEPTH_RE`）分派，不按注册名。
+
+7. **核对 contexts 的渲染链路（0.2.1 起的新失败模式）**：`assemble` 返回后对
+   `assembly.contexts` 的改写**不再可靠**——`agent-loop` 在每次请求前调用
+   `systemPrompt.refreshContext(assembly, …)`，按注册 provider 的原文重建 contexts，
+   再交给 `renderContextSections` 渲染快照。因此 contexts 翻译必须落在
+   `agent/pre-step` 对最终快照消息的重译上（`localizeSnapshotBody`：按 `\n\n` 分块，
+   逐块匹配动态规则与逐字表）。判定方法：新会话首轮快照里 contexts 仍是英文即此因
+   （本插件 0.1.7 时代的 assemble 改写路径在 0.2.1 下静默失效，`npm test` 不覆盖）。
+   同时注意快照新增的 context：`working-directory:current`（required）、`team:identity`
+   （Agent Teams 会话）、`harness:source` / `app:web-surface` 的值形态。
 
 ## DOM 文本层
 

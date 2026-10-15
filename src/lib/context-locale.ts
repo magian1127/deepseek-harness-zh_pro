@@ -10,13 +10,15 @@
 // 覆盖两类注入面（只处理 DSH 官方注入，用户消息与本插件自身消息绝不动）：
 //
 // 1) runtime-context 快照正文（systemPrompt contexts：文件策略、审批策略、
-//    子代理委派声明）：通过共享 assemble 管线在官方渲染前把 assembly.contexts
-//    的文本换成中文。快照投影（RuntimeContextProjection）用 retained 文本与
-//    下一次官方渲染比较，两次渲染都得到同一中文文本 → 比较相等、不重复注入。
-//    快照头行（"Current runtime context. ..." 与 CLEARED 行）由 agent-loop 硬编码
-//    拼接，官方渲染侧永远是英文：按用户需求在行级规则中翻译它，代价是投影比较
-//    每步失配、每步注入一条替换快照（surface 替换语义，模型输入不膨胀，但会话
-//    日志每步 +1 条快照事件）——这是翻译头部的结构性代价，文档已说明。
+//    子代理委派声明）：**DSH 0.2.1 起正文翻译改在 agent/pre-step 对最终
+//    快照消息按段重译**（localizeSnapshotBody）——0.2.1 的 agent-loop 在
+//    每次请求前用 systemPrompt.refreshContext 按注册 provider 原文重建
+//    assembly.contexts 再渲染快照，assemble 后对 contexts 的改写会在这一步
+//    被覆盖（0.1.7 时代的 assemble 改写路径已静默失效，属升版回归）。
+//    快照头行（"Current runtime context. ..." 与 CLEARED 行）由 joinContextSections
+//    硬编码拼接，官方渲染侧永远是英文：按用户需求在行级规则中翻译它，代价是
+//    投影比较每步失配、每步注入一条替换快照（surface 替换语义，模型输入不
+//    膨胀，但会话日志每步 +1 条快照事件）——这是翻译头部的结构性代价，文档已说明。
 //
 // 2) 注入消息（agent/pre-step 的 decision.messages）：工作区指令帧
 //    （AGENTS.md system-reminder）、skill 目录帧、审批策略切换通知、压缩
@@ -43,8 +45,11 @@ import type { HostContext } from './types.js'
 
 // ============ runtime-context 快照正文（systemPrompt contexts）中文版 ============
 // 键为 context 注册名；值为接收官方英文文本、返回中文（未匹配时返回原文）的
-// 函数。英文键逐字取自部署版源码（dsh-sandbox-policy / dsh-user-approval /
-// dsh-subagent）。未收录的 context（未来新增或第三方注册）返回原文。
+// 函数。英文键逐字取自部署版源码。未收录的 context（未来新增或第三方注册）
+// 返回原文。
+// 2026-10-15 对齐 0.2.1-alpha.3：新增 working-directory:current（required，
+// 每个会话都有）、team:identity（Agent Teams 会话）、tool:subagent:depth
+// （深度用尽时）。后两者含动态值，用正则重建。
 const SANDBOX_READ_ONLY_EN = 'Current DSH file policy: read-only. Any available operation enforced by the DSH file sandbox cannot modify files in the standing mode. Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns.'
 const SANDBOX_READ_ONLY_ZH = '当前 DSH 文件策略：read-only。在现有模式下，DSH 文件沙箱强制执行的任何可用操作都不能修改文件。不要仅因该策略而拒绝必要的修改：正常尝试可用工具，并遵循其返回的任何拒绝与升级指引。'
 const SANDBOX_DANGER_EN = 'Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.'
@@ -60,6 +65,16 @@ const DELEGATION_EN = 'You are a delegated subagent: your permission scope was f
   + 'When the task needs access beyond that scope, do not retry the denied operation; state the '
   + 'limitation in your reply so the delegating agent can handle it.'
 const DELEGATION_ZH = '你是被委派的子代理：你的权限范围在启动时已固定，无法在本会话内扩大——需要审批的操作会被自动拒绝。当任务需要超出该范围的访问时，不要重试被拒绝的操作；在回复中说明该限制，让委派方处理。'
+// working-directory:current（required，动态路径 JSON 字符串）。
+const WORKDIR_RE = /^Current working directory: (".+")\.$/
+// harness:source / app:web-surface 的 context 值（0.2.1 起路径与 URL 搬到这里）。
+const HARNESS_SOURCE_CTX_RE = /^Current DeepSeek Harness implementation checkout: (".+")\.$/
+const WEB_SURFACE_CTX_RE = /^Current DeepSeek Harness Web GUI URL: (".+")\.$/
+// team:identity（Lead / teammate 两种形态，动态名字）。
+const TEAM_LEAD_RE = /^You are the Team Lead named "(.+?)"\.\nUse list_agents\(\{\}\) to find your teammates and their names\.\nTo message another teammate, use send_message\(\{ target: "<teammate name>", message: "\.\.\." \}\)\.$/
+const TEAM_MEMBER_RE = /^You are teammate "(.+?)"\.\nYour Team Lead is named "lead"\.\nTo message your Team Lead, use send_message\(\{ target: "lead", message: "\.\.\." \}\)\.\nUse list_agents\(\{\}\) to find your teammates and their names\.\nTo message another teammate, use send_message\(\{ target: "<teammate name>", message: "\.\.\." \}\)\.$/
+// tool:subagent:depth（深度用尽，动态 toolName 与数字）。
+const DEPTH_RE = /^Delegation depth for `(.+?)`: current (\d+), maximum (\d+), remaining levels 0\. Do not call `(.+?)` at this depth; carry out the work directly\.$/
 
 const CONTEXT_ZH: Record<string, (text: string) => string> = {
   'sandbox:policy': function (text: string): string {
@@ -77,7 +92,62 @@ const CONTEXT_ZH: Record<string, (text: string) => string> = {
   'subagent:delegation': function (text: string): string {
     return text === DELEGATION_EN ? DELEGATION_ZH : text
   },
+  'working-directory:current': function (text: string): string {
+    const m = text.match(WORKDIR_RE)
+    return m === null ? text : `当前工作目录：${m[1]}。`
+  },
+  'team:identity': function (text: string): string {
+    const lead = text.match(TEAM_LEAD_RE)
+    if (lead !== null) {
+      return `你是名为 "${lead[1]}" 的 Team Lead。\n用 list_agents({}) 查找你的 teammates 及其名字。\n要向另一个 teammate 发消息，使用 send_message({ target: "<teammate 名字>", message: "..." })。`
+    }
+    const member = text.match(TEAM_MEMBER_RE)
+    if (member !== null) {
+      return `你是 teammate "${member[1]}"。\n你的 Team Lead 名为 "lead"。\n要向你的 Team Lead 发消息，使用 send_message({ target: "lead", message: "..." })。\n用 list_agents({}) 查找你的 teammates 及其名字。\n要向另一个 teammate 发消息，使用 send_message({ target: "<teammate 名字>", message: "..." })。`
+    }
+    return text
+  },
+  // 0.2.1 起 harness:source / app:web-surface 的路径与 URL 从段落搬进同名
+  // context（段落文本改为「值由 runtime context 给出」）。
+  'harness:source': function (text: string): string {
+    const m = text.match(HARNESS_SOURCE_CTX_RE)
+    return m === null ? text : `当前 DeepSeek Harness 实现检出目录：${m[1]}。`
+  },
+  'app:web-surface': function (text: string): string {
+    const m = text.match(WEB_SURFACE_CTX_RE)
+    return m === null ? text : `当前 DeepSeek Harness Web GUI URL：${m[1]}。`
+  },
 }
+
+// 快照正文重译使用的「动态 context」规则（多行文本，不进 CONTEXT_ZH_VALUES
+// 逐字表；在 localizeSnapshotBody 按行前缀识别后整段正则重建）。
+// 注：`tool:subagent:depth` / `tool:subagent_fork:depth` 两个 context 名不在
+// CONTEXT_ZH 里按名收录——它们的注册名随 toolName 配置变化，且文本是动态的，
+// 因此统一由下面的 DEPTH_RE 按内容识别（覆盖审计脚本会把这两个名字报为
+// 「未覆盖」，属预期：注册名匹配不是它们的分派方式）。
+const SNAPSHOT_DYNAMIC_CONTEXT_RULES: ReadonlyArray<{ test: RegExp; zh: (m: RegExpMatchArray) => string }> = [
+  {
+    // team:identity Lead 形态（多行）。
+    test: TEAM_LEAD_RE,
+    zh: function (m) {
+      return `你是名为 "${m[1]}" 的 Team Lead。\n用 list_agents({}) 查找你的 teammates 及其名字。\n要向另一个 teammate 发消息，使用 send_message({ target: "<teammate 名字>", message: "..." })。`
+    },
+  },
+  {
+    // team:identity teammate 形态（多行）。
+    test: TEAM_MEMBER_RE,
+    zh: function (m) {
+      return `你是 teammate "${m[1]}"。\n你的 Team Lead 名为 "lead"。\n要向你的 Team Lead 发消息，使用 send_message({ target: "lead", message: "..." })。\n用 list_agents({}) 查找你的 teammates 及其名字。\n要向另一个 teammate 发消息，使用 send_message({ target: "<teammate 名字>", message: "..." })。`
+    },
+  },
+  {
+    // tool:subagent:depth（深度用尽声明）。
+    test: DEPTH_RE,
+    zh: function (m) {
+      return `\`${m[1]}\` 的委派深度：当前 ${m[2]}，上限 ${m[3]}，剩余层级 0。不要在该深度调用 \`${m[4]}\`；直接亲自完成工作。`
+    },
+  },
+]
 
 /** 按 context 注册名把 assembly.contexts 的官方正文换成中文（未收录的保持原样）。 */
 function localizeContexts(assembly: unknown): void {
@@ -94,10 +164,106 @@ function localizeContexts(assembly: unknown): void {
   }
 }
 
+// ============ runtime-context 快照（0.2.1 refreshContext 回归修复） ============
+// DSH 0.2.1 起 agent-loop 在每次请求前用 systemPrompt.refreshContext 按注册
+// provider 的**原文**重建 assembly.contexts，再渲染快照——assemble 后对
+// contexts 的任何改写都会在这一步被覆盖（本插件 0.1.7 时代的「assemble
+// 改写 contexts」路径静默失效）。因此快照正文的翻译改在 agent/pre-step
+// 对最终快照消息做：按已知 context 的英文原文逐段识别并替换为中文，
+// 未识别的段落原样保留。头部/CLEARED 行沿用行级规则（LINE_RULES）。
+// 快照消息的结构：`Current runtime context. This snapshot supersedes …\n\n`
+// + 各 context 渲染文本以 `\n\n` 连接。段落的顺序与注册 order 一致，
+// 但翻译按内容匹配、不依赖顺序，未来插入新 context 也不会错位。
+
+/** 把一条 runtime-context 快照消息的正文按 CONTEXT_ZH 规则重译。
+ * 按 `\n\n` 分块（各 context 渲染文本之间的分隔；team:identity 等多行
+ * context 自身只含单行换行，不会被拆散）：每块先走 LINE_RULES 单行规则
+ * 与动态规则（team:identity / delegation depth），再按已知英文键逐字替换；
+ * 全部未命中时原样保留。 */
+function localizeSnapshotBody(text: string): string {
+  const blocks = text.split('\n\n')
+  let changed = false
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i]
+    // 动态 context 规则（多行正则整块匹配）。
+    let replaced: string | undefined
+    for (const rule of SNAPSHOT_DYNAMIC_CONTEXT_RULES) {
+      const m = block.match(rule.test)
+      if (m !== null) {
+        replaced = rule.zh(m)
+        break
+      }
+    }
+    if (replaced !== undefined && replaced !== block) {
+      blocks[i] = replaced
+      changed = true
+      continue
+    }
+    // 单行规则逐行（头部行与已知 context 单行正文）。
+    const lines = block.split('\n')
+    let blockChanged = false
+    for (let j = 0; j < lines.length; j += 1) {
+      const ruleHit = localizeLine(lines[j])
+      if (ruleHit !== lines[j]) {
+        lines[j] = ruleHit
+        blockChanged = true
+        continue
+      }
+      const direct = CONTEXT_ZH_VALUES.get(lines[j])
+      if (direct !== undefined) {
+        lines[j] = direct
+        blockChanged = true
+        continue
+      }
+      // workspace-write 含动态 workspaceRoot（JSON 字符串形式），正则重建。
+      const write = lines[j].match(SANDBOX_WRITE_RE)
+      if (write !== null) {
+        lines[j] = `当前 DSH 文件策略：workspace-write。DSH 文件沙箱强制执行的任何可用操作都可以修改会话工作区内的文件：${write[1]}。某些平台临时区域可能也可写。`
+        blockChanged = true
+        continue
+      }
+      // working-directory:current（动态路径 JSON 字符串）。
+      const wd = lines[j].match(WORKDIR_RE)
+      if (wd !== null) {
+        lines[j] = `当前工作目录：${wd[1]}。`
+        blockChanged = true
+        continue
+      }
+      // harness:source / app:web-surface 的 context 值（0.2.1 起）。
+      const hs = lines[j].match(HARNESS_SOURCE_CTX_RE)
+      if (hs !== null) {
+        lines[j] = `当前 DeepSeek Harness 实现检出目录：${hs[1]}。`
+        blockChanged = true
+        continue
+      }
+      const ws = lines[j].match(WEB_SURFACE_CTX_RE)
+      if (ws !== null) {
+        lines[j] = `当前 DeepSeek Harness Web GUI URL：${ws[1]}。`
+        blockChanged = true
+      }
+    }
+    if (blockChanged) {
+      blocks[i] = lines.join('\n')
+      changed = true
+    }
+  }
+  return changed ? blocks.join('\n\n') : text
+}
+
+/** CONTEXT_ZH 的「英文原文 → 中文」直查表（含 workspace-write 正则之外的
+ * 全部逐字键；workspace-write 用单独正则处理动态路径）。 */
+const CONTEXT_ZH_VALUES = new Map<string, string>([
+  [SANDBOX_READ_ONLY_EN, SANDBOX_READ_ONLY_ZH],
+  [SANDBOX_DANGER_EN, SANDBOX_DANGER_ZH],
+  [APPROVAL_NEVER_EN, APPROVAL_NEVER_ZH],
+  [APPROVAL_ASK_EN, APPROVAL_ASK_ZH],
+  [DELEGATION_EN, DELEGATION_ZH],
+])
+
 // ============ 注入消息行级规则（整行锚定，捕获组重建动态值） ============
 // 英文键逐字取自部署版源码（dsh-agent-instructions/render.ts、dsh-tool-skill、
 // dsh-user-approval、dsh-compaction-basic/summarizer.ts）。runtime-context 的
-// 头行与 CLEARED 行**故意不在表内**（见文件头注释第 1 点）。
+// 头行与 CLEARED 行在表内（按用户需求翻译头部，代价见文件头注释第 1 点）。
 interface LineRule {
   test: RegExp
   zh: (m: RegExpMatchArray) => string
@@ -238,6 +404,11 @@ const LINE_RULES: LineRule[] = [
     zh: function () { return '用户已将本会话切换回默认模式。' },
   },
   // ---- 动态 Cordis 插件激活/失败通知（cordis-host-runner） ----
+  // 0.2.1 起 identity 统一为 `${pluginId}/${packageId} (${pluginRunId})`（旧版
+  // 只有单个 token）；首行正则用 (.+?) 仍匹配，但「后续行动句」整段重写：
+  // 旧版让模型「Inspect the failed Package… 自主重试激活」，新版改为
+  // 「Report … to the user; the definition can be managed/stopped through the
+  // Cordis panel」——旧行动句规则已成死规则（已删），补入新句规则。
   {
     test: /^Cordis (run|update) (.+?) completed successfully\. currentPackageId is (.+?)\. Continue using the running Plugin\.$/,
     zh: function (m) { return `Cordis ${m[1]} ${m[2]} 已成功完成。currentPackageId 为 ${m[3]}。继续使用正在运行的 Plugin。` },
@@ -247,36 +418,38 @@ const LINE_RULES: LineRule[] = [
     zh: function (m) { return `用户拒绝了 Cordis ${m[1]} ${m[2]}。除非用户要求，不要再次请求同一激活。` },
   },
   {
-    test: /^Cordis (run|update) (.+?) failed after cordis_run returned (awaiting-approval|starting): (.*)$/,
-    zh: function (m) { return `Cordis ${m[1]} ${m[2]} 在 cordis_run 返回 ${m[3]} 后失败：${m[4]}` },
+    // 0.2.1：`failed after the runner returned <status>:`（旧版 `failed after
+    // cordis_run returned <status>:`）。
+    test: /^Cordis (run|update) (.+?) failed after the runner returned (awaiting-approval|starting): (.*)$/,
+    zh: function (m) { return `Cordis ${m[1]} ${m[2]} 在 runner 返回 ${m[3]} 后失败：${m[4]}` },
   },
   {
-    test: /^Inspect the failed Package, correct it on the same Plugin when needed, and retry the activation autonomously\.$/,
-    zh: function () { return '检查失败的 Package，需要时在同一 Plugin 上修正并自主重试激活。' },
+    test: /^Report the failure to the user; the definition can be managed through the Cordis panel\.$/,
+    zh: function () { return '把失败报告给用户；该定义可以通过 Cordis 面板管理。' },
   },
   {
     test: /^Cordis Client UI (.+?) failed while rendering Slot "(.+?)" after activation\.$/,
     zh: function (m) { return `Cordis Client UI ${m[1]} 在激活后渲染 Slot "${m[2]}" 时失败。` },
   },
   {
-    test: /^Inspect the failed Package, fix the Client code by defining a new Package on the same Plugin, and activate that Package autonomously with cordis_run mode:"update"\.$/,
-    zh: function () { return '检查失败的 Package，在同一 Plugin 上定义新 Package 修正 Client 代码，并用 cordis_run mode:"update" 自主激活该 Package。' },
+    test: /^Report the Client render failure to the user; the definition can be stopped through the Cordis panel\.$/,
+    zh: function () { return '把 Client 渲染失败报告给用户；该定义可以通过 Cordis 面板停止。' },
   },
   {
     test: /^Cordis Host handler (.+?) failed when the Client called host\.call\((.+)\)\.$/,
     zh: function (m) { return `Cordis Host handler ${m[1]} 在 Client 调用 host.call(${m[2]}) 时失败。` },
   },
   {
-    test: /^The Plugin remains running\. Inspect this Package, correct the Host code on the same Plugin, and activate the new Package autonomously with cordis_run mode:"update"\. If the handler needs a Service, either declare that Service in the returned Plugin inject list or read it with ctx\.get\(name\) and handle undefined\.$/,
-    zh: function () { return '该 Plugin 仍在运行。检查此 Package，在同一 Plugin 上修正 Host 代码并用 cordis_run mode:"update" 自主激活新 Package。如果 handler 需要 Service，请在返回的 Plugin inject 列表中声明它，或用 ctx.get(name) 读取并处理 undefined。' },
+    test: /^The Plugin remains running\. Report the Host handler failure to the user\. If the handler needs a Service, either declare that Service in the returned Plugin inject list or read it with ctx\.get\(name\) and handle undefined\.$/,
+    zh: function () { return '该 Plugin 仍在运行。把 Host handler 失败报告给用户。如果 handler 需要 Service，请在返回的 Plugin inject 列表中声明它，或用 ctx.get(name) 读取并处理 undefined。' },
   },
   {
     test: /^Cordis (Host|Client) guard rejected runtime code in (.+?) \((.+?)\) after activation\.$/,
     zh: function (m) { return `Cordis ${m[1]} guard 在激活后拒绝了 ${m[2]}（${m[3]}）的运行时代码。` },
   },
   {
-    test: /^The Plugin remains running\. Inspect this Package, define a corrected Package on the same Plugin, and activate it autonomously with cordis_run mode:"update"\.$/,
-    zh: function () { return '该 Plugin 仍在运行。检查此 Package，在同一 Plugin 上定义修正后的 Package，并用 cordis_run mode:"update" 自主激活它。' },
+    test: /^The Plugin remains running\. Report the guard rejection to the user; it can be stopped through the Cordis panel\.$/,
+    zh: function () { return '该 Plugin 仍在运行。把 guard 拒绝报告给用户；它可以通过 Cordis 面板停止。' },
   },
   {
     test: /^The user manually ran Cordis Plugin (.+?), Package (.+?), as (.+?)\. The activation succeeded; currentPackageId is (.+?)\.$/,
@@ -286,35 +459,12 @@ const LINE_RULES: LineRule[] = [
     test: /^The user manually ran Cordis Plugin (.+?)(?:, Package (.+?), as (.+?))?, but it failed: (.*)$/,
     zh: function (m) { return `用户手动运行了 Cordis Plugin ${m[1]}${m[2] !== undefined ? `（Package ${m[2]}，运行 ${m[3]}）` : ''}，但它失败了：${m[4]}` },
   },
-  // ---- @pluginId 引用注入（tool-cordis，创作模式） ----
-  {
-    test: /^The user explicitly referenced @(.+?)\. Use Package (.+?) as the base for this modification\.$/,
-    zh: function (m) { return `用户显式引用了 @${m[1]}。以 Package ${m[2]} 作为本次修改的基础。` },
-  },
-  {
-    test: /^Before modifying it, call cordis_inspect_self with pluginId="(.+?)" and packageId="(.+?)" to read the exact metadata and source\.$/,
-    zh: function (m) { return `修改前先用 pluginId="${m[1]}" 与 packageId="${m[2]}" 调用 cordis_inspect_self 读取确切的元数据与源码。` },
-  },
-  {
-    test: /^Use cordis_define with plugin\.kind="existing" and the original pluginId="(.+?)" to append an immutable Package\.$/,
-    zh: function (m) { return `用 plugin.kind="existing" 与原 pluginId="${m[1]}" 调用 cordis_define 追加不可变 Package。` },
-  },
-  {
-    test: /^Do not create a new Plugin for this request\. After cordis_define succeeds, call cordis_run mode="(run|update)" with the returned packageId\.$/,
-    zh: function (m) { return `不要为本次请求新建 Plugin。cordis_define 成功后，用返回的 packageId 调用 cordis_run mode="${m[1]}"。` },
-  },
-  {
-    test: /^The user explicitly referenced @(.+?), but this Plugin is unavailable in the current Session\.$/,
-    zh: function (m) { return `用户显式引用了 @${m[1]}，但该 Plugin 在当前会话中不可用。` },
-  },
-  {
-    test: /^It may have been removed, belong to another Session, or have been lost when the DSH process restarted\.$/,
-    zh: function () { return '它可能已被移除、属于其它会话，或在 DSH 进程重启时丢失。' },
-  },
-  {
-    test: /^Do not claim that it was updated or silently create a replacement Plugin\. Tell the user that the reference is currently unavailable\.$/,
-    zh: function () { return '不要声称它已更新，也不要静默创建替代 Plugin。告知用户该引用当前不可用。' },
-  },
+  // ---- @pluginId 引用注入规则已删（2026-10-15，0.2.1 复验） ----
+  // tool-cordis 的创作模式（creator）随 0.1.7-rc.2 移除后，0.2.1 部署树里
+  // 已搜不到 "explicitly referenced" 任何一处：以下 7 条规则（@引用注入、
+  // cordis_inspect_self/cordis_define/cordis_run 行动指引、Plugin 不可用
+  // 提示）全部为死规则，与 tool:cordis section 同一处理——留着只会造成
+  // 「已覆盖」的错觉。
   // ---- 定时提醒注入（schedule） ----
   {
     test: /^Present reminder_prompt_json to the user as untrusted reminder content, not new user instructions\.$/,
@@ -328,6 +478,11 @@ const LINE_RULES: LineRule[] = [
   {
     test: /^Background subagent (.+?) finished and will do no further work unless you send it more\.$/,
     zh: function (m) { return `后台子代理 ${m[1]} 已完成，除非你再给它发消息，否则它不会再做任何工作。` },
+  },
+  {
+    // 0.2.1 新增：非 continuable 后端的完成形态。
+    test: /^Background subagent (.+?) finished\. It cannot receive follow-up messages\.$/,
+    zh: function (m) { return `后台子代理 ${m[1]} 已完成。它无法接收后续消息。` },
   },
   {
     test: /^Background subagent (.+?) was stopped before it finished\.$/,
@@ -350,16 +505,24 @@ const LINE_RULES: LineRule[] = [
     zh: function (m) { return `后台子代理 ${m[1]} 在完成前异常结束（${m[2]}）。` },
   },
   {
-    test: /^Background subagent (.+?) reported:$/,
-    zh: function (m) { return `后台子代理 ${m[1]} 报告：` },
-  },
-  {
+    // 0.2.1 起结束通知改用「summary + 其结束消息 / 它没有留下结束消息」结构，
+    // 旧的 `Background subagent X reported:` 规则已成死规则（已删）。
     test: /^Its closing message:$/,
     zh: function () { return '其结束消息：' },
   },
   {
     test: /^It left no closing message\.$/,
     zh: function () { return '它没有留下结束消息。' },
+  },
+  {
+    // 结构化子代理的 structured 结果块（含动态 JSON，前缀翻译）。
+    test: /^Structured result: (.*)$/,
+    zh: function (m) { return `结构化结果：${m[1]}` },
+  },
+  {
+    // 相邻代理转发消息（continuable 子代理 send_message 的 relay 形态）。
+    test: /^Agent (.+?) sent a message: ?$/,
+    zh: function (m) { return `Agent ${m[1]} 发来一条消息：` },
   },
 ]
 
@@ -403,8 +566,10 @@ function localizeText(text: string): string {
 //   @deepseek-ai/dsh-system-prompt → kind 'runtime-context'（RENAMED_PRODUCERS）
 //   plan-mode               → kind 'plan-mode'
 //   cordis-host-runner      → kind 'cordis-host-runner'
-//   tool-cordis             → kind 'tool-cordis'
-//   schedule                → kind 'schedule'
+//   subagent（相邻代理转发）  → kind 'agent-message'
+//   subagent（结束通知）      → kind 'subagent-settled'
+//   tool-cordis             → kind 'tool-cordis'（0.2.1 起无 @pluginId 注入产出，
+//                             规则已删，kind 保留以兼容历史行）
 /** 当前生产者自有 kind（0.1.7+ 新产出的官方注入）。 */
 const INJECT_KINDS = new Set([
   'agent-instructions', // 工作区指令帧（workspaceContextMessage）
@@ -437,13 +602,18 @@ function isDshInjection(message: unknown): boolean {
   if (INJECT_KINDS.has(entry.kind)) return true
   if (entry.kind === 'skill-catalog') return true
   if (entry.kind === 'subagent-settled') return true // 后台子代理结束/转述通知（高频）
+  if (entry.kind === 'agent-message') return true // 相邻代理转发消息（relay）
   // 旧 wrapper 形态：kind 'plugin' + plugin 名（历史行兼容）。
   if (entry.kind === 'plugin' && typeof entry.plugin === 'string') return INJECT_PLUGINS.has(entry.plugin)
   return false
 }
 
-/** 替换一条注入消息中的英文 text 块（source 与 id 原样保留）。未变化时返回原消息。 */
+/** 替换一条注入消息中的英文 text 块（source 与 id 原样保留）。未变化时返回原消息。
+ * runtime-context 快照消息走 localizeSnapshotBody（整段重译，0.2.1 起正文
+ * 由 refreshContext 原文重建，行级模板盖不住 sandbox/approval 等多句正文）。 */
 function localizeMessage(message: unknown): unknown {
+  const source = (message as { source?: unknown } | undefined)?.source
+  const isSnapshot = (source as { kind?: unknown } | undefined)?.kind === 'runtime-context'
   const content = (message as { content?: unknown } | undefined)?.content
   if (!Array.isArray(content)) return message
   let changed = false
@@ -451,7 +621,7 @@ function localizeMessage(message: unknown): unknown {
     if (block === null || typeof block !== 'object') return block
     const entry = block as { type?: unknown; text?: unknown }
     if (entry.type !== 'text' || typeof entry.text !== 'string') return block
-    const zh = localizeText(entry.text)
+    const zh = isSnapshot ? localizeSnapshotBody(entry.text) : localizeText(entry.text)
     if (zh === entry.text) return block
     changed = true
     return { ...block, text: zh }
@@ -461,9 +631,11 @@ function localizeMessage(message: unknown): unknown {
 }
 
 /**
- * 装配「上下文注入中文化」：assemble 改写器中文化 runtime-context 正文，
- * pre-step 监听在注入消息进入会话历史前做行级替换。开关关闭或 regime 非
- * zh 时零改动；失败只 warn 一次，绝不阻断模型请求。
+ * 装配「上下文注入中文化」：pre-step 监听在注入消息（含 runtime-context
+ * 快照，0.2.1 起正文在 pre-step 按段重译）进入会话历史前做替换；assemble
+ * 改写器保留为 0.1.x 兼容路径（0.2.1 的 refreshContext 会用原文重建
+ * contexts、覆盖该路径的改写，主路径已让给 pre-step 重译）。开关关闭或
+ * regime 非 zh 时零改动；失败只 warn 一次，绝不阻断模型请求。
  */
 export function installContextLocale(ctx: HostContext): void {
   const state = getModelState()
@@ -477,7 +649,11 @@ export function installContextLocale(ctx: HostContext): void {
     warningShown = true
     warn(`上下文注入中文化失败（${where}），本次沿用原内容: ${error instanceof Error ? error.message : String(error)}`)
   }
-  // 1) runtime-context 正文：共享 assemble 管线，官方渲染前替换。
+  // 1) runtime-context 正文：0.1.x 兼容路径（assemble 后改写 contexts）。
+  //    DSH 0.2.1 起 agent-loop 每次请求前用 refreshContext 原文重建 contexts，
+  //    本路径的改写会被覆盖；主路径是下面 pre-step 的 localizeSnapshotBody
+  //    （对最终快照消息按段重译）。保留本路径覆盖 0.1.x 部署与未走
+  //    refreshContext 的 assemble 消费者。
   const systemPrompt = ctx.get('systemPrompt')
   let assembleReady = false
   if (systemPrompt === null || systemPrompt === undefined || typeof systemPrompt?.assemble !== 'function') {

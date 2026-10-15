@@ -130,8 +130,10 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
 默认关闭，存于 `settings.yaml` 命名空间 `dsh-zh`，与界面语言无关（同「提示词注入」）。
 开启后只改写**发往模型的请求内容**，不写会话历史、不注册模型工具：
 
-- `zhAgentPrompt`：四个默认代理（standard / ptc / minimal / cordis）在组装后按精确英文原文换成中文；保留 `{{model}}` / `{{cwd}}` 等动态占位符，自定义 persona 不匹配则原样保留。
+- `zhAgentPrompt`：默认代理（standard / ptc / minimal / cordis）在组装后按精确英文原文换成中文；保留 `{{model}}` / `{{cwd}}` 等动态占位符，自定义 persona 不匹配则原样保留。
+  DSH 0.2.1 起三个 web preset 的 persona 统一为同一句短文本（cordis 旧版长文 persona 已删除）；persona suffix 各 preset 均不再设置，`deployment:persona-suffix` 规则仅覆盖自定义部署显式配置的英文 suffix。
   同时替换系统级官方段落：`harness:identity`、`harness:source`、`app:web-surface`、`context:file-reference`、`ui:deliverable-file-references`。
+  `harness:source` 与 `app:web-surface` 各有两个变体：0.1.x 形态把检出路径 / GUI URL 内联在段落里（动态值提取后拼入译文），0.2.1 起这些值搬进了同名运行时上下文、段落文本改为「值由 runtime context 给出」——两种形态都能翻译，因此老会话已 admitted 的旧段落不会被漏掉。
 - `zhToolDesc`：注入模型请求的工具说明按工具名替换为**DSH 官方工具**的中文版本，同时把
     system prompt 里的官方工具指引段落（`tool:*` sections）替换为中文。段落覆盖：
     `tool:read` / `tool:write` / `tool:edit` / `tool:glob` / `tool:grep` / `tool:pwsh` /
@@ -158,7 +160,26 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
     默认描述、PTC 模式 `run_code` 的 TypeScript/Python 两语言描述；Agent Teams 的
     `send_message`/`list_agents`/`interrupt_agent` 与 subagent-control 的内置工具
     **重名但描述不同**，也走 flavor 分派，Team 会话与子代理会话各取对应译文。
+    对**动态拼接**的官方描述（`subagent` / `subagent_fork` 按 provider 是否
+    continuable、是否启用模型选择、是否有 route defaults 追加不同尾句；
+    `tool:subagent` / `tool:subagent_fork` 段落内嵌排序后的可见工具名列表）
+    改用**分段替换**：固定句式逐段换中文，随条件变化的段与动态工具名原样保留。
     实测覆盖 standard / ptc / minimal 与 cordis；上述官方段落均按匹配规则换中文；minimal 的 complete persona 仍只含中文 persona。
+
+**2026-10-15 对齐 DSH 0.2.1-alpha.3**：本次升版补齐的官方工具说明包括
+`create_worktree`、`working_directory`、`terminal_open`/`terminal_send`/`terminal_read`/
+`terminal_signal`/`terminal_close`/`terminal_list`、`session_search`/`session_event_search`/
+`session_trace`/`session_event_trace`/`session_event_read`、`schedule_create`/`schedule_list`/
+`schedule_update`/`schedule_delete`、`plugin_manager`、`list_mcp_resources`/
+`list_mcp_resource_templates`/`read_mcp_resource`（此前均整段英文）；同时按上游新原文
+重译了描述被改写的 `subagent`/`subagent_fork`（改为动态拼接：立即返回 id、continuable
+后端用 `send_message` 报告结果）、`send_message`/`interrupt_agent`/`list_agents`（内置短
+句式）、`ralph`、`wait_agent`（mailbox→message）、Team 版 `send_message`（去掉 durable）、
+`run_code` 两个语言 flavor、`tools:sdk` 的 TS/Python 模板（参数顺序改为
+`description`/`code`，输出条目改写）、`tool:read` 段落（`cat, sed, head, or tail`）、
+`team:policy`（同伴消息句与发送语义改写）、`plan:policy`（首句改为「用户通过
+exit_plan_mode 批准」）。第三方插件注册的工具（如 `dsh-codex-subscription` 的
+`codex_image_generate`）不纳入中文化匹配。
 
 **新会话生效、老会话不重新注入**：以会话是否产生过模型输出（`assistant/message`）
 判定新旧。会话首次模型请求时按当前开关状态锁定语言（中文或英文），锁定后开关翻转
@@ -184,24 +205,41 @@ DSH 注入会话的官方英文上下文在 `agent/pre-step` 阶段、进入会�
   字节预算标记（含 omitted/truncated 明细）。指令文件正文是用户内容，保留原文。
 - **skill 目录帧**：首句、目录更新句、尾部两段说明、空目录与替换目录的全部说明句。
   目录条目行（skill 名称与描述）是作者内容，保留原文。
-- **运行时上下文**（经 systemPrompt contexts 组装 + 头部行）：文件策略（read-only /
+- **运行时上下文**（systemPrompt contexts + 头部行）：文件策略（read-only /
     workspace-write / danger-full-access，动态工作区路径保留）、审批策略（ask / never）、
-    子代理委派声明，以及快照头部行与清空行（翻译代价见下）。未收录的未来 context 保持英文。
+    子代理委派声明、当前工作目录（`working-directory:current`，动态路径保留）、
+    Agent Teams 身份行（`team:identity`：Lead 与 teammate 两种形态，动态名字保留）、
+    委派深度用尽声明（`tool:subagent:depth`，动态工具名与数字保留）、
+    实现检出目录与 GUI URL（0.2.1 起 `harness:source` / `app:web-surface` 的值从段落
+    搬到这里，动态路径 / URL 保留），以及快照头部行与清空行（翻译代价见下）。
+    未收录的未来 context 保持英文。
 - **审批策略切换通知**：`The approval policy changed from …`（策略名 ask/never 保留）。
 - **压缩检查点前言**（会话历史中的 replacement 消息）。`<compacted-summary>` 标签与
     摘要正文保留。
 - **计划模式切换通知**：进入计划模式 / 切回默认模式两句。
 - **动态 Cordis 插件通知**：激活成功 / 被拒绝 / 失败、手动运行结果、Client UI / Host
-    handler / guard 失败通知的框架句（错误详情、`currentPackageId:` 等字段行保留原文）。
-- **@pluginId 引用注入**（创作模式）：引用可用与不可用两种模板的全部指导句
-    （`<cordis_dynamic_plugin_context>` 标签与内嵌 JSON 保留）。
+    handler / guard 失败通知的框架句与行动句（错误详情、`currentPackageId:` 等字段行
+    保留原文）。0.2.1 起插件标识统一为 `<pluginId>/<packageId> (<runId>)`、失败行动句
+    由「Inspect the failed Package…自主重试」改为「Report … to the user; … through the
+    Cordis panel」，两条路径都能翻译；创作模式（`@pluginId` 引用注入）已随上游移除，
+    对应规则一并删除。
 - **定时提醒注入**：两条不可信提醒内容说明句（`[SCHEDULE REMINDER]` 标记与
     `*_json:` 字段行保留）。
+- **后台子代理结束通知**（`subagent-settled`）：完成（continuable 与非 continuable
+    两种形态）、被停止、输出空间用尽、拒绝任务、失败、异常结束，以及「其结束消息：」/
+    「它没有留下结束消息。」/ 结构化结果前缀。相邻代理转发消息（`agent-message`）的
+    消息头也翻译，正文保留。
 
 **已知限制与代价**：运行时上下文的头部行（`Current runtime context. This snapshot
-supersedes …` 及其清空变体）由 agent-loop 硬编码拼接，官方渲染侧永远是英文；本开关
+supersedes …` 及其清空变体）由 `joinContextSections` 硬编码拼接，官方渲染侧永远是英文；本开关
 按行级规则翻译它，代价是快照投影的 retained 比较每步失配、DSH 每步注入一条替换
-快照（surface 替换语义，模型输入不膨胀，但会话日志每步多一条快照事件）。tmux
+快照（surface 替换语义，模型输入不膨胀，但会话日志每步多一条快照事件）。
+**0.2.1 起快照正文也在 `agent/pre-step` 对最终快照消息按段重译**：上游
+`agent-loop` 每次请求前用 `systemPrompt.refreshContext` 按 provider 原文重建
+`assembly.contexts` 再渲染快照，assemble 后对 contexts 的改写会被这一步覆盖
+（0.1.7 时代的「assemble 改写 contexts」路径已静默失效，属升版回归；该路径保留为
+0.1.x 兼容）。快照按 `\n\n` 分块匹配，因此 `team:identity` 这类多行 context 不会被
+拆散；未命中的块原样保留。tmux
 终端上下文快照同理且有 per-turn 重注入代价，不在覆盖范围；`<available_skills>`
 目录条目（skill 名称与描述）、`<skill_content>` 正文、指令文件（AGENTS.md 等）
 正文、压缩摘要正文、标题生成等辅助调用的内部指令均为作者/用户/程序内容，
@@ -211,8 +249,9 @@ supersedes …` 及其清空变体）由 agent-loop 硬编码拼接，官方渲�
 状态锁定，老会话永远保持英文，锁定后翻转开关不影响该会话；regime 表为进程内存，
 进程重启后重建（重启前已锁定的中文会话继续按官方行为携带历史中的中文注入，新注入
 回到当时的开关状态）。实现方式：pre-step 监听以 `prepend: true` 注册在监听链头部
-（先执行，`next()` 返回的 decision 已包含核心注入器的消息，翻译后返回）+ 共享
-assemble 管线改写 contexts 正文；任何改写失败只告警一次并沿用原文，不阻断模型请求。
+（先执行，`next()` 返回的 decision 已包含核心注入器的消息，翻译后返回；快照消息走
+`localizeSnapshotBody` 整段重译，其余注入走行级模板替换）+ 共享
+assemble 管线改写 contexts 正文（0.1.x 兼容路径）；任何改写失败只告警一次并沿用原文，不阻断模型请求。
 
 ## 网络搜索
 
