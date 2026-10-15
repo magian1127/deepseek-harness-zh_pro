@@ -762,13 +762,33 @@ agent-loop 硬编码拼接，官方渲染侧永远是英文；按用户需求在
   看不出后端归属（降级后照常返回结果），该记录是「联动真的发生过」的唯一
   硬证据：敏感查询后 `count` 递增且 `last.code` 为 `ZHIPU_CONTENT_FILTERED`，
   正常查询不改变 `count`。
+- **缺简介闸门**（`hasUsableSnippets` + `SNIPPET_COVERAGE_MIN = 0.5`）：智谱搜索
+  **成功**但结果简介覆盖率低于阈值时，视为该后端降级并改走 `freeSearch` 重取同一
+  查询。成因（2026-10-16 实测定位）：智谱插件被禁用后其 provider 仍 `available()`
+  （`zhipu-search.ts` 的 `available()` 在关闭态看内置 DeepSeek 凭据、`search()`
+  走 `deepseekSearch` 直连），而 DeepSeek 的 `web_search_result` 项只有
+  `title`/`url`/`encrypted_content`/`page_age`（正文加密、本地不可解），`text`
+  块也不带 `citations` —— 整批结果零简介（10/10 条缺失），用户只看到标题与链接。
+  对照实测：Yandex 14/14、Bing RSS 与 HTML 各 10/10 条自带简介，故换到免费后端
+  即可恢复简介（端到端实测 0/10 → 10/10）。
+  两条不变式：① **绝不比不加闸门更差**——智谱结果存为 `snippetPoorFallback`，
+  `freeSearch` 抛错或返回空结果时回落它（含 `maxResults` 幂等裁剪），只有免费
+  后端真的给出结果才替换；② 智谱返回**空结果**是合法「无结果」，不触发闸门
+  （`hasUsableSnippets([]) === true`）。触发次数与最近查询记在
+  `webSearchSnippetFallback`（与「智谱失败降级」分开计数——缺简介时智谱并未
+  失败，混计会让诊断看不出真实成因），同经 `/dsh-zh/api/diagnostics` 暴露。
+  `resetWebSearchEngineState` 一并清零该计数，供测试逐场景隔离。
 - 行为回归在 `verify-websearch.cjs`（解析器 7 组 + provider/级联/传输 mock
-  25 组 + 工具壳 10 组 + esm-cache 1 组，共 43 组）；该脚本是无 `.cts` 源的独立
-  `.cjs`，与三个构建产物回归并存，`npm test` 不包含它，按仓库验证命令单独运行。
+  25 组 + 缺简介闸门 6 组 + 工具壳 10 组 + esm-cache 1 组，共 49 组）；该脚本是
+  无 `.cts` 源的独立 `.cjs`，与三个构建产物回归并存，`npm test` 不包含它，按仓库
+  验证命令单独运行。
   传输 mock 里 Bing 夹具要按 `format=rss` 分流（RSS 体 vs HTML 体），查询词还需
   与夹具结果有词元重叠——相关性闸门会把「与查询零重叠」的整批结果当投毒丢弃；
   兜底路径的 handler 还必须处理 `yandex.com`（Yandex 已在并发兜底组里），否则
   会以「unexpected URL」的形式变成一条假的引擎失败。
+  **智谱优先场景的 mock 必须给结果带 `snippet`**（如「联动: 智谱已注册且可用」
+  与「智谱敏感过滤失败」两组），否则会被缺简介闸门判定为降级、转去免费引擎，
+  断言随之失效。
 
 ## CLI 规则
 

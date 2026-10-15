@@ -9,6 +9,13 @@
 //       （已安装智谱插件时自动联动）；
 //    b) 智谱失败（重点：内容安全过滤 ZHIPU_CONTENT_FILTERED；也覆盖网络/凭据
 //       失败）→ 自动转免费多引擎后端重试同一查询；
+//    b2) 智谱成功但结果缺简介（snippet 覆盖率 < SNIPPET_COVERAGE_MIN）→ 视为
+//       后端降级，改用免费多引擎后端重取同一查询；免费后端失败或无结果时回落
+//       智谱结果（绝不比闸门之前更差）。触发场景：智谱插件被禁用后其 provider
+//       仍 available()（回退内置 DeepSeek 搜索），而该路径的 web_search_result
+//       项只有 title/url/encrypted_content/page_age、text 块也不带 citations
+//       （2026-10-16 实测 10/10 条无简介）——用户只看到标题与链接，无法判断
+//       每条内容，正是「不如智谱三件套的搜索」的成因；
 //    c) 智谱未安装/不可用 → 免费多引擎后端。
 // 3. 引擎集（学习 Hermes 的 ddgs 元搜索包：多引擎注册表 + 失败兜底，仅保留
 //    本机实测纯 Node 可用的引擎，2026-09 实测）：
@@ -100,6 +107,15 @@ const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 const SEARCH_TIMEOUT_MS = 15_000
 /** DDG 触发反爬后的限流记忆时长：窗口内跳过 DDG 直接走兜底引擎（毫秒）。 */
 const DDG_RATE_LIMIT_MEMORY_MS = 60_000
+/**
+ * 「结果带简介」的最低覆盖率（snippet 非空条数 / 总条数）。低于此值时组合 provider
+ * 视为该后端降级并改走免费多引擎后端（见文件头 b2 与 hasUsableSnippets）。
+ *
+ * 取 0.5 而非 1：正常后端偶尔有 1–2 条无摘要（如 Wikipedia opensearch 的条目），
+ * 不该因个别缺失就整批换后端；而「整批无简介」（覆盖率 0）是 DeepSeek 回退路径的
+ * 确定特征（2026-10-16 实测 10/10 条缺失），必须换。
+ */
+const SNIPPET_COVERAGE_MIN = 0.5
 
 // ============ 浏览器指纹传输层（学习 primp impersonate，Node https.Agent 近似） ============
 
@@ -612,11 +628,12 @@ let ddgChain: Promise<unknown> = Promise.resolve()
 /** Tavily 退避截止时间戳（0 = 无退避）。额度耗尽/限流后窗口内跳过，直接走免费兜底。 */
 let tavilyBackoffUntil = 0
 
-/** 测试钩子：重置 DDG 限流记忆与排队链、Tavily 退避（仅 verify-websearch.cjs 使用）。 */
+/** 测试钩子：重置 DDG 限流记忆与排队链、Tavily 退避、缺简介换后端计数（仅 verify-websearch.cjs 使用）。 */
 export function resetWebSearchEngineState(): void {
   ddgRateLimitedUntil = 0
   ddgChain = Promise.resolve()
   tavilyBackoffUntil = 0
+  ;(globalThis as Record<symbol, unknown>)[SNIPPET_FALLBACK_STATE_KEY] = { count: 0 } satisfies WebSearchSnippetFallbackState
 }
 
 /** 把一次 DDG 访问排进全进程串行队列（学习 Hermes 对 DDG 的克制访问模式）。 */
@@ -1051,6 +1068,25 @@ function isDowngradable(error: unknown): boolean {
   return !(isAbortError(error) || (error as { code?: unknown } | null)?.code === 'WEB_ABORTED')
 }
 
+/**
+ * 结果是否「带简介」到可用程度：snippet 非空的条数占比 ≥ {@link SNIPPET_COVERAGE_MIN}。
+ *
+ * 用途是识别「只有标题和链接」的后端降级结果——典型是智谱插件被禁用后其 provider
+ * 仍 available()（回退内置 DeepSeek 搜索），而 DeepSeek 的 web_search_result 项只有
+ * title/url/encrypted_content/page_age（正文加密、本地不可解），text 块也不带
+ * citations，因此整批结果零简介（2026-10-16 实测 10/10 条缺失）。用户看不到每条
+ * 具体讲什么，只能逐个点开——这正是「不如智谱三件套的搜索」的直接原因。
+ *
+ * 空结果集返回 true（「无结果」是合法结局，不该因此换后端重试）。
+ */
+export function hasUsableSnippets(sources: ReadonlyArray<WebSearchSourceLike>): boolean {
+  if (sources.length === 0) return true
+  const withSnippet = sources.filter(
+    (source) => typeof source.snippet === 'string' && source.snippet.trim().length > 0,
+  ).length
+  return withSnippet / sources.length >= SNIPPET_COVERAGE_MIN
+}
+
 // ============ 降级运行态记录（诊断证据） ============
 
 /** 一次「智谱失败 → 免费后端」降级的记录。 */
@@ -1102,6 +1138,55 @@ function recordWebSearchFallback(error: unknown, query: string): void {
 /** 读取降级运行态（诊断用；绝不影响搜索）。 */
 export function getWebSearchFallbackState(): WebSearchFallbackState {
   return readFallbackState()
+}
+
+/**
+ * 一次「智谱结果缺简介 → 改走免费多引擎后端」的记录。
+ * 与「智谱失败降级」分开计数：前者智谱并未失败（禁用态回退 DeepSeek 原生搜索
+ * 仍算成功），只是结果不含摘要，混在一起会让诊断看不出真实成因。
+ */
+export interface WebSearchSnippetFallbackRecord {
+  /** 触发时间（ISO-8601）。 */
+  at: string
+  /** 触发时的查询（截断到 200 字符；不记录搜索结果）。 */
+  query: string
+  /** 智谱返回的来源条数（全部缺简介）。 */
+  sourceCount: number
+}
+
+export interface WebSearchSnippetFallbackState {
+  /** 本进程内累计次数。 */
+  count: number
+  /** 最近一次记录。 */
+  last?: WebSearchSnippetFallbackRecord
+}
+
+// 与降级运行态同款：存 globalThis 品牌符号，跨行重建可见。
+const SNIPPET_FALLBACK_STATE_KEY = Symbol.for('deepseek-harness-zh_pro.web-search-snippet-fallback')
+
+function readSnippetFallbackState(): WebSearchSnippetFallbackState {
+  const state = (globalThis as Record<symbol, unknown>)[SNIPPET_FALLBACK_STATE_KEY] as WebSearchSnippetFallbackState | undefined
+  return state ?? { count: 0 }
+}
+
+function recordWebSearchSnippetFallback(query: string, sourceCount: number): void {
+  try {
+    ;(globalThis as Record<symbol, unknown>)[SNIPPET_FALLBACK_STATE_KEY] = {
+      count: readSnippetFallbackState().count + 1,
+      last: {
+        at: new Date().toISOString(),
+        query: query.slice(0, 200),
+        sourceCount,
+      },
+    } satisfies WebSearchSnippetFallbackState
+  } catch {
+    // 记录失败绝不能影响搜索路径。
+  }
+}
+
+/** 读取「缺简介换后端」运行态（诊断用；绝不影响搜索）。 */
+export function getWebSearchSnippetFallbackState(): WebSearchSnippetFallbackState {
+  return readSnippetFallbackState()
 }
 
 export interface WebSearchInstallDeps {
@@ -1180,11 +1265,19 @@ export function installWebSearchProvider(ctx: HostContext, deps: WebSearchInstal
 
       // 1) 智谱优先（两插件共存时的联动路径）。
       const zhipu = providerById(web, ZHIPU_SEARCH_PROVIDER_ID)
+      // 智谱结果「带简介但不达标」时保留为回落候选：免费后端失败/无结果时用它，
+      // 保证闸门绝不比不加闸门更差（宁可给回无简介结果，也不给空结果或报错）。
+      let snippetPoorFallback: WebSearchResultLike | undefined
       if (zhipu !== undefined && zhipu.available()) {
         try {
           const result = await zhipu.search(request, signal)
-          // 智谱成功即返回（其内部已处理自己的 DeepSeek 回退）。
-          return result
+          // 智谱成功且结果带简介 → 直接返回（其内部已处理自己的 DeepSeek 回退）。
+          if (hasUsableSnippets(result.sources)) return result
+          // 成功但整批缺简介（典型：智谱被禁用 → 回退 DeepSeek 原生搜索，其结果项
+          // 只有标题/链接/加密正文）→ 记为回落候选，改走免费多引擎后端重取。
+          snippetPoorFallback = result
+          recordWebSearchSnippetFallback(query, result.sources.length)
+          log(`智谱结果 ${String(result.sources.length)} 条均无简介，改走免费多引擎后端重取同一查询`)
         } catch (error: unknown) {
           if (signal?.aborted === true || !isDowngradable(error)) throw error
           // 智谱失败（含敏感内容过滤 ZHIPU_CONTENT_FILTERED）→ 自动转免费多引擎。
@@ -1199,8 +1292,27 @@ export function installWebSearchProvider(ctx: HostContext, deps: WebSearchInstal
       }
 
       // 2) 免费多引擎后端（Tavily → DuckDuckGo → Yandex/Bing/Wikipedia 兜底）。
+      //    智谱成功但缺简介时，这里失败或无结果都要回落智谱结果而不是报错。
       const cap = typeof request.maxResults === 'number' && request.maxResults > 0 ? request.maxResults : undefined
-      const sources = await freeSearch(ctx, query, cap, signal)
+      /** 回落智谱结果时同样遵守 maxResults（智谱内部已预裁剪，这里是幂等保险）。 */
+      const capFallback = (result: WebSearchResultLike): WebSearchResultLike => {
+        if (cap === undefined || result.sources.length <= cap) return result
+        return { ...result, sources: result.sources.slice(0, cap), truncated: false }
+      }
+      let sources: ReadonlyArray<WebSearchSourceLike>
+      try {
+        sources = await freeSearch(ctx, query, cap, signal)
+      } catch (error: unknown) {
+        if (snippetPoorFallback === undefined) throw error
+        if (signal?.aborted === true || !isDowngradable(error)) throw error
+        // 免费后端整体失败，但手上还有智谱的无简介结果：给回它，比报错有用。
+        log(`免费多引擎后端失败，回落到智谱的无简介结果（${String(snippetPoorFallback.sources.length)} 条）`)
+        return capFallback(snippetPoorFallback)
+      }
+      if (sources.length === 0 && snippetPoorFallback !== undefined) {
+        log(`免费多引擎后端无结果，回落到智谱的无简介结果（${String(snippetPoorFallback.sources.length)} 条）`)
+        return capFallback(snippetPoorFallback)
+      }
       const capped = cap !== undefined && sources.length > cap ? sources.slice(0, cap) : sources
       return { sources: capped, truncated: false }
     },

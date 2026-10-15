@@ -8,7 +8,7 @@ import { readFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { PKG } from '../bin/dsh-zh.mjs'
 import { unloadEvictionRecord } from './hot-reload.js'
-import { getWebSearchFallbackState } from './web-search.js'
+import { getWebSearchFallbackState, getWebSearchSnippetFallbackState } from './web-search.js'
 
 interface RouteRequest {
   method?: string
@@ -57,6 +57,7 @@ export function handleDiagnosticsRoute(_req: RouteRequest, res: RouteResponse, p
       node: process.version,
       unloadEviction: unloadEvictionRecord(),
       webSearchFallback: getWebSearchFallbackState(),
+      webSearchSnippetFallback: getWebSearchSnippetFallbackState(),
     },
   })
   return true

@@ -337,7 +337,8 @@ async function main() {
       available: () => true,
       async search(request) {
         zhipuCalls++
-        return { sources: [{ url: 'https://zhipu.example/' + String(request.query) }], truncated: false }
+        // 带简介：否则会触发「缺简介换后端」闸门，本场景验的是优先级而非闸门。
+        return { sources: [{ url: 'https://zhipu.example/' + String(request.query), snippet: '智谱摘要' }], truncated: false }
       },
     }
     const web = makeWebService({ 'zhipu-web-search-prime': zhipu })
@@ -403,6 +404,116 @@ async function main() {
     await assert.rejects(() => comboAbort.search({ query: 'x' }), (e) => e.name === 'AbortError', '中止应向上抛')
     assert.strictEqual(transportLog.length, 1, '中止不应触发免费引擎重试（只有上面那次 DDG）')
     results.push('联动: 用户中止（AbortError）→ 不降级、直接上抛 ✓')
+  }
+
+  // ── 8b. 智谱结果整批缺简介 → 改走免费多引擎后端（2026-10-16 根因回归） ──
+  // 场景来源：智谱插件被禁用后其 provider 仍 available()（回退内置 DeepSeek 搜索），
+  // 而 DeepSeek 的 web_search_result 项只有 title/url/encrypted_content/page_age，
+  // 整批零简介 —— 用户只看到标题与链接。闸门必须换后端重取，且免费后端不可用时
+  // 回落智谱结果（绝不比不加闸门更差）。
+  {
+    resetScenario(ddgOk)
+    const zhipuNoSnippet = {
+      id: 'zhipu-web-search-prime',
+      available: () => true,
+      async search() {
+        return {
+          sources: [
+            { url: 'https://nosnippet.example/a', title: '只有标题 A' },
+            { url: 'https://nosnippet.example/b', title: '只有标题 B' },
+          ],
+          truncated: false,
+        }
+      },
+    }
+    const web = makeWebService({ 'zhipu-web-search-prime': zhipuNoSnippet })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    const combo = web.searchProviders.get('dsh-zh-web')
+    const r = await combo.search({ query: '缺简介测试' })
+    assert.strictEqual(r.sources[0].url, 'https://example.com/a', '应改用免费引擎结果')
+    assert.ok(r.sources[0].snippet !== undefined && r.sources[0].snippet.length > 0, '免费引擎结果应带简介')
+    assert.strictEqual(ddgCalls().length, 1, '应实际请求过免费引擎')
+    const snippetFallback = mod.getWebSearchSnippetFallbackState()
+    assert.strictEqual(snippetFallback.count, 1, '缺简介换后端应记一次运行态')
+    assert.strictEqual(snippetFallback.last.sourceCount, 2, '运行态应记下智谱返回条数')
+    results.push('snippet-gate: 智谱整批缺简介 → 改走免费引擎重取（带简介）✓')
+
+    // 8b-1. 智谱结果「部分带简介」（覆盖率 ≥ 0.5）→ 视为可用，不换后端。
+    resetScenario(ddgOk)
+    const zhipuHalf = {
+      id: 'zhipu-web-search-prime',
+      available: () => true,
+      async search() {
+        return {
+          sources: [
+            { url: 'https://half.example/a', title: 'A', snippet: '有摘要' },
+            { url: 'https://half.example/b', title: 'B' },
+          ],
+          truncated: false,
+        }
+      },
+    }
+    const webHalf = makeWebService({ 'zhipu-web-search-prime': zhipuHalf })
+    mod.installWebSearchProvider(makeCtx(webHalf), { isEnabled: () => enabled })
+    const comboHalf = webHalf.searchProviders.get('dsh-zh-web')
+    const rHalf = await comboHalf.search({ query: '半数有简介' })
+    assert.strictEqual(rHalf.sources[0].url, 'https://half.example/a', '半数有简介 → 仍用智谱')
+    assert.strictEqual(transportLog.length, 0, '半数有简介不应触免费引擎')
+    results.push('snippet-gate: 覆盖率达标（半数有简介）→ 不换后端 ✓')
+
+    // 8b-2. 智谱缺简介 + 免费引擎整体失败 → 回落智谱结果，而不是报错。
+    resetScenario((req) => {
+      if (req.url.includes('bing.com')) return { status: 500, url: req.url, headers: {}, body: 'err' }
+      throw new Error(`network down: ${req.url}`)
+    })
+    const zhipuNoSnippet2 = {
+      id: 'zhipu-web-search-prime',
+      available: () => true,
+      async search() {
+        return { sources: [{ url: 'https://nosnippet.example/c', title: '只有标题 C' }], truncated: false }
+      },
+    }
+    const webDown = makeWebService({ 'zhipu-web-search-prime': zhipuNoSnippet2 })
+    mod.installWebSearchProvider(makeCtx(webDown), { isEnabled: () => enabled })
+    const comboDown = webDown.searchProviders.get('dsh-zh-web')
+    const rDown = await comboDown.search({ query: '免费后端故障' })
+    assert.strictEqual(rDown.sources[0].url, 'https://nosnippet.example/c', '免费后端失败 → 回落智谱无简介结果')
+    results.push('snippet-gate: 免费后端失败 → 回落智谱结果（不报错）✓')
+
+    // 8b-3. 智谱缺简介 + 免费引擎「通但无结果」→ 同样回落智谱结果。
+    resetScenario(emptyOk)
+    const webEmpty = makeWebService({ 'zhipu-web-search-prime': zhipuNoSnippet2 })
+    mod.installWebSearchProvider(makeCtx(webEmpty), { isEnabled: () => enabled })
+    const comboEmpty = webEmpty.searchProviders.get('dsh-zh-web')
+    const rEmpty = await comboEmpty.search({ query: '免费后端无结果' })
+    assert.strictEqual(rEmpty.sources[0].url, 'https://nosnippet.example/c', '免费后端无结果 → 回落智谱无简介结果')
+    results.push('snippet-gate: 免费后端无结果 → 回落智谱结果 ✓')
+
+    // 8b-4. 智谱结果为空（合法「无结果」）→ 不触发换后端闸门。
+    resetScenario(emptyOk)
+    const zhipuEmpty = {
+      id: 'zhipu-web-search-prime',
+      available: () => true,
+      async search() { return { sources: [], truncated: false } },
+    }
+    const webZero = makeWebService({ 'zhipu-web-search-prime': zhipuEmpty })
+    mod.installWebSearchProvider(makeCtx(webZero), { isEnabled: () => enabled })
+    const comboZero = webZero.searchProviders.get('dsh-zh-web')
+    const rZero = await comboZero.search({ query: '智谱无结果' })
+    assert.deepStrictEqual(rZero.sources, [], '空结果是合法结局')
+    assert.strictEqual(transportLog.length, 0, '空结果不应触发换后端')
+    results.push('snippet-gate: 智谱空结果 → 不触发换后端 ✓')
+
+    // 8b-5. 闸门纯函数边界：空集视为达标；覆盖率按非空 snippet 计。
+    assert.strictEqual(mod.hasUsableSnippets([]), true, '空集 → 达标（无结果是合法结局）')
+    assert.strictEqual(mod.hasUsableSnippets([{ url: 'u', snippet: '  ' }]), false, '纯空白 snippet 不算简介')
+    assert.strictEqual(mod.hasUsableSnippets([{ url: 'u', snippet: 's' }]), true, '单条带简介 → 达标')
+    assert.strictEqual(
+      mod.hasUsableSnippets([{ url: 'a', snippet: 's' }, { url: 'b' }, { url: 'c' }]),
+      false,
+      '1/3 有简介 → 不达标（< 0.5）',
+    )
+    results.push('snippet-gate: hasUsableSnippets 边界（空集/空白/覆盖率）✓')
   }
 
   // ── 9. web 服务缺失 → 返回 undefined ──
