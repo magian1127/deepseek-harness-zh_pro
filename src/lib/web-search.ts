@@ -67,6 +67,7 @@
 // 同时安装时才发生联动（顺序无关：选择在 search() 调用时动态评估）。
 import https from 'node:https'
 import zlib from 'node:zlib'
+import { ZH_FREE_MULTI_BACKEND_ID } from './constants.js'
 import { log, warn } from './util.js'
 import { credentialAvailable, resolveApiKey } from './credentials.js'
 import type { HostContext } from './types.js'
@@ -75,10 +76,14 @@ import type { HostContext } from './types.js'
 
 /** 本 provider 在官方 web seam 注册表中的 id。 */
 export const ZH_WEB_SEARCH_PROVIDER_ID = 'dsh-zh-web'
-/** 智谱插件注册的搜索 provider id（见 zhipu_plan_tools/src/constants.ts）。 */
-const ZHIPU_SEARCH_PROVIDER_ID = 'zhipu-web-search-prime'
+/**
+ * 官方/第三方搜索 provider id（供设置页展示与优先级默认值使用）。
+ * ZHIPU_SEARCH_PROVIDER_ID 与 OFFICIAL_DEEPSEEK_PROVIDER_ID 保留为导出常量，
+ * 因为设置页要用它们给用户展示「这一项指的是哪个后端」，而不是硬编码字符串。
+ */
+export const ZHIPU_SEARCH_PROVIDER_ID = 'zhipu-web-search-prime'
 /** 官方内置 DeepSeek 搜索 provider id（dsh-web-search-deepseek）。 */
-const OFFICIAL_DEEPSEEK_PROVIDER_ID = 'deepseek-official'
+export const OFFICIAL_DEEPSEEK_PROVIDER_ID = 'deepseek-official'
 
 /** DuckDuckGo HTML 端点（lite 为备用；均为无 Key 公开端点）。 */
 const DDG_HTML_URL = 'https://html.duckduckgo.com/html/'
@@ -1050,6 +1055,14 @@ function isAbortError(error: unknown): boolean {
     && (error as { name?: unknown }).name === 'AbortError'
 }
 
+/**
+ * 经函数读取 AbortSignal 的可变状态：避免 TypeScript 把 `signal.aborted`
+ * 在跨 await 后永久收窄成 false（否则循环里的再次检查会被判为无意义比较）。
+ */
+function wasAborted(signal?: AbortSignal): boolean {
+  return Boolean(signal?.aborted)
+}
+
 /** 从 web seam 的 provider 注册表按 id 读 provider（duck-type，缺席返回 undefined）。 */
 function providerById(web: WebServiceLike, id: string): WebSearchProviderLike | undefined {
   const providers = (web as { searchProviders?: unknown }).searchProviders
@@ -1192,146 +1205,524 @@ export function getWebSearchSnippetFallbackState(): WebSearchSnippetFallbackStat
 export interface WebSearchInstallDeps {
   /** 读取 webSearchEnabled 开关（dsh-zh 命名空间，默认 true）。 */
   isEnabled(): boolean
+  /** 读取后端优先级列表（有序 provider id，空数组 = 不接管）。 */
+  searchOrder(): readonly string[]
 }
 
 /**
- * 各 web seam 实例被接管前的原始 searchProviderId。
+ * 各 web seam 实例被接管前的原始 searchProvider 值。
  * 用 WeakMap 以 web 实例为键：关闭开关或本插件卸载时恢复到「没有 zh_pro 时」
- * 的值（可能是官方 deepseek-official，也可能是智谱 zhipu-web-search-prime）。
+ * 的值（可能是 deepseek-search-api、deepseek-official 或智谱的 provider）。
  */
 const originalSearchProviderIds = new WeakMap<object, string | undefined>()
 
+/**
+ * 宿主 settings 服务的最小形状（官方 dsh-settings）。
+ * `update(ns, patch)` 把易变字段写进 profile 行 config 并触发
+ * loader/volatile-update——这是官方支持的、持久化且即时生效的选路通道。
+ */
+interface SettingsServiceLike {
+  update(ns: string, patch: Record<string, unknown>, expectedRevision?: number): Promise<void>
+}
+
+/** 官方 dsh-settings 的路径级编辑通道（`mutate`），用于 unset 单个易变字段。 */
+interface SettingsMutateLike {
+  update?(ns: string, patch: Record<string, unknown>, expectedRevision?: number): Promise<void>
+  mutate?(
+    ns: string,
+    ops: ReadonlyArray<{ op: 'set'; path: string[]; value: unknown } | { op: 'unset'; path: string[] }>,
+    expectedRevision?: number,
+  ): Promise<void>
+}
+
 interface WebInstanceLike {
   searchProviders?: Map<string, WebSearchProviderLike>
-  searchProviderId?: string
 }
 
 /**
- * 把官方 web_search 工具的搜索后端选择切到组合 provider（active=true），
- * 或恢复到接管前的原值（active=false）。
- *
- * 为什么必须改实例字段而不只是注册 provider：官方 resolveProvider 严格按
- * web 行 config 的 searchProvider（构造时落到实例 searchProviderId）选后端，
- * 仅注册而不选中不会被调用；且 configured 存在但 available()=false 会直接报
- * WEB_PROVIDER_CONFIGURED_UNAVAILABLE，不会回落——所以关闭开关时必须把字段
- * 切回原值，不能只让 available() 返回 false。
+ * 读取当前生效的 searchProvider（duck-type，兼容两个宿主代际）：
+ * - DSH ≤ 0.2.0：`WebRuntime.searchProviderId` 实例字段；
+ * - DSH ≥ 0.2.1（commit fda98dadd2 起）：`config.searchProvider` volatile 引用，
+ *   实例上已无 searchProviderId 字段（写它等于写一个没人读的普通属性）。
  */
-export function applyWebSearchSelection(ctx: HostContext, active: boolean): void {
+function readConfiguredSearchProvider(web: object): string | undefined {
+  const legacy = (web as { searchProviderId?: unknown }).searchProviderId
+  if (typeof legacy === 'string') return legacy
+  const config = (web as { config?: { searchProvider?: { get?: () => unknown } } }).config
+  const value = typeof config?.searchProvider?.get === 'function' ? config.searchProvider.get() : undefined
+  return typeof value === 'string' ? value : undefined
+}
+
+/**
+ * 把官方 web_search 的后端选择切到本插件的复合 provider（active=true），
+ * 或恢复为接管前的值（active=false）。
+ *
+ * 为什么必须改选路而不只是注册 provider：官方 resolveProvider 严格按
+ * `web` 行的 configuredId 选后端——configured 存在但 available()=false 会直接
+ * 报 WEB_PROVIDER_CONFIGURED_UNAVAILABLE，**不会**回落到其它 provider。因此
+ * 仅注册不选中就永远不会被调用。
+ *
+ * 写通道按宿主代际自动选择：
+ * 1. `ctx.settings.update('web', { searchProvider })`——官方支持、持久化、
+ *    volatile 即时生效（DSH ≥ 0.2.1 的 searchProvider 是 volatile 字段）；
+ * 2. 旧宿主（≤ 0.2.0）的实例字段 `web.searchProviderId`；
+ * 3. 兜底写 volatile 引用 `config.searchProvider`（不持久化，重启即丢，
+ *    仅在 settings 服务缺席时使用）。
+ *
+ * @returns 本次调用后后端选择是否指向本插件的 provider。
+ */
+export function applyWebSearchSelection(
+  ctx: HostContext,
+  active: boolean,
+  order: readonly string[] = [],
+): boolean {
   const web = ctx.get('web') as WebInstanceLike | undefined | null
-  if (web === undefined || web === null || typeof web !== 'object') return
-  if (!(web.searchProviders instanceof Map) || !web.searchProviders.has(ZH_WEB_SEARCH_PROVIDER_ID)) return
+  if (web === undefined || web === null || typeof web !== 'object') {
+    writeSelectionState({
+      at: new Date().toISOString(), target: ZH_WEB_SEARCH_PROVIDER_ID, before: null,
+      channel: 'none', outcome: 'error', error: 'web 服务不可达',
+    })
+    return false
+  }
+  if (!(web.searchProviders instanceof Map)) {
+    writeSelectionState({
+      at: new Date().toISOString(), target: ZH_WEB_SEARCH_PROVIDER_ID, before: null,
+      channel: 'none', outcome: 'error', error: 'web.searchProviders 不是 Map（私有面漂移？）',
+    })
+    return false
+  }
+  if (!web.searchProviders.has(ZH_WEB_SEARCH_PROVIDER_ID)) {
+    // 记录注册表实况：注册 reportedly 成功但这里读不到，说明读的是**另一个
+    // web 实例**或 Map 被替换过（换血/服务重建时都可能发生）。
+    const keys = [...(web.searchProviders instanceof Map ? web.searchProviders.keys() : [])]
+    const seen = readSelectionState()
+    writeSelectionState({
+      at: new Date().toISOString(), target: ZH_WEB_SEARCH_PROVIDER_ID, before: null,
+      channel: 'none', outcome: 'pending',
+      error: `注册表无 ${ZH_WEB_SEARCH_PROVIDER_ID}；现有 ${String(keys.length)} 个: ${keys.slice(0, 6).join(',')}；前序记录: ${seen?.error?.slice(0, 60) ?? '无'}`.slice(0, 300),
+    })
+    return false
+  }
 
-  if (active) {
-    if (!originalSearchProviderIds.has(web as object)) {
-      originalSearchProviderIds.set(web as object, web.searchProviderId)
+  // 空优先级列表 = 用户不想接管：与关闭开关等价。
+  const wantActive = active && order.length > 0
+  const current = readConfiguredSearchProvider(web)
+  publishLiveSelection(ctx)
+
+  if (wantActive) {
+    if (!originalSearchProviderIds.has(web)) originalSearchProviderIds.set(web, current)
+    if (current === ZH_WEB_SEARCH_PROVIDER_ID) {
+      // 已经是本插件：不需要写盘，但要留下痕迹，否则诊断里看起来「什么都没发生」。
+      writeSelectionState({
+        at: new Date().toISOString(), target: ZH_WEB_SEARCH_PROVIDER_ID, before: current,
+        channel: 'none', outcome: 'ok', error: '已是本插件（无需写入）',
+      })
+      return true
     }
-    if (web.searchProviderId !== ZH_WEB_SEARCH_PROVIDER_ID) {
-      web.searchProviderId = ZH_WEB_SEARCH_PROVIDER_ID
+    return writeSearchProviderSelection(ctx, web, ZH_WEB_SEARCH_PROVIDER_ID)
+  }
+
+  // 只有本插件确实接管过才还原，否则不要覆盖用户在别处做的选择。
+  if (!originalSearchProviderIds.has(web)) return false
+  if (current !== ZH_WEB_SEARCH_PROVIDER_ID) return false
+  const original = originalSearchProviderIds.get(web)
+  if (original === undefined) restoreSearchProviderSelection(ctx, web, true)
+  else writeSearchProviderSelection(ctx, web, original)
+  return false
+}
+
+// ============ 选路写入的运行态记录（诊断证据） ============
+
+/**
+ * 最近一次「把 web.searchProvider 切到本插件」的尝试结果。
+ * 存于 globalThis 品牌符号：写入发生在任意实例，行重建后的新实例查询诊断
+ * 也要能看到（模块级变量会随实例消失）。
+ *
+ * 之所以要记录：写入通道 1 是**异步**的（settings.update 返回 Promise），
+ * 失败只会变成一条 warn，而 warn 在长跑进程里不落盘。没有这份记录就无法
+ * 区分「写入成功但被别处改回」「写入被拒」与「根本没走通道」。
+ */
+export interface WebSearchSelectionRecord {
+  /** 尝试时间（ISO-8601）。 */
+  at: string
+  /** 目标 provider id。 */
+  target: string
+  /** 实际走的通道。 */
+  channel: 'settings' | 'legacy-field' | 'volatile' | 'none'
+  /** 通道 1 的异步结果；其它通道走完即为 settled。 */
+  outcome: 'pending' | 'ok' | 'error'
+  /** 失败原因（已截断）。 */
+  error?: string
+  /** 写入前的既有值。 */
+  before: string | null
+}
+
+const SELECTION_STATE_KEY = Symbol.for('deepseek-harness-zh_pro.web-search-selection')
+
+function readSelectionState(): WebSearchSelectionRecord | undefined {
+  return (globalThis as Record<symbol, unknown>)[SELECTION_STATE_KEY] as WebSearchSelectionRecord | undefined
+}
+
+function writeSelectionState(record: WebSearchSelectionRecord): void {
+  ;(globalThis as Record<symbol, unknown>)[SELECTION_STATE_KEY] = record
+}
+
+function patchSelectionState(patch: Partial<WebSearchSelectionRecord>): void {
+  const current = readSelectionState()
+  if (current === undefined) return
+  writeSelectionState({ ...current, ...patch })
+}
+
+/** 读取最近一次选路写入结果（诊断用；绝不影响搜索）。 */
+export function getWebSearchSelectionState(): WebSearchSelectionRecord | undefined {
+  return readSelectionState()
+}
+
+/**
+ * 实时读取当前实际生效的搜索后端 id（诊断用）。
+ *
+ * 与 selection 记录的区别：记录说的是「上次尝试写了什么」，这个说的是
+ * 「此刻 WebRuntime 解析到的 configuredId 是什么」。判定接管是否生效必须看它，
+ * 因为写通道可能走 volatile（不落盘到 profile patch），只查 patch 文件会得出
+ * 「没接管」的错误结论（2026-10-17 实测踩过）。
+ */
+export function getConfiguredWebSearchProvider(ctx: HostContext): string | null {
+  const web = ctx.get('web') as WebInstanceLike | undefined | null
+  if (web === undefined || web === null || typeof web !== 'object') return null
+  return readConfiguredSearchProvider(web) ?? null
+}
+
+/** 本插件 provider 注册是否真的在 WebRuntime 注册表里（诊断用）。 */
+export function isZhWebProviderRegistered(ctx: HostContext): boolean {
+  const web = ctx.get('web') as WebInstanceLike | undefined | null
+  if (web === undefined || web === null || !(web.searchProviders instanceof Map)) return false
+  return web.searchProviders.has(ZH_WEB_SEARCH_PROVIDER_ID)
+}
+
+/**
+ * 把「此刻实际生效的选路」快照到 globalThis，供无 ctx 的诊断路由读取。
+ * 每次 applyWebSearchSelection 都会被调用，因此它还兼作「接管是否在跑」的证据。
+ */
+function publishLiveSelection(ctx: HostContext): void {
+  try {
+    const web = ctx.get('web') as WebInstanceLike | undefined | null
+    const registered = web !== undefined && web !== null && web.searchProviders instanceof Map
+      ? web.searchProviders.has(ZH_WEB_SEARCH_PROVIDER_ID)
+      : false
+    ;(globalThis as Record<symbol, unknown>)[LIVE_SELECTION_KEY] = {
+      configured: web === undefined || web === null ? null : (readConfiguredSearchProvider(web) ?? null),
+      registered,
+      at: new Date().toISOString(),
     }
+  } catch {
+    // 诊断绝不影响装配。
+  }
+}
+
+const LIVE_SELECTION_KEY = Symbol.for('deepseek-harness-zh_pro.web-search-live-selection')
+
+/** 读取实时选路快照（诊断用）。 */
+export function getLiveWebSearchSelection(): { configured: string | null; registered: boolean; at: string } | undefined {
+  return (globalThis as Record<symbol, unknown>)[LIVE_SELECTION_KEY] as
+    | { configured: string | null; registered: boolean; at: string }
+    | undefined
+}
+
+
+/**
+ * 写入后端选择。三条通道按可用性依次尝试，首个成功即返回。
+ * 通道 3 只改内存（不持久化），用于 settings 服务缺席的降级场景。
+ * 每次尝试都落一条运行态记录（见 getWebSearchSelectionState）。
+ */
+function writeSearchProviderSelection(ctx: HostContext, web: WebInstanceLike, id: string): boolean {
+  const before = readConfiguredSearchProvider(web) ?? null
+  const base = { at: new Date().toISOString(), target: id, before }
+  // 通道 1：官方 settings 服务（持久 + volatile 实时生效）。
+  const settings = ctx.get('settings') as SettingsServiceLike | undefined | null
+  if (settings !== undefined && settings !== null && typeof settings.update === 'function') {
+    writeSelectionState({ ...base, channel: 'settings', outcome: 'pending' })
+    try {
+      void settings.update('web', { searchProvider: id }).then(() => {
+        patchSelectionState({ outcome: 'ok' })
+      }, (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        patchSelectionState({ outcome: 'error', error: message.slice(0, 200) })
+        warn(`写入 web.searchProvider 失败: ${message}`)
+      })
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      patchSelectionState({ outcome: 'error', error: message.slice(0, 200) })
+      warn(`调用 settings.update 失败: ${message}`)
+    }
+  }
+  // 通道 2：旧宿主实例字段。
+  const legacy = (web as { searchProviderId?: unknown }).searchProviderId
+  if (legacy !== undefined || 'searchProviderId' in (web as object)) {
+    ;(web as { searchProviderId?: string }).searchProviderId = id
+    writeSelectionState({ ...base, channel: 'legacy-field', outcome: 'ok' })
+    return true
+  }
+  // 通道 3：cordis volatile 引用（不持久化）。
+  const viaVolatile = writeVolatileSearchProvider(web, id)
+  if (!viaVolatile) {
+    const reason = `无可用写通道（settings=${settings === null || settings === undefined ? 'absent' : typeof settings}`
+      + `，web.searchProviderId=${legacy !== undefined ? 'present' : 'absent'}`
+      + `，web.config.searchProvider=${volatileRefPresent(web) ? 'present' : 'absent'}）`
+    writeSelectionState({ ...base, channel: 'none', outcome: 'error', error: reason.slice(0, 200) })
+    warn(reason)
   } else {
-    const original = originalSearchProviderIds.get(web as object)
-    if (original !== undefined || originalSearchProviderIds.has(web as object)) {
-      web.searchProviderId = original
+    writeSelectionState({ ...base, channel: 'volatile', outcome: 'ok' })
+  }
+  return viaVolatile
+}
+
+/** 诊断用：web 实例上是否存在可写的 searchProvider volatile 引用。 */
+function volatileRefPresent(web: WebInstanceLike): boolean {
+  const ref = (web as { config?: { searchProvider?: unknown } }).config?.searchProvider
+  return ref !== undefined && ref !== null && typeof ref === 'object'
+}
+
+/**
+ * 清空覆盖（恢复为「没有配置」= seam 自动选唯一可用 provider）。
+ *
+ * 注意不能用 `update('web', { searchProvider: undefined })`：官方 settings.
+ * cloneJsonShaped 会**跳过**值为 undefined 的键（稀疏补丁语义），写入等于没写。
+ * 必须走 `mutate` 的路径级 `unset` op。
+ */
+function restoreSearchProviderSelection(ctx: HostContext, web: WebInstanceLike, clear: boolean): boolean {
+  if (!clear) return false
+  const settings = ctx.get('settings') as SettingsMutateLike | undefined | null
+  if (settings !== undefined && settings !== null) {
+    const run = function (): void {
+      if (typeof settings.mutate === 'function') {
+        void settings.mutate('web', [{ op: 'unset', path: ['searchProvider'] }]).catch(function (error: unknown) {
+          warn(`清除 web.searchProvider 失败: ${error instanceof Error ? error.message : String(error)}`)
+        })
+        return
+      }
+      if (typeof settings.update === 'function') {
+        // 没有 mutate 的旧宿主：退回写空串（seam 会按「查不到 provider」处理并
+        // 尝试自动选唯一可用 provider，效果等价于未配置）。
+        void settings.update('web', { searchProvider: '' }).catch(function (error: unknown) {
+          warn(`清除 web.searchProvider 失败: ${error instanceof Error ? error.message : String(error)}`)
+        })
+      }
     }
+    try {
+      run()
+      return true
+    } catch (error) {
+      warn(`清除 web.searchProvider 失败: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  const legacy = (web as { searchProviderId?: unknown }).searchProviderId
+  if (legacy !== undefined || 'searchProviderId' in (web as object)) {
+    ;(web as { searchProviderId?: string }).searchProviderId = undefined
+    return true
+  }
+  return writeVolatileSearchProvider(web, undefined)
+}
+
+/** cordis 的 volatile 写协议（`createVolatile` 定义的共享符号）。 */
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+
+/** 兜底：直接改 volatile 引用（只改内存，重启丢失）。 */
+function writeVolatileSearchProvider(web: WebInstanceLike, id: string | undefined): boolean {
+  const config = (web as { config?: { searchProvider?: Record<symbol, unknown> } }).config
+  const ref = config?.searchProvider
+  if (ref === undefined || ref === null || typeof ref !== 'object') return false
+  const write = (ref as Record<symbol, unknown>)[VOLATILE_WRITE]
+  if (typeof write !== 'function') return false
+  try {
+    ;(write as (value: unknown) => void).call(ref, id)
+    log(`已通过 volatile 引用切换搜索后端为 ${String(id)}（内存态，重启后恢复）`)
+    return true
+  } catch (error) {
+    warn(`切换 volatile searchProvider 失败: ${error instanceof Error ? error.message : String(error)}`)
+    return false
   }
 }
 
-/** 卸载时恢复 searchProviderId（若本插件接管过）。 */
-function restoreWebSearchSelection(web: WebServiceLike): void {
-  const instance = web as unknown as WebInstanceLike
-  if (originalSearchProviderIds.has(instance as object)) {
-    instance.searchProviderId = originalSearchProviderIds.get(instance as object)
-  }
+/** 卸载时恢复后端选择（若本插件接管过）。 */
+function restoreWebSearchSelection(ctx: HostContext, web: WebServiceLike): void {
+  const original = originalSearchProviderIds.get(web as object)
+  if (!originalSearchProviderIds.has(web as object)) return
+  writeSearchProviderSelection(ctx, web as WebInstanceLike, original as string)
 }
+
+/**
+ * 按优先级列表依次尝试一个后端。返回 undefined 表示「该后端不可用/未注册，
+ * 应继续下一个」；抛出表示「已中止，必须整体失败」。
+ */
+type OrderedAttempt =
+  | { kind: 'result'; result: WebSearchResultLike }
+  | { kind: 'skip'; reason: string }
+  | { kind: 'snippet-poor'; result: WebSearchResultLike }
 
 /**
  * 注册组合搜索 provider。可用性（同步、不发网络请求，per 官方契约）：
- * 开关开启即可用（免费引擎零配置零 Key）。
+ * 开关开启且优先级列表非空即可用。
  * @returns 卸载函数；web 服务缺失时返回 undefined。
  */
 export function installWebSearchProvider(ctx: HostContext, deps: WebSearchInstallDeps): (() => void) | undefined {
   const web = ctx.get('web') as WebServiceLike | undefined | null
-  if (web === undefined || web === null || typeof web.registerSearchProvider !== 'function') return undefined
+  if (web === undefined || web === null || typeof web.registerSearchProvider !== 'function') {
+    const webKind = web === undefined ? 'undefined' : web === null ? 'null' : typeof web
+    const hasRegister = typeof (web as { registerSearchProvider?: unknown } | null)?.registerSearchProvider
+    writeSelectionState({
+      at: new Date().toISOString(), target: ZH_WEB_SEARCH_PROVIDER_ID, before: null,
+      channel: 'none', outcome: 'error',
+      error: `web 服务不可用（web=${webKind}，registerSearchProvider=${hasRegister}）`.slice(0, 300),
+    })
+    return undefined
+  }
+
+  /** 等待 provider 出现在注册表期间挂起的重试定时器（卸载时一并清理）。 */
+  const pendingTimers = new Set<ReturnType<typeof setTimeout>>()
 
   let fallbackNotified = false
   const provider: WebSearchProviderLike = {
     id: ZH_WEB_SEARCH_PROVIDER_ID,
     available(): boolean {
-      return deps.isEnabled()
+      return deps.isEnabled() && deps.searchOrder().length > 0
     },
     async search(request: WebSearchRequestLike, signal?: AbortSignal): Promise<WebSearchResultLike> {
       const query = String(request.query ?? '').trim()
       if (query.length === 0) throw new ZhWebError('[WEB_PROVIDER_UNUSABLE] query must be a non-empty string')
 
-      // 1) 智谱优先（两插件共存时的联动路径）。
-      const zhipu = providerById(web, ZHIPU_SEARCH_PROVIDER_ID)
-      // 智谱结果「带简介但不达标」时保留为回落候选：免费后端失败/无结果时用它，
-      // 保证闸门绝不比不加闸门更差（宁可给回无简介结果，也不给空结果或报错）。
+      const cap = typeof request.maxResults === 'number' && request.maxResults > 0 ? request.maxResults : undefined
+      const capResult = (result: WebSearchResultLike): WebSearchResultLike => {
+        if (cap === undefined || result.sources.length <= cap) return result
+        return { ...result, sources: result.sources.slice(0, cap), truncated: false }
+      }
+
+      // 结果带简介但不达标时的回落候选：保证闸门绝不比不加闸门更差
+      //（宁可给回无简介结果，也不给空结果或报错）。
       let snippetPoorFallback: WebSearchResultLike | undefined
-      if (zhipu !== undefined && zhipu.available()) {
+      const order = deps.searchOrder()
+      let lastError: unknown
+
+      for (const backendId of order) {
+        if (wasAborted(signal)) throw signal?.reason ?? new ZhWebError('[WEB_ABORTED] aborted')
+
+        // 1) 本插件内置的免 Key 多引擎后端（占位 id，不是真实注册的 provider）。
+        if (backendId === ZH_FREE_MULTI_BACKEND_ID) {
+          try {
+            const sources = await freeSearch(ctx, query, cap, signal)
+            if (sources.length > 0) {
+              const capped = cap !== undefined && sources.length > cap ? sources.slice(0, cap) : sources
+              return { sources: capped, truncated: false }
+            }
+            // 免费后端无结果：若有更前面的无简介结果，继续尝试后续后端。
+          } catch (error: unknown) {
+            if (wasAborted(signal) || !isDowngradable(error)) throw error
+            lastError = error
+          }
+          continue
+        }
+
+        // 2) 已注册的官方/第三方 provider。
+        const backend = providerById(web, backendId)
+        if (backend === undefined) continue          // 未注册：静默跳过
+        if (!backend.available()) continue           // 不可用：跳过，不发无用请求
+
         try {
-          const result = await zhipu.search(request, signal)
-          // 智谱成功且结果带简介 → 直接返回（其内部已处理自己的 DeepSeek 回退）。
+          const result = await backend.search(request, signal)
           if (hasUsableSnippets(result.sources)) return result
-          // 成功但整批缺简介（典型：智谱被禁用 → 回退 DeepSeek 原生搜索，其结果项
-          // 只有标题/链接/加密正文）→ 记为回落候选，改走免费多引擎后端重取。
+          // 成功但整批缺简介（典型：DeepSeek Messages 搜索的正文加密）→
+          // 记为回落候选，继续尝试后面的后端。
           snippetPoorFallback = result
           recordWebSearchSnippetFallback(query, result.sources.length)
-          log(`智谱结果 ${String(result.sources.length)} 条均无简介，改走免费多引擎后端重取同一查询`)
+          log(`后端 ${backendId} 的 ${String(result.sources.length)} 条结果均无简介，继续按优先级尝试下一个`)
         } catch (error: unknown) {
-          if (signal?.aborted === true || !isDowngradable(error)) throw error
-          // 智谱失败（含敏感内容过滤 ZHIPU_CONTENT_FILTERED）→ 自动转免费多引擎。
-          // 每次降级都落运行态记录（/dsh-zh/api/diagnostics 可查，是「联动
-          // 真的发生过」的行为证据——工具返回值本身看不出后端归属）。
+          if (wasAborted(signal) || !isDowngradable(error)) throw error
           recordWebSearchFallback(error, query)
+          lastError = error
           if (!fallbackNotified) {
             fallbackNotified = true
-            log(`智谱搜索失败（${(error as { code?: unknown })?.code ?? 'error'}），已自动转免费后端（Tavily/DuckDuckGo/Yandex/Bing/Wikipedia）`)
+            log(`后端 ${backendId} 搜索失败（${(error as { code?: unknown })?.code ?? 'error'}），已按优先级继续下一个`)
           }
         }
       }
 
-      // 2) 免费多引擎后端（Tavily → DuckDuckGo → Yandex/Bing/Wikipedia 兜底）。
-      //    智谱成功但缺简介时，这里失败或无结果都要回落智谱结果而不是报错。
-      const cap = typeof request.maxResults === 'number' && request.maxResults > 0 ? request.maxResults : undefined
-      /** 回落智谱结果时同样遵守 maxResults（智谱内部已预裁剪，这里是幂等保险）。 */
-      const capFallback = (result: WebSearchResultLike): WebSearchResultLike => {
-        if (cap === undefined || result.sources.length <= cap) return result
-        return { ...result, sources: result.sources.slice(0, cap), truncated: false }
+      // 全部后端都失败/无摘要：有回落候选就给它，否则抛最后一个错误。
+      if (snippetPoorFallback !== undefined) {
+        log(`全部后端均无可用结果，回落到无简介结果（${String(snippetPoorFallback.sources.length)} 条）`)
+        return capResult(snippetPoorFallback)
       }
-      let sources: ReadonlyArray<WebSearchSourceLike>
-      try {
-        sources = await freeSearch(ctx, query, cap, signal)
-      } catch (error: unknown) {
-        if (snippetPoorFallback === undefined) throw error
-        if (signal?.aborted === true || !isDowngradable(error)) throw error
-        // 免费后端整体失败，但手上还有智谱的无简介结果：给回它，比报错有用。
-        log(`免费多引擎后端失败，回落到智谱的无简介结果（${String(snippetPoorFallback.sources.length)} 条）`)
-        return capFallback(snippetPoorFallback)
-      }
-      if (sources.length === 0 && snippetPoorFallback !== undefined) {
-        log(`免费多引擎后端无结果，回落到智谱的无简介结果（${String(snippetPoorFallback.sources.length)} 条）`)
-        return capFallback(snippetPoorFallback)
-      }
-      const capped = cap !== undefined && sources.length > cap ? sources.slice(0, cap) : sources
-      return { sources: capped, truncated: false }
+      if (lastError !== undefined) throw lastError
+      return { sources: [], truncated: false }
     },
   }
 
   try {
     const dispose = web.registerSearchProvider(provider)
-    // 立即按当前开关接管/恢复官方 web_search 的后端选择。
-    applyWebSearchSelection(ctx, deps.isEnabled())
-    log(`网络搜索已注册（provider id: ${ZH_WEB_SEARCH_PROVIDER_ID}，智谱优先 + 免费多引擎后端）`)
+    // 记录「注册成功」这一事实：否则诊断里只能看到 applyWebSearchSelection 的
+    // 待定态，无法区分「注册没发生」与「注册了但接管没走到」。
+    writeSelectionState({
+      at: new Date().toISOString(), target: ZH_WEB_SEARCH_PROVIDER_ID, before: null,
+      channel: 'none', outcome: 'pending',
+      error: 'provider 注册成功，正在接管选路',
+    })
+    // 立即按当前开关与优先级接管/恢复官方 web_search 的后端选择。
+    //
+    // 注意顺序陷阱：官方 registerSearchProvider 的 Map 写入发生在
+    // `ctx.effect(function* () { store.set(...); yield ... })` 的生成器体里，
+    // 而 effect 的驱动可能是**异步**的——紧接着同步调用时 `searchProviders`
+    // 里还读不到本 provider，applyWebSearchSelection 会因「注册表里没有
+    // dsh-zh-web」直接放弃接管（2026-10-17 实测：诊断记录 channel=none）。
+    // 因此这里先同步试一次，不成立再排队到微任务与下一次宏任务重试。
+    const attemptSelection = (): boolean => {
+      const took = applyWebSearchSelection(ctx, deps.isEnabled(), deps.searchOrder())
+      if (took) {
+        log(`搜索后端已接管（provider id: ${ZH_WEB_SEARCH_PROVIDER_ID}，优先级：${deps.searchOrder().join(' → ')}）`)
+      }
+      return took
+    }
+    if (!attemptSelection()) {
+      // 重试直到 provider 出现在注册表里（effect 已驱动），最多 20 次 × 25ms。
+      let tries = 0
+      const retry = (): void => {
+        if (attemptSelection()) return
+        tries += 1
+        if (tries >= 40) {
+          warn('未能把 web.searchProvider 切到本插件：搜索仍走部署配置的后端（优先级列表不生效）')
+          writeSelectionState({
+            at: new Date().toISOString(), target: ZH_WEB_SEARCH_PROVIDER_ID, before: null,
+            channel: 'none', outcome: 'error',
+            error: `注册成功但重试 ${String(tries)} 次后注册表里仍没有 ${ZH_WEB_SEARCH_PROVIDER_ID}`,
+          })
+          return
+        }
+        const timer = setTimeout(retry, 25)
+        // 不阻止进程退出；卸载时由下面的清理函数一并撤掉。
+        if (typeof timer === 'object' && timer !== null && 'unref' in timer) (timer as { unref(): void }).unref()
+        pendingTimers.add(timer)
+      }
+      queueMicrotask(retry)
+    }
     return () => {
-      restoreWebSearchSelection(web)
+      for (const timer of [...pendingTimers]) clearTimeout(timer)
+      pendingTimers.clear()
+      restoreWebSearchSelection(ctx, web)
       dispose()
     }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error)
     if (/duplicate|already/i.test(message)) {
-      // 双行并存（热迁移窗口）：先到实例已注册，本实例不重复注册。
-      log('网络搜索 provider 已由另一实例注册，跳过')
+      // 注册表里已经有同一 id 的 provider：上一个实例注册的，其清理挂在它自己的
+      // ctx.effect 上，`registry.delete` 重建 fiber 时**不一定**已执行。
+      // 此时**仍要**做接管：换血后的新实例如果不接管，配置就永远停在旧值。
+      // （2026-10-17 实测：新实例走这条分支后直接 return，导致
+      //  webSearchSelection 一直停在「注册表尚无 dsh-zh-web」的待定态。）
+      log('网络搜索 provider 已由上一实例注册，复用其注册并继续接管选路')
+      try {
+        const took = applyWebSearchSelection(ctx, deps.isEnabled(), deps.searchOrder())
+        if (took) log(`搜索后端已接管（复用注册，provider id: ${ZH_WEB_SEARCH_PROVIDER_ID}）`)
+      } catch {
+        // 接管失败不影响插件其余功能。
+      }
       return undefined
     }
     warn(`注册网络搜索 provider 失败: ${message}`)

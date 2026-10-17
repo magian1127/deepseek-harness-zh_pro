@@ -48,7 +48,7 @@ import {
   cleanHotDir, disposeLiveEntries, hotMount, hotUnmount, liveEntryNames,
   readSnapshot, snapshotNames,
 } from './hot-mount.js'
-import { installSelfHotReload, installUnloadCacheEviction } from './hot-reload.js'
+import { installPreMountCacheEviction, installSelfHotReload, installUnloadCacheEviction } from './hot-reload.js'
 import { installSessionDeleteRoute } from './session-delete.js'
 import { installWebSearchProvider } from './web-search.js'
 import { installAgentSearchTool, type AgentSearchToolHandle } from './agent-search-tool.js'
@@ -207,6 +207,17 @@ async function migrateFromHotRow(ctx: HostContext): Promise<void> {
 }
 
 export function apply(ctx: HostContext, config: Record<string, unknown> = {}): void {
+  // apply 入口标记（诊断用）：区分「新实例的 apply 根本没跑」与「跑了但某步跳过」。
+  // 存 globalThis 品牌符号，行重建后新实例也能被诊断路由读到。
+  try {
+    ;(globalThis as Record<symbol, unknown>)[Symbol.for('deepseek-harness-zh_pro.apply-mark')] = {
+      at: new Date().toISOString(),
+      entryId: ctx.fiber?.entry?.options?.id ?? null,
+      owns: ownsPromptRegistration(ctx),
+      hasWeb: ctx.get('web') !== undefined && ctx.get('web') !== null,
+      hasSettings: ctx.get('settings') !== undefined && ctx.get('settings') !== null,
+    }
+  } catch { /* 诊断绝不阻断装配。 */ }
   void migrateFromHotRow(ctx)
   // 「web_search 工具壳」：agent 作用域补壳（探测让位），与中文优先提示
   // 装配同门槛避免双实例重复注册；须先于 installChinesePrompt 装配（其
@@ -215,6 +226,7 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     agentSearchToolHandle = installAgentSearchTool(ctx, {
       isEnabled: () => getModelState().zhWebSearch,
       useZh: () => getModelState().zhPrompt,
+      perQuery: () => getModelState().zhSearchPerQuery,
     }) ?? undefined
   }
   if (ownsPromptRegistration(ctx)) installChinesePrompt(ctx, config, {
@@ -223,17 +235,20 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
   if (ownsPromptRegistration(ctx)) installModelLocale(ctx)
   if (ownsPromptRegistration(ctx)) installContextLocale(ctx)
   installSelfHotReload(ctx)
-  // 自持卸载清理：Fiber dispose 时按包内目录前缀逐出本包的 ESM 模块缓存，
-  // 使后续 set_plugin 往返 / patch reload / 重启能从磁盘求值当前构建
-  // （首次引入本能力需重启一次让这段代码进入长跑进程，见 docs/runtime-hmr.md）。
+  // 挂载前逐出（主通道）：Loader 在 `new Entry()` 里同步 emit
+  // 'loader/entry-init'，之后才 await import 入口。监听它并在此刻清掉本包
+  // 模块缓存，行重建（set_plugin 往返 / patch reload）就能真正换血。
+  // 这是「不重启即生效」的关键；首次引入本能力仍需重启一次让这段代码进进程。
+  installPreMountCacheEviction(ctx)
+  // 兜底通道：Fiber dispose 时也逐出一次（覆盖非行重建的退出路径）。
   installUnloadCacheEviction(ctx)
   // 「删除会话（回收站）」：与 settings 注册同门槛，避免热迁移窗口双实例
   // 重复注册路由；服务未就绪时由内部重试等待（见 session-delete.js）。
   if (ownsPromptRegistration(ctx)) installSessionDeleteRoute(ctx, () => resolveSessionDeleteDeps(ctx))
-  // 「网络搜索」：注册 dsh-zh-web 组合 provider（智谱优先 → Tavily → 免 Key 多引擎）。
+  // 「网络搜索」：注册 dsh-zh-web 组合 provider（按 zhSearchOrder 优先级依次尝试）。
   // 与 settings 注册同门槛避免双实例重复注册；web 服务晚于本插件就绪时由
-  // internal/service 事件重试（与 session-delete 同款模式）。开关状态经
-  // getModelState() 读取（dsh-zh 命名空间 zhWebSearch，默认开）。
+  // internal/service 事件重试（与 session-delete 同款模式）。开关状态与优先级
+  // 都经 getModelState() 读取（dsh-zh 命名空间，volatile 实时生效）。
   if (ownsPromptRegistration(ctx)) installWebSearchRetry(ctx)
 
   // 「服务监控」无独立后台任务：主机只在网页拉取快照时即时扫描一次
@@ -297,7 +312,10 @@ function installWebSearchRetry(ctx: HostContext): void {
   const install = function (): boolean {
     const web = ctx.get('web')
     if (web === undefined || web === null) return false
-    const dispose = installWebSearchProvider(ctx, { isEnabled: () => getModelState().zhWebSearch })
+    const dispose = installWebSearchProvider(ctx, {
+      isEnabled: () => getModelState().zhWebSearch,
+      searchOrder: () => getModelState().zhSearchOrder,
+    })
     // provider 注册成功后补一次工具壳评估：agent 枚举早于 web 服务就绪时，
     // 壳因 scoped web 缺席未装上，此时补装。
     if (dispose !== undefined) agentSearchToolHandle?.refresh()

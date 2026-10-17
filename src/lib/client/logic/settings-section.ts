@@ -67,6 +67,13 @@ const zhSwitchKnob = function (on) {
     transform: on ? 'translateX(12px)' : 'translateX(0px)',
   }
 }
+// 搜索后端优先级：客户端只负责展示与重排，真实顺序由主机侧
+// ZH_SEARCH_ORDER_DEFAULT（constants.ts）定义。客户端不能 import 主机模块
+// （构建器把片段按顺序拼进同一个工厂函数），因此这里保留一份同值副本；
+// verify-cli.mts 会断言两侧一致。
+const SEARCH_ORDER_DEFAULT = ['deepseek-search-api', 'zhipu-web-search-prime', 'dsh-zh-free']
+const ZH_FREE_MULTI_BACKEND_ID = 'dsh-zh-free'
+
 const ZhSettingsSection = function (props) {
   const t = props.t
   const snapshot = React.useSyncExternalStore(settingsStore.subscribe, settingsStore.getSnapshot)
@@ -190,6 +197,45 @@ const ZhSettingsSection = function (props) {
       : 'var(--dsw-alias-label-tertiary, #666)',
   }
   const searchToggleOn = promptReady && promptSnapshot.value.zhWebSearch !== false
+  // 每查询返回条数：0 = 不接管（主机侧归一化规则同这里，范围 0–50）。
+  const searchPerQueryValue = (promptReady && typeof promptSnapshot.value.zhSearchPerQuery === 'number')
+    ? promptSnapshot.value.zhSearchPerQuery
+    : 0
+  // 后端优先级列表的本地视图：主机值是权威，但主机未就绪时用默认顺序垫底，
+  // 避免面板空一截。写入走 boundPromptScope.set('zhSearchOrder', 新数组)。
+  const searchOrderFromHost = (promptReady && Array.isArray(promptSnapshot.value.zhSearchOrder))
+    ? promptSnapshot.value.zhSearchOrder.filter(function (id) { return typeof id === 'string' })
+    : []
+  const searchOrder = searchOrderFromHost.length > 0 ? searchOrderFromHost : SEARCH_ORDER_DEFAULT.slice()
+  const searchOrderWritable = boundPromptScope !== null && promptReady === true
+  const blocked = searchOrderWritable !== true
+  /**
+   * 后端展示名。客户端拿不到 provider 注册表（主机私有字段），因此这里不做
+   * 「是否已安装」的判断——标错比不标更误导；真实可用性由主机在执行时判定
+   * 并按列表自动降级。
+   */
+  const searchOrderLabel = function (backendId, tt) {
+    if (backendId === 'deepseek-search-api') return tt('searchOrderBackendDeepseekApi')
+    if (backendId === 'zhipu-web-search-prime') return tt('searchOrderBackendZhipu')
+    if (backendId === ZH_FREE_MULTI_BACKEND_ID) return tt('searchOrderBackendFree')
+    if (backendId === 'deepseek-official') return tt('searchOrderBackendMessages')
+    return tt('searchOrderBackendUnknown') + ' · ' + backendId
+  }
+  /** 移动一项（±1）：只重排、不增删，写回主机即触发重新接管。 */
+  const moveSearchOrder = function (index, delta) {
+    if (!searchOrderWritable) return
+    const next = searchOrder.slice()
+    const target = index + delta
+    if (target < 0 || target >= next.length) return
+    const moved = next.splice(index, 1)[0]
+    next.splice(target, 0, moved)
+    void boundPromptScope.set('zhSearchOrder', next)
+  }
+  /** 恢复默认顺序。 */
+  const restoreSearchOrder = function () {
+    if (!searchOrderWritable) return
+    void boundPromptScope.set('zhSearchOrder', SEARCH_ORDER_DEFAULT.slice())
+  }
   const submitSearchCredential = function () {
     const key = credKeyDraft.trim()
     if (key === '') return
@@ -610,6 +656,81 @@ const ZhSettingsSection = function (props) {
               void boundPromptScope.set('zhWebSearch', !searchToggleOn)
             }
           }, boundPromptScope === null, t('zhWebSearch'))),
+        // 每查询返回条数：0 = 不接管（官方 8 条 + 轮询合并），>0 = 装壳并按查询分组。
+        row('zhSearchPerQuery', t('searchPerQuery'), t('searchPerQueryDesc'),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+            React.createElement('input', {
+              type: 'number', min: 0, max: 50, step: 1,
+              value: searchPerQueryValue,
+              style: inputStyle,
+              'aria-label': t('searchPerQuery'),
+              disabled: boundPromptScope === null || promptReady !== true,
+              onChange: function (event) {
+                const n = parseInt(event.target.value, 10)
+                if (boundPromptScope !== null && promptReady === true && !isNaN(n)) {
+                  void boundPromptScope.set('zhSearchPerQuery', Math.max(0, Math.min(50, Math.round(n))))
+                }
+              },
+            }),
+            React.createElement('span', { style: zhDescStyle }, t('searchPerQueryUnit')))),
+        // 搜索后端优先级：有序列表 + 上下移动 + 状态徽标。
+        React.createElement('div', {
+          key: 'searchOrder',
+          style: Object.assign({}, zhRowStyle, { flexDirection: 'column', alignItems: 'stretch', gap: '10px' }),
+        },
+          React.createElement('div', { style: Object.assign({}, zhRowTextStyle, { flex: '0 0 auto' }) },
+            React.createElement('div', { style: zhRowTitleStyle }, t('searchOrder')),
+            React.createElement('div', { style: zhDescStyle }, t('searchOrderDesc'))),
+          searchOrder.length === 0
+            ? React.createElement('div', { style: zhDescStyle }, t('searchOrderEmpty'))
+            : React.createElement('ol', {
+              style: { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '6px' },
+            }, searchOrder.map(function (backendId, index) {
+              const canMoveUp = index > 0
+              const canMoveDown = index < searchOrder.length - 1
+              return React.createElement('li', {
+                key: 'order-' + backendId,
+                style: {
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  padding: '6px 8px', borderRadius: 8,
+                  background: 'var(--dsw-alias-bg-layer-3, transparent)',
+                  border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.28))',
+                },
+              },
+                React.createElement('span', {
+                  style: { flex: 'none', minWidth: '16px', fontSize: 12, color: 'var(--dsw-alias-label-tertiary, #666)' },
+                }, String(index + 1)),
+                React.createElement('span', {
+                  style: Object.assign({}, zhRowTitleStyle, { flex: '1 1 auto', minWidth: 0, fontSize: 13 }),
+                }, searchOrderLabel(backendId, t)),
+                React.createElement('button', {
+                  type: 'button',
+                  'aria-label': t('searchOrderMoveUp'),
+                  disabled: !canMoveUp || blocked,
+                  onClick: function () { moveSearchOrder(index, -1) },
+                  style: !canMoveUp || blocked
+                    ? Object.assign({}, svcGhostButtonStyle, { opacity: 0.45, cursor: 'not-allowed', padding: '2px 8px' })
+                    : Object.assign({}, svcGhostButtonStyle, { padding: '2px 8px' }),
+                }, '▲'),
+                React.createElement('button', {
+                  type: 'button',
+                  'aria-label': t('searchOrderMoveDown'),
+                  disabled: !canMoveDown || blocked,
+                  onClick: function () { moveSearchOrder(index, 1) },
+                  style: !canMoveDown || blocked
+                    ? Object.assign({}, svcGhostButtonStyle, { opacity: 0.45, cursor: 'not-allowed', padding: '2px 8px' })
+                    : Object.assign({}, svcGhostButtonStyle, { padding: '2px 8px' }),
+                }, '▼'))
+            })),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+            React.createElement('button', {
+              type: 'button',
+              onClick: function () { restoreSearchOrder() },
+              disabled: blocked,
+              style: blocked
+                ? Object.assign({}, svcGhostButtonStyle, { opacity: 0.45, cursor: 'not-allowed' })
+                : svcGhostButtonStyle,
+            }, t('searchOrderRestore')))),
         // Key 行：整行纵向布局（key 约 58 字符，横排放不下）；输入框用 password
         // 形态，保存后由主机回的脱敏提示确认写入结果。
         React.createElement('div', {

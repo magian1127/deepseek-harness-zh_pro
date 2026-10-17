@@ -7,8 +7,8 @@
 import { readFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { PKG } from '../bin/dsh-zh.mjs'
-import { unloadEvictionRecord } from './hot-reload.js'
-import { getWebSearchFallbackState, getWebSearchSnippetFallbackState } from './web-search.js'
+import { preMountEvictionRecord, reloadRecord, reloadSequence, unloadEvictionRecord, watchState } from './hot-reload.js'
+import { getConfiguredWebSearchProvider, getLiveWebSearchSelection, getWebSearchFallbackState, getWebSearchSelectionState, getWebSearchSnippetFallbackState } from './web-search.js'
 
 interface RouteRequest {
   method?: string
@@ -45,6 +45,21 @@ function packageVersion(): string | null {
   }
 }
 
+/** apply 入口写下的装配标记（见 index.ts 的 apply）。 */
+interface ApplyMark {
+  at: string
+  entryId: string | null
+  owns: boolean
+  hasWeb: boolean
+  hasSettings: boolean
+}
+
+/** 读取 apply 标记；从未 apply 过为 null。 */
+function readApplyMark(): ApplyMark | null {
+  const mark = (globalThis as Record<symbol, unknown>)[Symbol.for('deepseek-harness-zh_pro.apply-mark')]
+  return mark === undefined ? null : mark as ApplyMark
+}
+
 /** GET /dsh-zh/api/diagnostics：命中并响应返回 true，供 /dsh-zh/api 分发调用。 */
 export function handleDiagnosticsRoute(_req: RouteRequest, res: RouteResponse, pathname: string): boolean {
   if (pathname !== '/dsh-zh/api/diagnostics') return false
@@ -56,6 +71,13 @@ export function handleDiagnosticsRoute(_req: RouteRequest, res: RouteResponse, p
       buildId: hostEntryBuildId(),
       node: process.version,
       unloadEviction: unloadEvictionRecord(),
+      preMountEviction: preMountEvictionRecord() ?? null,
+      reload: reloadRecord() ?? null,
+      hotReloadWatch: watchState() ?? null,
+      reloadSequence: reloadSequence() ?? null,
+      applyMark: readApplyMark(),
+      webSearchSelection: getWebSearchSelectionState() ?? null,
+      webSearchLive: getLiveWebSearchSelection() ?? null,
       webSearchFallback: getWebSearchFallbackState(),
       webSearchSnippetFallback: getWebSearchSnippetFallbackState(),
     },

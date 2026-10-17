@@ -196,7 +196,7 @@ try {
   writeFileSync(join(schemaDir, 'index.cjs'), [
     "'use strict'",
     'function schema() { return { default: function () { return this } } }',
-    'module.exports = { object: schema, boolean: schema, string: schema, number: schema }',
+    'module.exports = { object: schema, boolean: schema, string: schema, number: schema, array: schema }',
   ].join('\n'))
   // 模拟宿主物化 volatile 引用：apply 直接收 config（字段带 .get()），实时
   // 变更改状态对象后派发 loader/volatile-update。
@@ -289,6 +289,191 @@ try {
   for (let i = effects.length - 1; i >= 0; i -= 1) await effects[i]()
   check(systemPrompt.assemble, originalAssemble, '卸载后恢复 systemPrompt.assemble')
   check((handlers['loader/volatile-update'] ?? []).length, 0, '卸载后取消 volatile 监听')
+
+  // ---- 搜索后端接管与优先级：官方 settings 写入 + 按序尝试 ----
+  // 关键回归点：DSH ≥ 0.2.1 的 WebRuntime 已无 searchProviderId 实例字段
+  // （commit fda98dadd2 换成 config.searchProvider volatile 引用），旧写法
+  // 「web.searchProviderId = ...」是写一个没人读的属性，接管静默失效。
+  // 这里用 stubbed settings.update 断言宿主支持的写入通道确实被调用。
+  {
+    const settingsWrites: Array<{ ns: string; patch: Record<string, unknown> }> = []
+    const registeredProviders = new Map<string, unknown>()
+    const stubSettings = {
+      update: async function (ns: string, patch: Record<string, unknown>) {
+        settingsWrites.push({ ns, patch })
+      },
+    }
+    const stubWeb = {
+      searchProviders: registeredProviders,
+      registerSearchProvider: function (provider: { id: string }) {
+        registeredProviders.set(provider.id, provider)
+        return function () { registeredProviders.delete(provider.id) }
+      },
+    }
+    const webCtx = {
+      fiber: { entry: { options: { id: 'dsh-zh' } } },
+      loader: { entries: function () { return [] } },
+      get: function (name: string) {
+        if (name === 'settings') return stubSettings
+        if (name === 'web') return stubWeb
+        return undefined
+      },
+      on: function () {},
+      effect: function (setup: () => unknown) { setup() },
+    }
+    const quiet = function (task: () => unknown) {
+      const log = console.log
+      const warn = console.warn
+      try {
+        console.log = function () {}
+        console.warn = function () {}
+        return task()
+      } finally {
+        console.log = log
+        console.warn = warn
+      }
+    }
+    const webSearch = await import(`./lib/web-search.js?verify=order-${Date.now()}-${Math.random()}`)
+    const dispose = quiet(function () {
+      return webSearch.installWebSearchProvider(webCtx, {
+        isEnabled: () => true,
+        searchOrder: () => ['deepseek-search-api', 'dsh-zh-free'],
+      })
+    })
+    check(typeof dispose, 'function', '搜索 provider 注册成功并返回卸载函数')
+    // 让 settings.update 的 promise 落地（install 内以 void 调用）。
+    await new Promise(function (resolve) { setTimeout(resolve, 0) })
+    check(settingsWrites.length > 0, true, '接管走官方 settings.update（而非失效的实例字段）')
+    check(settingsWrites[0]?.ns, 'web', '设置写入目标是 web 命名空间')
+    check(settingsWrites[0]?.patch, { searchProvider: 'dsh-zh-web' }, '写入 searchProvider=dsh-zh-web')
+    check(registeredProviders.has('dsh-zh-web'), true, '复合 provider 已进注册表')
+
+    // 空优先级列表 = 不接管（与关闭开关等价）。
+    settingsWrites.length = 0
+    const active = webSearch.applyWebSearchSelection(webCtx, true, [])
+    check(active, false, '空优先级列表不接管（返回 false）')
+    await new Promise(function (resolve) { setTimeout(resolve, 0) })
+    // 已接管过的实例在传空列表时会还原到接管前的值——这也是「不接管」。
+    check(settingsWrites.every(function (w) { return w.patch.searchProvider !== 'dsh-zh-web' }), true,
+      '空优先级列表不会把 searchProvider 写成 dsh-zh-web')
+
+    // dispose 后还原到接管前的值。
+    settingsWrites.length = 0
+    dispose()
+    await new Promise(function (resolve) { setTimeout(resolve, 0) })
+    check(settingsWrites.length > 0, true, '卸载时还原 searchProvider')
+    check(registeredProviders.has('dsh-zh-web'), false, '卸载时从注册表移除 provider')
+  }
+
+  // ---- 每查询条数独立于后端开关（zhSearchPerQuery > 0 时仍装壳） ----
+  {
+    const scopeTools: Array<{ name: string }> = []
+    const agentScopeTools = {
+      register: function (definition: { name: string }) {
+        scopeTools.push(definition)
+        return function () { scopeTools.pop() }
+      },
+    }
+    const agentCtx = {
+      fiber: { entry: { options: { id: 'dsh-zh' } } },
+      loader: { entries: function () { return [] } },
+      get: function (name: string) {
+        if (name === 'tools') {
+          return { register: function (definition: { name: string }) { scopeTools.push(definition); return function () {} } }
+        }
+        if (name === 'web') return { search: async function () { return { sources: [], truncated: false } } }
+        return undefined
+      },
+      on: function () {},
+      effect: function (setup: () => unknown) { setup() },
+    }
+    const hostTools = {
+      get: function () { return { name: 'web_search', description: 'Search the web for current information.' } },
+    }
+    const toolCtx = {
+      fiber: { entry: { options: { id: 'dsh-zh' } } },
+      loader: { entries: function () { return [] } },
+      get: function (name: string) {
+        if (name === 'tools') return hostTools
+        if (name === 'agents') {
+          return { list: function () { return [{ ctx: agentCtx }] } }
+        }
+        return undefined
+      },
+      on: function () {},
+      effect: function (setup: () => unknown) { setup() },
+    }
+    const agentTool = await import(`./lib/agent-search-tool.js?verify=perquery-${Date.now()}-${Math.random()}`)
+    const quiet = function (task: () => unknown) {
+      const log = console.log
+      const warn = console.warn
+      try {
+        console.log = function () {}
+        console.warn = function () {}
+        return task()
+      } finally {
+        console.log = log
+        console.warn = warn
+      }
+    }
+    // isEnabled=false（后端不接管）但 perQuery=20 → 仍应装壳。
+    scopeTools.length = 0
+    const handle = quiet(function () {
+      return agentTool.installAgentSearchTool(toolCtx, {
+        isEnabled: () => false,
+        useZh: () => false,
+        perQuery: () => 20,
+      })
+    })
+    check(scopeTools.some(function (item) { return item.name === 'web_search' }), true,
+      'zhSearchPerQuery>0 时即使后端开关关闭也装 web_search 壳')
+    handle?.refresh()
+
+    // isEnabled=false 且 perQuery=0 → 不装壳，保持官方工具。
+    scopeTools.length = 0
+    const idleHandle = quiet(function () {
+      return agentTool.installAgentSearchTool(toolCtx, {
+        isEnabled: () => false,
+        useZh: () => false,
+        perQuery: () => 0,
+      })
+    })
+    check(scopeTools.length, 0, '两者都关闭时不装壳，保留官方 web_search')
+    idleHandle?.refresh()
+
+    // 输出契约守卫（2026-10-18 实测事故）：宿主按 output.schema 校验工具返回值，
+    // 外层是 additionalProperties:false，**返回值里出现任何未声明字段都会让整次
+    // 调用变成 INVALID_TOOL_OUTPUT**。上一轮加分组模式时返回值多了 sections 却
+    // 忘记声明，导致连续 3 次 web_search 调用全失败：
+    //   tool "web_search" returned invalid output:
+    //   "value.sections" is not a declared property (additionalProperties: false)
+    // 这里直接比对「execute 实际返回的键」与「schema 声明的键」，防止再犯。
+    scopeTools.length = 0
+    const schemaHandle = quiet(function () {
+      return agentTool.installAgentSearchTool(toolCtx, {
+        isEnabled: () => false,
+        useZh: () => false,
+        perQuery: () => 20,
+      })
+    })
+    const shellDef = scopeTools.find(function (item) { return item.name === 'web_search' })
+    if (shellDef === undefined) {
+      check(false, true, '未能捕获 web_search 定义（schema 守卫无法执行）')
+    } else {
+      const declared = Object.keys(shellDef.output.schema.properties).sort()
+      check(declared.join(','), 'content,sections,sources,truncated',
+        'web_search output schema 声明了全部返回字段（含分组 sections）')
+      check(shellDef.output.schema.additionalProperties, false,
+        'web_search output schema 仍是严格模式')
+      // 分组结果：模拟 mergeSourcesGrouped 的产出键集合，必须被 schema 覆盖。
+      const groupedKeys = ['sources', 'truncated', 'sections']
+      check(groupedKeys.every(function (key) { return declared.includes(key) }), true,
+        '分组模式返回的所有键都在 schema 里')
+    }
+    schemaHandle?.refresh()
+    void agentScopeTools
+  }
+
 
     // ---- 模型请求中文化：新会话生效、老会话不重新注入、开关关零改动 ----
     // 复用同样的 stub 模式，但独立装配 chinese-prompt + model-locale 两个模块

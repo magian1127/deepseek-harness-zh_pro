@@ -49,6 +49,33 @@ export const ZH_CONTEXT_INJECT_KEY = 'zhContextInject'
 // 关闭后 web seam 落回官方默认。
 export const ZH_WEB_SEARCH_KEY = 'zhWebSearch'
 
+// 搜索后端优先级：有序 provider id 列表，复合 provider（dsh-zh-web）按此顺序
+// 依次尝试。空数组 = 不接管 web seam 的后端选择（保持部署里的 searchProvider）。
+// 用户可在设置页用上下箭头调整：DeepSeek Search API 计费后移到末位即可。
+export const ZH_SEARCH_ORDER_KEY = 'zhSearchOrder'
+/** 优先级列表上限（防误配超长数组）。 */
+export const ZH_SEARCH_ORDER_MAX = 8
+
+// 单条查询返回数量：web_search 工具壳给每个查询的 maxResults。
+// 0 = 不装壳（保持官方 tool-web 的 8 条 + 轮询合并）。
+export const ZH_SEARCH_PER_QUERY_KEY = 'zhSearchPerQuery'
+/** 单查询条数上限（官方 Search API count 上限也是 50）。 */
+export const ZH_SEARCH_PER_QUERY_MAX = 50
+
+/**
+ * 优先级列表里的「本插件免 Key 多引擎后端」占位 id。
+ * 它不是真实注册的 provider id：复合 provider 用它表示「走内置的
+ * Tavily/DDG/Bing/Yandex/Wikipedia 级联」（见 web-search.ts 的 freeSearch）。
+ */
+export const ZH_FREE_MULTI_BACKEND_ID = 'dsh-zh-free'
+
+/** 默认优先级：Search API（当前免费）→ 智谱 → 免 Key 多引擎（本插件内置）。 */
+export const ZH_SEARCH_ORDER_DEFAULT: readonly string[] = [
+  'deepseek-search-api',
+  'zhipu-web-search-prime',
+  ZH_FREE_MULTI_BACKEND_ID,
+]
+
 // 智谱插件 npm 包名（其 Loader 行的 name 恒为包名，行 id 随挂载方式变化）。
 // agent-search-tool 以「包行存在」为让位信号：智谱在 → 智谱壳是 web_search
 // 工具壳的唯一 owner，本插件只保留 web seam 的 provider 接管（联动）。

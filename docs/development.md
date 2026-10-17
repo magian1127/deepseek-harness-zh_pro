@@ -634,25 +634,49 @@ WCAG 相对亮度公式算「底色 vs 文字」比值（正文要求 ≥ 4.5）
 - 开关全关或 settings 服务不可用时零改动；改写失败只 warn 一次并返回原 assembly。
 
 修改此模块后，`lib/model-locale.js` 与 `lib/chinese-prompt.js` 都要在运行进程里生效。
-Host 半边的热通道现状（2026-09 起，`hot-reload.ts` + `esm-cache.ts`）：
+Host 半边热通道（2026-10-17 重写，逐层实测后的结论；实现见 `hot-reload.ts` + `esm-cache.ts`）：
 
-- **行重建本身载不进新构建**：Node ESM 缓存以解析后 URL 为键，重建 Fiber 后
-  `entry.init()` 重新 import 同一 URL 直接命中进程启动时的模块。`set_plugin`
-  停用→启用、remove/install 往返、touch 文件都一样。
-- **本包自持卸载清理**：Fiber 被 dispose 时按包内目录前缀（`lib/`、`bin/`、
-  `scripts/`）逐出 `loader.internal.loadCache` 中本包条目（跨 realm 结构探测 +
-  `Map.prototype.delete.call`，见 `esm-cache.ts`），此后 `set_plugin` 往返即可
-  从磁盘求值当前构建。首次引入该能力时必须重启一次（清理代码本身在旧模块里，
-  鸡生蛋）；重启后的构建即享免重启换血。
-- **watchConfig 变化逐出**：当前 DSH 唯一公开的精确路径 watcher，回调已在 HMR
-  事务队列内（不得再嵌套 `runExclusive`）；变化时只逐出缓存，重建由 DSH 的
-  行重建完成。旧版 `registerConfig`+`partialReload` 自监视仅作旧代际兼容保留。
-- 判据必须来自运行态：`GET /dsh-zh/api/diagnostics`（回环信任围栏同
-  `/dsh-zh/api` 其余路由）返回 `buildId`（lib/index.js 的 mtime）与
-  `unloadEviction`（最近一次卸载逐出的条目数，存于 globalThis 品牌化符号、
-  跨实例可见）——路由 404→200、buildId 变化、cleared>0 三者构成「行重建
-  真的换了血」的证据链；`list_plugins` 的 `active`/Fiber 存活不构成
-  「新代码在跑」的证据。
+- **行重建本身载不进新构建，且原因不止缓存**：`Entry.update()` 在 fiber 已存在时
+  只调 `_patchContext()` 重建 fiber 并复用 `moduleNamespace`，**从不重新 import**；
+  只有首次 `init()` 才 import。所以 `set_plugin` 停用→启用、remove/install 往返
+  在没有「重新 import」的路径下**永远换不了血**，清缓存也救不了。
+- **唯一能换血的路径 = 复刻官方 `partialReload` 三步**（`reloadSelf`）：
+  ① 清本包模块缓存（ESM `loader.internal.loadCache` + CJS `require.cache` 双层，
+  带备份）；② `loader.import(入口 URL)` 重新求值；③ `registry.delete(旧 plugin)`
+  + `registry.plugin(新 plugin)` 重建 fiber 并挂回原 entry。任一步失败都回滚缓存、
+  保留旧 fiber 继续服务。
+- **删除缓存必须用 `Map.prototype.delete.call`**：Node 24 的 `loadCache` 是
+  `LoadCache extends Map` 但它有两套存储，实例方法 `cache.delete()` 只把 type 槽
+  置 `undefined` 并不移除条目。官方 hmr 源码注释明确此点。曾误改成 `cache.delete`
+  导致逐出恒为 0、热重载静默失效。
+- **watcher 用 `hmr.watchConfig`（`packages/boot/hmr`，不是 `vendor/hmr`）**：
+  回调已在 HMR 事务队列内，**不得再嵌套 `runExclusive`**。它对本 profile 的
+  `configPaths` 有**路径去重**（重复注册直接抛 `config path already registered`），
+  所以产物列表必须去重（入口 `lib/index.js` 会被 `lib/*.js` 枚举重复带入）。
+- **换血后必须重装 watcher**：`watchConfig` 的 disposer 由 `ctx.effect` 挂在 hmr 的
+  `ownerContext` 上，换血替换 fiber 会连带关闭它。因此换血流程先
+  `await stopHotReloadWatch()` 干净拆除，新 fiber 的 `apply` 再重新安装；
+  所有权标志存 `globalThis` 品牌符号（模块级变量会随重新求值各持一份而失效）。
+- **初始扫描过滤不能用 stamp 比较**：`watchExactConfig` 用 `ignoreInitial: false`，
+  安装时把每个已存在文件当 `add` 上报一次。用「stamp 是否相同」判它会让**此后每次
+  真实构建都被误判为初始扫描**（实测 fires 24→46→68 而 skipped 恒为 24、换血只发生
+  一次）。改用「该路径是否已收到过首个事件」。
+- **冷启动时 hmr 尚未就绪**：本插件常比 `hmr` 服务先 apply（base bundle 的
+  hmr 行 `root: []` 且 `disabled` 依赖 `profileContext`）。此时
+  `ctx.get('hmr')` 为 undefined，早期实现直接返回，导致 watcher 永久缺席
+  （2026-10-18 重启后实测 `hotReloadWatch: null`，手动往返一次才装上）。
+  现改为挂 `internal/service` 事件重试，与 session-delete / web-search 同款模式。
+- 判据全部来自运行态：`GET /dsh-zh/api/diagnostics` 返回
+  `reload`（最近一次换血的 outcome / cleared / cjsCleared / count）、
+  `hotReloadWatch`（installed / failed / generation / fires / skipped / runs）、
+  `reloadSequence`、`unloadEviction`、`applyMark`、`preMountEviction`、
+  `webSearchLive`（**实时** configured provider + 是否已注册）。
+  **`buildId` 只是 `lib/index.js` 的 mtime 实时 statSync，不能当运行态版本证据。**
+  只有 `reload.count` 递增 + `generation` 递增才证明新构建真的进了进程。
+- **判断选路是否接管要看 `webSearchLive`，不要看 profile patch 文件**：
+  写通道可能走 volatile（只改内存、不落盘），patch 里的 `searchProvider` 会
+  一直显示旧值。2026-10-17 曾据 patch 文件误判「接管没生效」，实际
+  `config.searchProvider.get()` 早就是 `dsh-zh-web`。
 - 运行通道细节见 [`../docs/runtime-hmr.md`](../runtime-hmr.md)；
   部署诊断见 [`troubleshooting.md`](troubleshooting.md)「主机文件修改后没有热重载」。
 
@@ -702,26 +726,72 @@ agent-loop 硬编码拼接，官方渲染侧永远是英文；按用户需求在
 
 ### 网络搜索（web-search + agent-search-tool）
 
-`src/lib/web-search.ts` 注册组合 provider `dsh-zh-web` 并接管 web 实例的
-`searchProviderId`（WeakMap 记忆原值，关闭/卸载恢复）；`src/lib/agent-search-tool.ts`
+`src/lib/web-search.ts` 注册组合 provider `dsh-zh-web` 并接管 web 实例的后端选择
+（WeakMap 记忆原值，关闭/卸载恢复）；`src/lib/agent-search-tool.ts`
 在 Agent own scope 注册 `web_search` 工具壳与 `tool:web_search` section。实现要点：
 
+- **接管写入通道必须按宿主代际选择（勿退回旧写法）**：DSH ≤ 0.2.0 的
+  `WebRuntime` 有 `searchProviderId` 实例字段；**0.2.1 起（commit `fda98dadd2`）
+  该字段被移除**，改读 `config.searchProvider` 这个 volatile 引用。此时
+  `web.searchProviderId = 'dsh-zh-web'` 只是往实例挂一个没人读的普通属性，
+  接管会**静默失效**（2026-10-17 实测：0.2.1-rc.2 上 grep `lib/index.js` 已无该
+  字段）。`applyWebSearchSelection` 因此按可用性依次尝试：
+  ① `ctx.settings.update('web', { searchProvider })`——官方、持久化、volatile
+  实时生效，0.2.1+ 主通道；② 旧宿主实例字段；③ 兜底写
+  `Symbol.for('cosmokit.volatile.write')`（不持久化，仅 settings 缺席时用）。
+  清空覆盖**不能**用 `update(..., { searchProvider: undefined })`：官方
+  `cloneJsonShaped` 跳过 `undefined` 键（稀疏补丁语义），写入等于没写；必须
+  `settings.mutate('web', [{ op: 'unset', path: ['searchProvider'] }])`。
+- **优先级列表 `zhSearchOrder`** 驱动复合 provider 的尝试顺序
+  （`ZH_SEARCH_ORDER_DEFAULT`：`deepseek-search-api` → `zhipu-web-search-prime`
+  → `ZH_FREE_MULTI_BACKEND_ID`）。占位 id `dsh-zh-free` **不是真实注册的
+  provider**，只表示「走内置 freeSearch 级联」。跳过规则：未注册 → 跳过；
+  `available()===false` → 跳过；失败 → 记降级诊断后继续；成功但整批缺简介 →
+  记为回落候选后继续；`AbortError` → 立即上抛**绝不换后端**；全部失败/无摘要 →
+  有候选给候选，否则抛最后一个错误；列表为空 → 不接管。
+  **不要**用 `signal?.aborted === true` 在循环里复查——TS 会把跨 `await` 的
+  `aborted` 收窄成 `false` 并报 TS2367，必须走 `wasAborted(signal)` 函数读取。
 - **让位信号是智谱包行**（`ZHIPU_PACKAGE_NAME` 在 `ctx.loader.entries()` 中），
   而非探测智谱壳：行注册先于插件 apply，挂载顺序无关，避免双向注册竞态。
   视图占用按 description 特征分类（官方片段与 `model-locale.ts` 的
   `TOOL_MATCH.web_search` 同源，改动需双侧同步；`/Zhipu|智谱/` 智谱壳；
   `/zh_pro/` 自身幂等；其余保守让位）。
+  **官方占用是唯一例外**：`zhSearchPerQuery > 0` 时接管官方定义（官方
+  `tool-web` 把合并上限硬编码成 `WEB_SEARCH_MAX_RESULTS = 8` 且多查询轮询交错，
+  不阴影就拿不回控制权）；为 0 时维持原让位，保证零回归。
+- **`zhSearchPerQuery` 与 `zhWebSearch` 解耦**：壳的装壳条件是
+  `isEnabled() || perQuery() > 0`。前者管「后端由谁提供」，后者管「结果怎么
+  裁剪/合并」，用户可能只要后者（后端仍走部署配置）。execute 每次实时读
+  `deps.perQuery()`，改条数无需重建壳。
+- **分组合并 `mergeSourcesGrouped`**：查询一保留前 N 条 → 查询二保留前 N 条，
+  跨查询 URL 去重（保留首次出现）。与官方 rank 轮询的区别是各查询成块出现。
+  `sections` 随 `presentationMeta` 一起持久化，回放时分节标题仍正确；
+  官方 `web` 结果卡片按扁平 `sources` 渲染，**不支持分节**，卡片按分组顺序平铺。
+- **返回值新增字段必须同时改进 output schema（2026-10-18 事故）**：工具定义里
+  `output.schema` 是 `additionalProperties: false`，宿主按它严格校验 execute 的
+  返回值，**出现任何未声明字段都会让整次调用变成 `INVALID_TOOL_OUTPUT`**：
+  ```
+  Error: tool "web_search" returned invalid output:
+  "value.sections" is not a declared property (additionalProperties: false)
+  ```
+  加分组模式时返回值带了 `sections` 却没声明，连续 3 次 web_search 全失败。
+  给 `output.schema.properties` 补 `sections`（含内层 `query`/`sources` 与来源
+  项字段，内层同样 `additionalProperties: false`）。`verify-cli.mts` 有守卫：
+  直接比对 `output.schema.properties` 的键集合与分组返回键集合。
 - 注册冲突用 `registerWithTakeover`（8 次 × 25ms 等待旧 Fiber 释放），
   每次重试前重新探测智谱包行，出现即主动放弃——绝不与智谱竞速。
 - 收敛触发点：`agent/created` / `agent/disposed` / `agent-preset/selected`、
-  `zhWebSearch`/`zhPrompt` settings watch（chinese-prompt 的
-  `onModelStateChanged` 钩子）、web 服务就绪（index 的 retry install 成功后
-  refresh）、智谱热装卸（index 的 reconcile 监听 profile manifest）。
-  事件监听器绝不向事件总线抛错（Cordis emit 同步串联）。
+  `zhWebSearch`/`zhSearchOrder`/`zhSearchPerQuery`/`zhPrompt` settings watch
+  （chinese-prompt 的 `onModelStateChanged` 钩子）、web 服务就绪（index 的
+  retry install 成功后 refresh）、智谱热装卸（index 的 reconcile 监听 profile
+  manifest）。事件监听器绝不向事件总线抛错（Cordis emit 同步串联）。
 - 工具 execute 走 agent 作用域 `web.search` seam——后端选择已被 provider 接管，
-  因此智谱联动对 zh_pro 壳与智谱壳一致生效。多查询合并（rank 轮询 + URL 去重）
-  与结果净化（URL 白名单/链接文本转义/控制字符折叠）参照智谱壳同级语义实现，
-  零跨包 import。
+  因此智谱联动对 zh_pro 壳与智谱壳一致生效。结果净化（URL 白名单/链接文本
+  转义/控制字符折叠）参照智谱壳同级语义实现，零跨包 import。
+- **客户端不能 import 主机常量**（构建器把 `src/lib/client/**` 片段按顺序拼进
+  同一个工厂函数）：`settings-section.ts` 里保留一份 `SEARCH_ORDER_DEFAULT`
+  同值副本，改动 `constants.ts` 的默认顺序时必须同步 `verify-pairs.cts` 的
+  双侧一致性断言。
 - 传输层（学习 Hermes ddgs 的 primp 浏览器指纹伪装）：`web-search.ts` 导出
   `webSearchTransport`（Chrome 风格 cipher/sigalgs/ecdhCurve 的 `https.Agent`，
   手动 gzip/deflate/br 解压与重定向跟随）；测试经替换其 `request` 属性注入 mock

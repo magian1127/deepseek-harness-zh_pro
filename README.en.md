@@ -5,7 +5,7 @@
 **语言 / Language:** [中文](README.md) · [English](README.en.md)
 
 <p align="center">
-    <img alt="Version 0.9.6" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.9.6-5965d8">
+    <img alt="Version 0.10.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.10.0-5965d8">
   <img alt="Interface Chinese" src="https://img.shields.io/badge/%E7%95%8C%E9%9D%A2-%E4%B8%AD%E6%96%87-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -26,7 +26,8 @@ The rows below follow **DSH Settings → Enhancements** from top to bottom:
 | Agent-role prompt localization | Off | Localizes the four built-in roles and confirmed system sections; locked on a new session's first request and never retrofitted into old sessions |
 | Tool-description localization | Off | Localizes confirmed built-in DSH tool descriptions and guidance; tool names, parameter names, and third-party tools remain unchanged; new sessions only |
 | Injected-context localization | Off | Replaces DSH-injected official context (workspace instruction frames, skill catalog frames, runtime context including its header line, approval/mode switch notices, dynamic-plugin notices, scheduled reminders, compaction checkpoint preambles) with Chinese before it enters session history; GUI and model requests stay consistent, new sessions only; translating the snapshot header makes DSH inject one replacement snapshot per step (slight session-log growth) |
-| Web search | On | Routes the conversational web_search tool to a multi-engine backend (keyless: DuckDuckGo best-effort, with Yandex and Bing as the workhorses — Yandex via its legacy /search/site/ endpoint, Bing preferring cn.bing.com over its structured RSS channel with www and the HTML endpoint as fallbacks — plus Wikipedia; if TAVILY_API_KEY is present in credentials, the Tavily API takes priority); when the Zhipu plugin is also installed, Zhipu is preferred and a Zhipu failure (including content filtering) automatically retries via the multi-engine backend, and a Zhipu result set that carries no snippets also retries there (for example when the Zhipu plugin is disabled and its built-in fallback returns titles and links only); environments where the official web_search tool is invisible (the Web profile default) get a tool shell automatically, which yields to the Zhipu shell when that plugin is present; the "Web search" settings card lets you add or clear the Tavily API key directly (effective immediately, no restart) |
+| Web search | On | Takes over the conversational web_search backend according to the "Search backend priority" list, defaulting to DeepSeek Search API → Zhipu → keyless multi-engine, reorderable with ▲/▼ in settings (move DeepSeek Search API to the bottom once it starts billing). A backend that is not installed, unavailable, or fails falls through to the next one, only a total failure reports an error, and a user cancellation never retries. The keyless multi-engine backend covers DuckDuckGo (best-effort), Yandex (legacy `/search/site/`), Bing (cn.bing.com RSS first, then www and the HTML endpoint) and Wikipedia; with `TAVILY_API_KEY` in credentials, Tavily goes first. The "Web search" settings card lets you add or clear the Tavily API key directly (effective immediately, no restart) |
+| Results per query | 0 (no takeover) | The official `web_search` hardcodes its merge cap at 8 sources and interleaves multiple queries round-robin; the "Results per search" field on the Web search settings page only controls how many results a single query asks the API for and cannot change that cap. Setting this to N (1–50) groups results by query — query one N sources, then query two N sources — drops cross-query duplicate links, and renders the model-facing text as `Sources for "<query>"` sections; 0 leaves the official behavior in place. The effective count is also capped by "Results per search", so both numbers must be raised together |
 | Prompt injection | Off | Injects editable text into subsequent requests; the default text asks for Chinese reasoning and replies, and the default target is the initial system prompt |
 | Auto-expand latest thinking | On | Expands the newest streaming thinking block and collapses the previous block that the plugin auto-expanded; after a turn closes under the DSH v0.1.2 compact view it stays hidden with the official process fold (see the behavior contract) |
 | Default expanded lines | 20 lines, latest N | Limits the initial visible region to 0–200 lines; 0 disables the limit, and the direction can be changed to earliest N |
@@ -113,16 +114,26 @@ dsh plugin --profile headless list
 
 ## Updating
 
-Re-run the install command to update dependencies and the persistent bundle. After
-browser-side content updates, refresh the page. When developing with a local link, this
-package evicts its own ESM module-cache entries when its Fiber is released:
+Re-run the install command to update dependencies and the persistent bundle. Browser-side
+content (UI, settings page, cards) is hot-swapped by client-hmr, which polls every 500 ms —
+no page refresh needed after a build.
 
-- **Upgrading to this version from an older build requires one `dsh web` restart** —
-  the cleanup code itself must first enter the long-running process;
-- afterwards, rebuilding and cycling the row (plugin-list disable → enable, or a
-  `dsh plugin` remove/add round trip) loads the new build without a restart;
-- if the running instance comes from an older build without the cleanup code, a
-  disable → enable cycle will not load the new build; restart once instead.
+The host half (`lib/*.js`) takes effect **as soon as the build finishes** when developing
+with a local link:
+
+- The package watches its own build artifacts and performs a full swap on change: it
+  clears its module-cache entries in both the ESM and CJS layers, re-imports the entry,
+  then rebuilds the Fiber that owns the existing row. No restart, and no
+  disable → enable round trip in the plugin list.
+- **Upgrading to the first version that has this capability requires one `dsh web`
+  restart**: the swap code itself still lives in the old module. Builds after that
+  restart get restart-free swapping.
+- Installed (npm, non-link) setups work the same way, though they rarely need it —
+  upgrading goes through the install command.
+
+One distinction worth keeping: disable → enable in the plugin list does **not** load a new
+build. It only rebuilds the Fiber and reuses the in-process module namespace; it never
+re-imports. Do not use it as an update mechanism.
 
 Do not substitute repeated trial-and-error for diagnosis.
 
@@ -142,7 +153,7 @@ Removal is profile-scoped; short-lived profiles stop loading it on their next in
 | Data | Storage |
 | --- | --- |
 | Chinese completion, thinking display, stats, archived-session view, session deletion, session multi-select, service monitor, and the three cards' open state | Browser localStorage: `deepseek-harness-zh_pro:enhancements` |
-| Agent-role localization, tool-description localization, injected-context localization, web search, prompt toggle/text/target, and auto-archive days | DSH `settings.yaml`, namespace `dsh-zh` |
+| Agent-role localization, tool-description localization, injected-context localization, web search, search backend priority, results per query, prompt toggle/text/target, and auto-archive days | DSH `settings.yaml`, namespace `dsh-zh` |
 | Optional Tavily API key (when present, search prefers Tavily) | DSH credentials: key `TAVILY_API_KEY` under the `refs:` section of `${DSH_HOME:-~/.dsh}/.credentials.yaml`, or an environment variable of the same name (read on every call, never cached); you can also add or clear it right in the "Web search" settings card (same location; the UI only ever sees a masked hint) |
 
 The plugin uploads no data; its only model-tool registration is the `web_search` tool shell
@@ -152,11 +163,16 @@ localization, and injected-context localization, no feature modifies model reque
 injected-context localization replaces DSH-injected official English text before it enters
 session history (closing the toggle restores English for new injections, while already-written
 history stays as official behavior). When web search is on, search queries are sent to the
-selected backend: to Zhipu when that plugin is installed and available (handled by that
-plugin), to the Tavily API when TAVILY_API_KEY is present in credentials (the key travels
-only in the Authorization header), otherwise to the public DuckDuckGo/Yandex/Bing/Wikipedia
-endpoints; this plugin stores no queries or results, and never writes the key into config,
-logs, or diagnostics snapshots.
+backends in the priority list, tried top to bottom: a backend that is not installed or
+unavailable is skipped outright, and a failing backend records a fallback diagnostic and
+falls through to the next one, so one query reaches at most the first few entries. Taking
+over the selection also writes `searchProvider: dsh-zh-web` onto the `web` row through the
+official settings channel (persisted in the profile patch), and restores the previous value
+when the toggle turns off or the plugin unloads. Zhipu is hit when that plugin is installed
+and available (handled by that plugin), the Tavily API when TAVILY_API_KEY is present in
+credentials (the key travels only in the Authorization header), otherwise the public
+DuckDuckGo/Yandex/Bing/Wikipedia endpoints; this plugin stores no queries or results, and
+never writes the key into config, logs, or diagnostics snapshots.
 Chinese completion only applies to the Chinese interface; the
 other interface enhancements also apply to the English interface. Each model-request
 feature is controlled solely by its own toggle.

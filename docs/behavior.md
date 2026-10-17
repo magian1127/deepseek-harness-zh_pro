@@ -28,6 +28,8 @@
 | 平铺 | 工具说明中文化 `zhToolDesc` | 关 | `settings.yaml` | 新会话首次模型请求时锁定 |
 | 平铺 | 上下文注入中文化 `zhContextInject` | 关 | `settings.yaml` | 新会话首次模型请求时锁定；替换注入会话历史的官方英文文本 |
 | 平铺 | 网络搜索 `zhWebSearch` | 开 | `settings.yaml` | 实时生效；详见「网络搜索」章 |
+| 网络搜索 | 搜索后端优先级 `zhSearchOrder` | `deepseek-search-api` → `zhipu-web-search-prime` → `dsh-zh-free` | `settings.yaml` | 实时生效；▲/▼ 调整，空列表 = 不接管 |
+| 网络搜索 | 每查询返回条数 `zhSearchPerQuery` | 0 | `settings.yaml` | 实时生效；0 = 不接管（官方 8 条 + 轮询），1–50 = 分组保留 N 条 |
 | 平铺 | 提示词注入 `zhPrompt` / `zhPromptText` / `zhPromptTarget` | 关；文本为“思考过程和回复始终使用中文输出”；目标为 `system` | `settings.yaml` | 后续模型请求；目标可改为 `user` |
 | 对话样式相关 | 自动展开最新思考 `thinkingAuto` | 开 | localStorage | 中文/英文界面 |
 | 对话样式相关 | 默认展开行数与方向 `thinkMaxLines` / `thinkMaxLinesFrom` | 20；`latest` | localStorage | 0–200；方向可选 `latest` / `earliest` |
@@ -261,26 +263,60 @@ assemble 管线改写 contexts 正文（0.1.x 兼容路径）；任何改写失�
 指纹风格）：
 
 **1. 搜索后端接管（web seam provider）**：向官方 web 服务注册组合 provider
-`dsh-zh-web`，并把官方 web 实例的后端选择（`searchProviderId`）切到它；关闭开关
-或卸载插件时恢复接管前的原值（原值可能是官方 `deepseek-official`，也可能是智谱
-`zhipu-web-search-prime`，按安装环境如实恢复，非硬编码）。组合 provider 每次搜索
-按以下级联挑选后端：
+`dsh-zh-web`，并把官方 web 实例的后端选择切到它；关闭开关或卸载插件时恢复接管前
+的原值（原值可能是官方 `deepseek-search-api`、`deepseek-official`，也可能是智谱
+`zhipu-web-search-prime`，按安装环境如实恢复，非硬编码）。
 
-- **智谱优先**：智谱插件（`deepseek-harness-zhipu_plan_tools`，provider id
-  `zhipu-web-search-prime`）已注册且可用时优先走智谱（两插件共存时的联动路径，
-  顺序无关、搜索时动态判定）；
+**选路写入通道（宿主代际相关，勿退回旧写法）**：DSH 0.2.1（commit `fda98dadd2`）
+起 `WebRuntime` 已**移除** `searchProviderId` 实例字段，改为 `config.searchProvider`
+这个 volatile 引用。旧写法 `web.searchProviderId = 'dsh-zh-web'` 只是往实例上挂一个
+没人读的普通属性，接管会**静默失效**。当前实现按可用性依次尝试三条通道：
+
+1. 官方 `ctx.settings.update('web', { searchProvider })`——持久化、volatile 实时
+   生效，DSH ≥ 0.2.1 的主通道；
+2. 旧宿主（≤ 0.2.0）的实例字段 `web.searchProviderId`；
+3. 兜底直接写 volatile 引用的 `cosmokit.volatile.write`（**不持久化**，重启即丢，
+   仅在 settings 服务缺席时使用）。
+
+清空覆盖时不能用 `update('web', { searchProvider: undefined })`：官方 settings 的
+`cloneJsonShaped` 会跳过值为 `undefined` 的键（稀疏补丁语义），写入等于没写；必须走
+`settings.mutate('web', [{ op: 'unset', path: ['searchProvider'] }])`。
+
+组合 provider 每次搜索按**「搜索后端优先级」列表**（`zhSearchOrder`）从上到下挑选
+后端：
+
+- 列表里每项是一个 provider id；本插件内置的免 Key 多引擎用占位 id `dsh-zh-free`；
+- 某后端**未注册**（`providers.has(id) === false`）→ 静默跳过，不算失败；
+- 某后端 `available() === false` → 跳过，不发无用请求；
+- 调用**失败** → 记降级运行态（`/dsh-zh/api/diagnostics` 可查），继续下一个；
+- 调用**成功但结果整批缺简介**（覆盖率 < 50%，见下方 `SNIPPET_COVERAGE_MIN`）
+  → 记为回落候选，继续尝试后面的后端；
+- 用户主动中止（AbortError）→ **立刻上抛，绝不换后端重试**；
+- 全部后端都失败/无摘要 → 有回落候选就给候选，否则抛最后一个错误；
+- **列表为空** = 不接管后端选择（与关闭 `zhWebSearch` 等价）。
+
+设置页「网络搜索」卡片用 ▲/▼ 上下移动调整顺序，改动写入 `zhSearchOrder` 后
+立即重新接管、无需重启。默认顺序：`deepseek-search-api` → `zhipu-web-search-prime`
+→ `dsh-zh-free`。DeepSeek Search API 计费后把第一项移到末位即可。
+
+> 客户端拿不到 provider 注册表（主机私有字段），因此列表里**不显示**「是否已安装」
+> 徽标——标错比不标更误导；真实可用性由主机在执行时判定并自动降级。
+
+原级联语义（智谱优先、失败转多引擎、缺简介重取）现在由**默认优先级顺序**表达，
+不再是硬编码：
+
 - **智谱失败自动转多引擎后端**：智谱搜索失败——含敏感内容过滤
-  （`ZHIPU_CONTENT_FILTERED`）与网络/凭据失败——对同一查询自动转多引擎后端重试；
+  （`ZHIPU_CONTENT_FILTERED`）与网络/凭据失败——对同一查询自动转下一个后端重试；
   用户主动中止（AbortError）不降级、直接上抛；
-- **智谱结果缺简介 → 转多引擎后端重取**：智谱搜索**成功**但结果的简介覆盖率低于
-  50%（`SNIPPET_COVERAGE_MIN`）时，视为该后端降级并改用多引擎后端重取同一查询——
+- **智谱结果缺简介 → 转下一个后端重取**：智谱搜索**成功**但结果的简介覆盖率低于
+  50%（`SNIPPET_COVERAGE_MIN`）时，视为该后端降级并继续重取同一查询——
   典型场景是**智谱插件被禁用**：其 provider 仍 `available()`（回退内置 DeepSeek
   搜索），而 DeepSeek 的 `web_search_result` 项只有 `title`/`url`/
   `encrypted_content`/`page_age`（正文加密、本地不可解），`text` 块也不带
   `citations`，因此整批结果零简介（2026-10-16 实测 10/10 条缺失），用户只看到
-  标题与链接、无法判断每条讲什么。多引擎后端失败或返回空结果时**回落智谱结果**
+  标题与链接、无法判断每条讲什么。后续后端失败或返回空结果时**回落该候选**
   （宁可给回无简介结果，也不给空结果或报错），因此该闸门绝不比不加闸门更差；
-  智谱返回**空结果**属合法「无结果」，不触发该闸门。覆盖率阈值取 0.5 而非 1：
+  返回**空结果**属合法「无结果」，不触发该闸门。覆盖率阈值取 0.5 而非 1：
   正常后端偶有 1–2 条无摘要（如 Wikipedia opensearch 条目）不该整批换后端；
 - **Key 型引擎层（可选，Tavily）**：凭据里配了 `TAVILY_API_KEY` 时优先走 Tavily
   官方 API（`Authorization: Bearer`，`search_depth: basic` = 1 点额度；结果取正文
@@ -324,7 +360,6 @@ assemble 管线改写 contexts 正文（0.1.x 兼容路径）；任何改写失�
   （`DuckDuckGo 触发反爬限流 (HTTP 202)；Yandex 无结果；Bing 无结果；Wikipedia 无结果`），
   不再只报最后一个错误——否则会把 DDG 的限流误报成全局故障。
 - 免 Key 引擎零配置；Tavily 可选，只需在凭据里填 `TAVILY_API_KEY`（见「凭据与隐私」）。
-  官方内置 deepseek-official provider 永远排最后（它消耗完整模型轮次）。
 
 **2. agent 作用域 `web_search` 工具壳**：Web profile 的官方 `dsh-tool-web` 行被
 禁用、agent preset 默认不暴露 web_search 时，仅切后端模型看不到工具。本插件在
@@ -334,13 +369,43 @@ assemble 管线改写 contexts 正文（0.1.x 兼容路径）；任何改写失�
 execute 走官方 web seam，因此自动获得上述后端级联与智谱联动。壳的描述与指引
 文本随「提示词注入」开关（`zhPrompt`）选择中英文，实时切换。
 
+### 每查询返回条数与分组合并（`zhSearchPerQuery`）
+
+官方 `@deepseek-ai/dsh-tool-web` 把合并上限硬编码为 `WEB_SEARCH_MAX_RESULTS = 8`
+（上游 master 仍是 8），且多查询按 **rank 轮询交错**（q1·r1, q2·r1, q1·r2…）。
+设置页「网页搜索」里的「每次搜索结果数」是 `web-deepseek-api.count`，只决定
+**单查询向 API 要几条**，管不到这道合并上限。
+
+因此本插件提供 `zhSearchPerQuery`（**默认 0**，范围 0–50，实时生效）：
+
+| 值 | 行为 |
+| --- | --- |
+| `0` | **不接管**：保持官方 8 条 + 轮询合并，与升级前完全一致（零回归） |
+| `N` | 装壳并按查询**分组**：查询一 N 条 → 查询二 N 条，跨查询仅做 URL 去重 |
+
+- 该开关**独立于** `zhWebSearch`：即使后端不接管（`zhWebSearch=false`），只要
+  `zhSearchPerQuery > 0` 仍会装壳，因为「后端由谁提供」与「结果怎么裁剪/合并」
+  是两件事；
+- 为此壳的**让位规则**放宽了一条：继承视图里 `web_search` 被**官方定义**占用时，
+  只有 `zhSearchPerQuery > 0` 才建立作用域阴影接管它；为 0 时维持原有让位
+  （官方壳照常工作）。智谱壳与未知第三方定义仍然一律让位；
+- 模型可见文本改为按查询分节：`Sources for "<查询原文>":` + 该查询的来源列表；
+  单查询仍是一段式 `Sources:`；
+- 右侧 `web` 结果卡片由官方 UI 组件按扁平 `sources` 数组渲染，**不支持分节**；
+  卡片仍按分组顺序平铺（前 N 条属查询一，其后属查询二）；
+- **实际条数还受 `web-deepseek-api.count` 限制**：provider 请求时执行
+  `count: Math.min(options.count, request.maxResults ?? options.count)`。要让每
+  查询拿到 20 条，必须同时把设置页「每次搜索结果数」调到 ≥20；只改一个会以为没生效；
+- 智谱 `web_search_prime` 单查询硬上限 10 条（上游无条数参数），若把它排在前面
+  且只它成功，则每查询最多 10 条。
+
 **职责让位（与智谱插件的关系）**——智谱壳优先、zh_pro 补缺，零侵入不改智谱代码：
 
 - 智谱插件包行存在于 Loader（挂载中或已挂载）→ 智谱壳是 `web_search` 工具壳的
   唯一 owner，本插件不注册壳、撤下已注册的壳，只保留后端接管（智谱壳的 execute
   同样走 web seam，联动对智谱壳同样生效）；
-- Agent 继承视图里 `web_search` 已被占用：官方定义（含官方特征片段）→ 让位
-  （官方壳走 web seam，联动已由后端接管达成）；智谱定义 → 让位；其它未知第三方
+- Agent 继承视图里 `web_search` 已被占用：官方定义（含官方特征片段）→
+  **`zhSearchPerQuery > 0` 时接管，否则让位**；智谱定义 → 让位；其它未知第三方
   定义 → 保守让位，绝不覆盖他人注册；本插件自己的壳 → 幂等跳过；
 - 极简模式（minimal 预设）是双工具组合承诺，壳与智谱壳同样不注入其中；
 - 智谱单独安装 → 智谱壳工作；zh_pro 单独安装 → 本插件补壳；两插件共存 →

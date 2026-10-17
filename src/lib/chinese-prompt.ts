@@ -14,7 +14,8 @@ import { PKG } from '../bin/dsh-zh.mjs'
 import {
   ZH_AUTO_ARCHIVE_DAYS_DEFAULT, ZH_PROMPT_SECTION_NAME, ZH_PROMPT_TARGET_LEGACY,
   ZH_PROMPT_TARGET_SYSTEM, ZH_PROMPT_TARGET_USER, ZH_PROMPT_TEXT,
-  ZH_PROVIDER_KEY, ZH_SETTINGS_NS,
+  ZH_PROVIDER_KEY, ZH_SEARCH_ORDER_DEFAULT, ZH_SEARCH_ORDER_MAX,
+  ZH_SEARCH_PER_QUERY_MAX, ZH_SETTINGS_NS,
 } from './constants.js'
 import { ensureAssemblePatch, registerAssembleRewriter } from './assemble-patch.js'
 import { applyWebSearchSelection } from './web-search.js'
@@ -25,8 +26,9 @@ import type { HostContext } from './types.js'
 // model-locale.js 通过 getModelState() 读取。ready 表示 Config 快照已就绪
 // （宿主传入 config 即视为就绪，无论是引用还是普通值）。
 // zhContextInject（上下文注入中文化，context-locale.ts 消费）同样经由本状态读取。
-// zhPrompt 与 zhWebSearch 另被 agent-search-tool.js 消费（壳描述语言 / 壳开关）。
-const modelState = { ready: false, zhPrompt: false, zhAgentPrompt: false, zhToolDesc: false, zhContextInject: false, zhWebSearch: true }
+// zhPrompt 与 zhWebSearch 另被 agent-search-tool.js 消费（壳描述语言 / 壳开关）；
+// zhSearchOrder 与 zhSearchPerQuery 则驱动后端接管与工具壳条数。
+const modelState = { ready: false, zhPrompt: false, zhAgentPrompt: false, zhToolDesc: false, zhContextInject: false, zhWebSearch: true, zhSearchOrder: [...ZH_SEARCH_ORDER_DEFAULT], zhSearchPerQuery: 0 }
 
 /**
  * 读取「模型请求中文化」的共享开关状态（只读）。该状态随本插件 Config 的
@@ -34,6 +36,30 @@ const modelState = { ready: false, zhPrompt: false, zhAgentPrompt: false, zhTool
  */
 export function getModelState() {
   return modelState
+}
+
+/** 把任意来源的优先级值归一化为去重、去空、限长的 provider id 列表。 */
+function normalizeSearchOrder(value: unknown): string[] {
+  if (!Array.isArray(value)) return [...ZH_SEARCH_ORDER_DEFAULT]
+  const seen = new Set<string>()
+  const order: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') continue
+    const id = item.trim()
+    if (id.length === 0 || seen.has(id)) continue
+    seen.add(id)
+    order.push(id)
+    if (order.length >= ZH_SEARCH_ORDER_MAX) break
+  }
+  return order
+}
+
+/** 单查询条数归一化：非数字/负数归 0（不装壳），上限钳到 50。 */
+function normalizePerQuery(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0
+  const n = Math.round(value)
+  if (n < 0) return 0
+  return n > ZH_SEARCH_PER_QUERY_MAX ? ZH_SEARCH_PER_QUERY_MAX : n
 }
 
 /**
@@ -62,6 +88,12 @@ export function createZhConfigSchema(z: any): unknown {
     zhToolDesc: mark(z.boolean().default(false)),
     zhContextInject: mark(z.boolean().default(false)),
     zhWebSearch: mark(z.boolean().default(true)),
+    // 后端优先级：字符串数组，顺序即尝试顺序（空数组 = 不接管）。
+    zhSearchOrder: mark(
+      z.array(z.string()).default([...ZH_SEARCH_ORDER_DEFAULT]),
+    ),
+    // 单查询返回条数：0 = 不装工具壳（保持官方 8 条 + 轮询合并）。
+    zhSearchPerQuery: mark(z.number().default(0)),
   })
 }
 
@@ -91,6 +123,8 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
     const syncFromSnapshot = function (snapshot: Record<string, unknown>, initial: boolean) {
       const prevWebSearch = modelState.zhWebSearch
       const prevPrompt = modelState.zhPrompt
+      const prevOrder = modelState.zhSearchOrder.join('>')
+      const prevPerQuery = modelState.zhSearchPerQuery
       state.enabled = snapshot.zhPrompt === true
       if (typeof snapshot.zhPromptText === 'string') state.text = snapshot.zhPromptText
       state.target = normalizeTarget(snapshot.zhPromptTarget)
@@ -100,8 +134,15 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
       modelState.zhToolDesc = snapshot.zhToolDesc === true
       modelState.zhContextInject = snapshot.zhContextInject === true
       modelState.zhWebSearch = snapshot.zhWebSearch !== false
-      if (initial || prevWebSearch !== modelState.zhWebSearch) applyWebSearchSelection(ctx, modelState.zhWebSearch)
-      if (!initial && (prevWebSearch !== modelState.zhWebSearch || prevPrompt !== modelState.zhPrompt) && typeof hooks.onModelStateChanged === 'function') {
+      modelState.zhSearchOrder = normalizeSearchOrder(snapshot.zhSearchOrder)
+      modelState.zhSearchPerQuery = normalizePerQuery(snapshot.zhSearchPerQuery)
+      const orderChanged = prevOrder !== modelState.zhSearchOrder.join('>')
+      const perQueryChanged = prevPerQuery !== modelState.zhSearchPerQuery
+      if (initial || prevWebSearch !== modelState.zhWebSearch || orderChanged) {
+        applyWebSearchSelection(ctx, modelState.zhWebSearch, modelState.zhSearchOrder)
+      }
+      if (!initial && (prevWebSearch !== modelState.zhWebSearch || prevPrompt !== modelState.zhPrompt
+        || orderChanged || perQueryChanged) && typeof hooks.onModelStateChanged === 'function') {
         try { hooks.onModelStateChanged() } catch (error) {
           warn(`web_search 工具壳联动失败: ${error instanceof Error ? error.message : String(error)}`)
         }

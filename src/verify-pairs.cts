@@ -773,6 +773,33 @@ const apiKeyClear = findElement(searchTree, function (node) {
 check(apiKeyClear !== null && apiKeyClear.props.disabled === true, true, '未配置时清除按钮禁用')
 check(locale.lookup('dsh-zh-settings', 'searchGroup'), '网络搜索', '网络搜索卡 中文文案')
 check(locale.lookup('dsh-zh-settings', 'searchApiKeyNotConfigured'), '未配置', 'API Key 未配置文案')
+// 搜索后端优先级与每查询条数：客户端设置页只负责展示/重排，顺序真值在主机侧
+// constants.ts 的 ZH_SEARCH_ORDER_DEFAULT。客户端片段不能 import 主机模块
+// （构建器把片段拼进同一工厂函数），因此这里断言两侧同值——改默认顺序必须双改。
+check(locale.lookup('dsh-zh-settings', 'searchOrder'), '搜索后端优先级', '优先级 中文标题')
+check(locale.lookup('dsh-zh-settings', 'searchPerQuery'), '每查询返回条数', '每查询条数 中文标题')
+{
+  const hostConstants = fs.readFileSync(__dirname + '/lib/constants.js', 'utf8')
+  const clientSource = fs.readFileSync(__dirname + '/lib/client.js', 'utf8')
+  const orderMatch = /ZH_SEARCH_ORDER_DEFAULT\s*=\s*\[([^\]]*)\]/.exec(hostConstants)
+  check(orderMatch !== null, true, '主机侧导出 ZH_SEARCH_ORDER_DEFAULT')
+  const hostOrder = orderMatch === null ? [] : Array.from(orderMatch[1].matchAll(/'([^']+)'|"([^"]+)"/g))
+    .map(function (m) { return m[1] ?? m[2] })
+  // 主机默认值里有一项走常量引用（免 Key 多引擎占位 id），比较时只取字面量顺序。
+  const clientMatch = /SEARCH_ORDER_DEFAULT\s*=\s*\[([^\]]*)\]/.exec(clientSource)
+  check(clientMatch !== null, true, '客户端侧保留 SEARCH_ORDER_DEFAULT 副本')
+  const clientOrder = clientMatch === null ? [] : Array.from(clientMatch[1].matchAll(/'([^']+)'|"([^"]+)"/g))
+    .map(function (m) { return m[1] ?? m[2] })
+  check(clientOrder.length, clientOrder.length, '客户端默认顺序可解析')
+  check(
+    JSON.stringify(clientOrder),
+    JSON.stringify(['deepseek-search-api', 'zhipu-web-search-prime', 'dsh-zh-free']),
+    '客户端默认顺序与约定的三项一致',
+  )
+  // 主机侧：前两项是字面量，第三项是 ZH_FREE_MULTI_BACKEND_ID 常量引用。
+  check(hostOrder.slice(0, 2).join('>'), 'deepseek-search-api>zhipu-web-search-prime', '主机默认顺序前两项与客户端一致')
+  check(/'dsh-zh-free'/.test(hostConstants), true, '主机侧免 Key 多引擎占位 id 为 dsh-zh-free')
+}
 
 // 凭据错误码映射：**只有主机的校验码才归因为「Key 不合法」**。
 // 回归 2026-09-23：主机未重启时 POST 落到分发器兜底 404（code=not-found），旧映射

@@ -30,10 +30,11 @@ import type { HostContext } from './types.js'
 
 // ============ 常量 ============
 
-/** 每条查询传给 web seam 的结果上限（免费后端单查询抓取量约 20–30，收窄到 10 控制上下文体积）。 */
+/**
+ * 每条查询传给 web seam 的结果上限的兜底值（zhSearchPerQuery 为 0 但壳仍装着时用）。
+ * 免费后端单查询抓取量约 20–30，收窄到 10 控制上下文体积。
+ */
 const SEARCH_MAX_RESULTS_PER_QUERY = 10
-/** 多查询合并后的来源总数上限（= 4 条查询 × 每查询 10，全量保留不再丢弃）。 */
-const SEARCH_MERGED_MAX_RESULTS = 40
 const SEARCH_MAX_QUERIES = 4
 /** 壳级超时：覆盖 DDG(html/lite)→Bing 免费级联的单查询最坏耗时（15s×3）。 */
 const SEARCH_TIMEOUT_MS = 45_000
@@ -52,6 +53,14 @@ export interface AgentSearchToolDeps {
   isEnabled(): boolean
   /** zhPrompt 开关：描述与指引文本是否用中文（默认 false → 英文）。 */
   useZh(): boolean
+  /**
+   * zhSearchPerQuery：每个查询保留几条结果。
+   * `0` = 不装壳（保持官方 tool-web 的 8 条 + 轮询合并）；
+   * `> 0` = 装壳并按查询分组，每查询保留 N 条。
+   * 该值独立于 isEnabled：即使 zhWebSearch 关闭，只要设了 N 也要装壳，
+   * 因为「后端由谁提供」与「结果怎么裁剪/合并」是两件事。
+   */
+  perQuery(): number
 }
 
 export interface AgentSearchToolHandle {
@@ -163,28 +172,52 @@ function parseQueries(value: unknown): string[] {
   return [...new Set(value.map((item) => (item as string).trim()))]
 }
 
-/** 按 rank 轮询合并、URL 去重并限制总来源数；content 段按查询分组拼接。 */
-function mergeSources(results: ReadonlyArray<SearchResult>, queries: string[]): SearchResult {
+/** 按查询分组时的一组来源（供 formatResult 分节渲染）。 */
+interface SearchSection {
+  query: string
+  sources: WebSource[]
+}
+
+/** SearchResult 的扩展：分组模式额外带 sections（presentationMeta 会带上它）。 */
+interface GroupedSearchResult extends SearchResult {
+  /** 按查询分组的来源；仅分组模式存在。 */
+  sections?: SearchSection[]
+}
+
+/**
+ * 按查询分组合并：查询1 保留前 N 条 → 查询2 保留前 N 条，跨查询仅做 URL 去重。
+ *
+ * 与官方 rank 轮询的区别：官方把两个查询的结果交错排列（q1·r1, q2·r1, q1·r2…），
+ * 读起来两个主题混在一起；分组模式让每个查询的结果成块出现。
+ * 跨查询重复 URL 保留**首次出现**的那条（即更靠前查询的那条）。
+ */
+function mergeSourcesGrouped(
+  results: ReadonlyArray<SearchResult>,
+  queries: string[],
+  perQuery: number,
+): GroupedSearchResult {
   const seen = new Set<string>()
-  const sources: WebSource[] = []
-  const ranks = Math.max(0, ...results.map((result) => result.sources.length))
+  const sections: SearchSection[] = []
   let dropped = false
 
-  merge: for (let rank = 0; rank < ranks; rank++) {
-    for (const result of results) {
-      const source = result.sources[rank]
-      if (source === undefined) continue
-      const url = String(source.url ?? '').trim()
-      if (url.length === 0 || seen.has(url)) continue
-      seen.add(url)
-      if (sources.length === SEARCH_MERGED_MAX_RESULTS) {
+  results.forEach((result, index) => {
+    const kept: WebSource[] = []
+    for (const source of result.sources) {
+      if (kept.length === perQuery) {
+        // 还有更多结果没放下：标记被截断（本查询超出 N 条）。
         dropped = true
-        break merge
+        break
       }
-      sources.push(source)
+      const url = String(source.url ?? '').trim()
+      if (url.length === 0) continue
+      if (seen.has(url)) continue
+      seen.add(url)
+      kept.push(source)
     }
-  }
+    if (kept.length > 0) sections.push({ query: queries[index] ?? '', sources: kept })
+  })
 
+  const sources = sections.flatMap((section) => section.sources)
   const contents = results.flatMap((result, index) => {
     if (result.content === undefined || result.content.length === 0) return []
     return [`### ${queries[index] ?? ''}\n\n${result.content}`]
@@ -193,13 +226,19 @@ function mergeSources(results: ReadonlyArray<SearchResult>, queries: string[]): 
     ...contents.length > 0 ? { content: contents.join('\n\n') } : {},
     sources,
     truncated: dropped || results.some((result) => result.truncated),
+    sections,
   }
 }
 
 /** 多查询任一失败时取消同批兄弟请求，等待全部 settle 后抛首个错误。 */
-async function runQueries(web: ScopeWebLike, queries: string[], signal?: AbortSignal): Promise<SearchResult> {
+async function runQueries(
+  web: ScopeWebLike,
+  queries: string[],
+  perQuery: number,
+  signal?: AbortSignal,
+): Promise<GroupedSearchResult> {
   if (queries.length === 1) {
-    return web.search({ query: queries[0] as string, maxResults: SEARCH_MAX_RESULTS_PER_QUERY }, signal)
+    return web.search({ query: queries[0] as string, maxResults: perQuery }, signal)
   }
 
   const controller = new AbortController()
@@ -208,7 +247,7 @@ async function runQueries(web: ScopeWebLike, queries: string[], signal?: AbortSi
   let firstFailure: { error: unknown } | undefined
   const searches = queries.map(async (query, index) => {
     try {
-      results[index] = await web.search({ query, maxResults: SEARCH_MAX_RESULTS_PER_QUERY }, batchSignal)
+      results[index] = await web.search({ query, maxResults: perQuery }, batchSignal)
     } catch (error: unknown) {
       if (firstFailure === undefined) firstFailure = { error }
       controller.abort(error)
@@ -217,7 +256,7 @@ async function runQueries(web: ScopeWebLike, queries: string[], signal?: AbortSi
   })
   await Promise.allSettled(searches)
   if (firstFailure !== undefined) throw firstFailure.error
-  return mergeSources(results, queries)
+  return mergeSourcesGrouped(results, queries, perQuery)
 }
 
 // ============ 结果投影与官方 web 卡片（card:'web', kind:'search'） ============
@@ -226,6 +265,8 @@ interface SearchMeta {
   sources: WebSource[]
   truncated: boolean
   answer?: string
+  /** 按查询分组的来源（分组模式）；卡片与回放都靠它保持分节语义。 */
+  sections?: SearchSection[]
 }
 
 function displayQueries(args: unknown): string[] {
@@ -234,7 +275,7 @@ function displayQueries(args: unknown): string[] {
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
 }
 
-function projectMeta(value: SearchResult): SearchMeta {
+function projectMeta(value: GroupedSearchResult): SearchMeta {
   return {
     sources: value.sources.map((source) => ({
       url: source.url,
@@ -244,6 +285,7 @@ function projectMeta(value: SearchResult): SearchMeta {
     })),
     truncated: value.truncated,
     ...value.content !== undefined ? { answer: value.content } : {},
+    ...value.sections !== undefined ? { sections: value.sections } : {},
   }
 }
 
@@ -258,31 +300,47 @@ function isWebSource(value: unknown): value is WebSource {
 
 function parseMeta(value: unknown): SearchMeta | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-  const { sources, truncated, answer } = value as Record<string, unknown>
+  const { sources, truncated, answer, sections } = value as Record<string, unknown>
   if (!Array.isArray(sources) || !sources.every(isWebSource) || typeof truncated !== 'boolean') return undefined
   if (answer !== undefined && typeof answer !== 'string') return undefined
-  return { sources, truncated, ...answer !== undefined ? { answer } : {} }
+  return {
+    sources,
+    truncated,
+    ...answer !== undefined ? { answer } : {},
+    ...Array.isArray(sections) ? { sections: sections as SearchSection[] } : {},
+  }
+}
+
+/** 渲染单条来源行（外部 title/snippet/URL 经不可信内容净化）。 */
+function formatSourceLine(source: WebSource): string {
+  const title = typeof source.title === 'string' && source.title.length > 0 ? source.title : source.url
+  const meta = [source.snippet, source.publishedAt === undefined ? undefined : `(${source.publishedAt})`]
+    .filter((item): item is string => typeof item === 'string' && item.length > 0)
+    .map((item) => foldExternalInlineText(item))
+  const safeUrl = sanitizeExternalUrl(String(source.url ?? ''))
+  const safeTitle = escapeMarkdownLinkText(String(title ?? ''))
+  // URL 未过白名单（非 http(s)/含控制字符/结构异常）时退化为纯文本，不构造可点击链接。
+  const link = safeUrl === null ? safeTitle : `[${safeTitle}](${safeUrl})`
+  return `- ${link}${meta.length > 0 ? ` — ${meta.join(' ')}` : ''}`
 }
 
 /** 结果渲染沿用内置工具的信息结构；外部 title/snippet/URL 经不可信内容净化。 */
 function formatResult(value: unknown): string {
-  const result = value as SearchResult | null | undefined
+  const result = value as GroupedSearchResult | null | undefined
   if (result === null || result === undefined) return ''
   const parts: string[] = []
   if (typeof result.content === 'string' && result.content.length > 0) parts.push(result.content)
-  if (result.sources.length > 0) {
-    const lines = result.sources.map((source) => {
-      const title = typeof source.title === 'string' && source.title.length > 0 ? source.title : source.url
-      const meta = [source.snippet, source.publishedAt === undefined ? undefined : `(${source.publishedAt})`]
-        .filter((item): item is string => typeof item === 'string' && item.length > 0)
-        .map((item) => foldExternalInlineText(item))
-      const safeUrl = sanitizeExternalUrl(String(source.url ?? ''))
-      const safeTitle = escapeMarkdownLinkText(String(title ?? ''))
-      // URL 未过白名单（非 http(s)/含控制字符/结构异常）时退化为纯文本，不构造可点击链接。
-      const link = safeUrl === null ? safeTitle : `[${safeTitle}](${safeUrl})`
-      return `- ${link}${meta.length > 0 ? ` — ${meta.join(' ')}` : ''}`
-    })
-    parts.push(`Sources:\n${lines.join('\n')}`)
+  const sections = Array.isArray(result.sections) ? result.sections : undefined
+  if (sections !== undefined && sections.length > 1) {
+    // 分组模式（多查询）：按查询分节，每节带自己的查询原文作为标题。
+    for (const section of sections) {
+      const lines = section.sources.map(formatSourceLine)
+      if (lines.length === 0) continue
+      parts.push(`Sources for "${foldExternalInlineText(section.query)}":\n${lines.join('\n')}`)
+    }
+  } else if (result.sources.length > 0) {
+    // 单查询或旧回放（无 sections）：沿用一段式来源列表。
+    parts.push(`Sources:\n${result.sources.map(formatSourceLine).join('\n')}`)
   } else if (result.content === undefined || result.content.length === 0) {
     parts.push('No results found.')
   }
@@ -427,16 +485,25 @@ export function installAgentSearchTool(ctx: HostContext, deps: AgentSearchToolDe
       try { previous() } catch { /* 继续按当前状态重建。 */ }
       shells.delete(agentLike)
     }
-    if (!deps.isEnabled()) return
+    // 装壳条件：后端接管开启（zhWebSearch）**或** 配了每查询条数（zhSearchPerQuery > 0）。
+    // 后者独立成立：用户可能只想控制「显示多少条/怎么合并」，后端仍走部署配置。
+    if (!deps.isEnabled() && deps.perQuery() <= 0) return
     if (isMinimalAgent(agentLike)) return
-    // 探测让位：智谱包行存在 → 智谱壳是唯一 owner。
+    // 探测让位：智谱包行存在 → 智谱壳是唯一 owner（其壳有自己的条数与合并语义）。
     if (zhipuRowPresent()) return
 
     const globalTools = ctx.get('tools') as GlobalToolsLike | undefined | null
     if (globalTools === undefined || globalTools === null || typeof globalTools.get !== 'function') return
-    // 继承视图分类：官方/智谱/未知占用都让位；own 幂等；none 才补壳。
+    // 继承视图分类：
+    // - own → 幂等跳过（已装过）；
+    // - 官方 → **仅当用户明确要求控制条数/合并（perQuery > 0）时接管**，
+    //   否则让位。官方 tool-web 把合并上限硬编码成 WEB_SEARCH_MAX_RESULTS=8
+    //   且多查询按 rank 轮询，改不动官方代码就只能靠作用域阴影拿回控制权；
+    //   用户没设条数时保持让位，行为与升级前完全一致（零回归）。
+    // - 智谱/未知第三方 → 一律让位，绝不覆盖他人注册。
     const occupancy = classifyShellOccupancy(globalTools.get('web_search', agentLike))
-    if (occupancy !== 'none') return
+    if (occupancy === 'own') return
+    if (occupancy !== 'none' && !(occupancy === 'official' && deps.perQuery() > 0)) return
 
     const scopedCtx = (agentLike as { ctx?: HostContext } | null | undefined)?.ctx
     if (scopedCtx === undefined || scopedCtx === null) return
@@ -483,10 +550,41 @@ export function installAgentSearchTool(ctx: HostContext, deps: AgentSearchToolDe
               },
             },
             truncated: { type: 'boolean' },
+            // 分组模式的按查询分组（presentationMeta 与卡片都读它）。
+            // **必须**在这里声明：外层是 `additionalProperties: false`，
+            // 返回值里带任何未声明字段都会被宿主判为 INVALID_TOOL_OUTPUT 并
+            // 让整次 web_search 调用失败（2026-10-18 实测：
+            //  `"value.sections" is not a declared property
+            //   (additionalProperties: false)`）。
+            sections: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['query', 'sources'],
+                properties: {
+                  query: { type: 'string' },
+                  sources: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      additionalProperties: false,
+                      required: ['url'],
+                      properties: {
+                        url: { type: 'string' },
+                        title: { type: 'string' },
+                        snippet: { type: 'string' },
+                        publishedAt: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
         render: (_args: unknown, value: unknown) => [{ type: 'text', text: formatResult(value) }],
-        presentationMeta: (_args: unknown, value: SearchResult) => projectMeta(value),
+        presentationMeta: (_args: unknown, value: GroupedSearchResult) => projectMeta(value),
       },
       timeoutMs: SEARCH_TIMEOUT_MS,
       isConcurrencySafe: () => true,
@@ -513,7 +611,10 @@ export function installAgentSearchTool(ctx: HostContext, deps: AgentSearchToolDe
       },
       async execute(args: unknown, exec: { signal?: AbortSignal }) {
         const queries = parseQueries((args as Record<string, unknown> | undefined)?.queries)
-        return runQueries(scopedWeb, queries, exec.signal)
+        // 每次调用都实时读设置：条数改动无需重建壳即可生效。
+        const configured = deps.perQuery()
+        const perQuery = configured > 0 ? configured : SEARCH_MAX_RESULTS_PER_QUERY
+        return runQueries(scopedWeb, queries, perQuery, exec.signal)
       },
     }
 
