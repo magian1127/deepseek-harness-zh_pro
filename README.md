@@ -45,8 +45,15 @@
 
 ## 环境要求
 
-- DeepSeek Harness ≥ `0.1.7-alpha.2`；完整 UI 使用 `web`
+- DeepSeek Harness `>=0.2.0-rc.2 <0.3.0`（清单 `engines.dsh` 声明，覆盖 0.2.x 全家族；
+  0.1.x 及更早会被 DSH 的插件兼容检查拒绝加载）；完整 UI 使用 `web`
 - Node.js `^22.19.0 || >=24.0.0`
+
+> DSH 0.2.1 移除了内置 `{{cwd}}` 提示词变量（工作目录改由 working-directory 服务提供）。
+> 它对解析不了的 `{{…}}` 引用是**直接拒绝请求**，本插件已适配：自定义部署若在
+> `personaSuffix` / preset 的 `suffix` 里保留 `Your working directory is {{cwd}}.`，
+> 本插件会清空该句而不是把它写回请求；提示词注入文本框里写了 `{{cwd}}` 等解析不了的
+> 占位符时，该段改为原样保留（不插值）而不是让请求失败。详见[行为契约](docs/behavior.md)。
 
 ## 安装
 

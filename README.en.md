@@ -48,8 +48,19 @@ for full interaction, data, and safety boundaries.
 
 ## Requirements
 
-- DeepSeek Harness ≥ `0.1.7-alpha.2`; full UI uses `web`
+- DeepSeek Harness `>=0.2.0-rc.2 <0.3.0` (declared as `engines.dsh`, covering the whole
+  0.2.x family; 0.1.x and earlier are rejected by DSH's plugin compatibility check);
+  full UI uses `web`
 - Node.js `^22.19.0 || >=24.0.0`
+
+> DSH 0.2.1 removed the built-in `{{cwd}}` prompt variable (the working directory is now
+> supplied by the working-directory service). It **rejects the request** on any `{{…}}`
+> reference it cannot resolve, and this plugin is adapted: if a custom deployment keeps
+> `Your working directory is {{cwd}}.` in `personaSuffix` / a preset's `suffix`, the plugin
+> clears that sentence instead of writing it back into the request; and if the prompt-injection
+> text box contains an unresolvable placeholder such as `{{cwd}}`, that section is kept
+> verbatim (not interpolated) instead of failing the request. See the
+> [behavior contract](docs/behavior.md) (Chinese).
 
 ## Installation
 

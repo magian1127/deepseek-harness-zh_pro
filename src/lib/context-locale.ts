@@ -524,6 +524,50 @@ const LINE_RULES: LineRule[] = [
     test: /^Agent (.+?) sent a message: ?$/,
     zh: function (m) { return `Agent ${m[1]} 发来一条消息：` },
   },
+  // ---- time-context 注入（@deepseek-ai/dsh-time-context）----
+  // 来源：packages/context/time-context/src/index.ts 的 renderText() 与
+  // request-zone.ts 的 renderBrowserTimeZoneContext()。注入 source.kind 为
+  // **'time-context'**（该包的 `export const name`），不是 'runtime-context'，
+  // 也不是快照形态——它是独立的 user 消息，正文固定三行（第 1/3 行）或
+  // 第 2 行按浏览器时区分三种形态。因此三条规则都走 LINE_RULES 整行锚定。
+  //
+  // 数据值必须原样保留：第 1 行的时间戳 `<ISO>+08:00[Asia/Hong_Kong]` 与第 2 行
+  // 的时区名都是数据而非文案，捕获组原样回填，只翻叙述性文字。
+  // `mixed` 后的 `[...]` 是 JSON.stringify 的结果，同样原样回填。
+  {
+    test: /^Time sampled while preparing turn (\d+), step (\d+): (.+)$/,
+    zh: function (m) { return `准备第 ${m[1]} 轮、第 ${m[2]} 步时采样的时间：${m[3]}` },
+  },
+  {
+    // resolved：单个时区名（IANA Area/Location 或 UTC）。
+    test: /^Browser time zone for this request: (.+)\. Interpret otherwise-unqualified dates and times in this zone\.$/,
+    zh: function (m) { return `本次请求的浏览器时区：${m[1]}。未明确标注的日期与时间按该时区解释。` },
+  },
+  {
+    // mixed：`mixed ["A","B"]`。`mixed` 与 `unavailable` 一样是状态词，必须译
+    // （留着就是半中半英）；其后的 JSON 数组是数据，原样回填。
+    test: /^Browser time zone for this request: mixed (\[.*\])\. Ask the user to clarify otherwise-unqualified dates and times\.$/,
+    zh: function (m) { return `本次请求的浏览器时区：混合 ${m[1]}。未明确标注的日期与时间请向用户确认。` },
+  },
+  {
+    // missing：`unavailable` 是状态词，按中文译；与 mixed 共用后半句。
+    test: /^Browser time zone for this request: unavailable\. Ask the user to clarify otherwise-unqualified dates and times\.$/,
+    zh: function () { return '本次请求的浏览器时区：不可用。未明确标注的日期与时间请向用户确认。' },
+  },
+  {
+    // elapsed 可能是 `unavailable`（状态词，翻成「不可用」），也可能是
+    // formatDuration() 的结果（`1d 2h 3m 4s` 这类，属数据值，原样回填）。
+    // baseline 只有两个取值（step === 1 时为 `model-visible message`，其余
+    // 为 `step context`），是叙述性文字，必须翻；漏了就是半中半英。
+    test: /^Elapsed since the preceding (.+?): (.+)\.$/,
+    zh: function (m) {
+      const baseline = m[1] === 'model-visible message' ? '模型可见消息'
+        : m[1] === 'step context' ? '步骤上下文'
+          : m[1]
+      const elapsed = m[2] === 'unavailable' ? '不可用' : m[2]
+      return `距此前${baseline}的间隔：${elapsed}。`
+    },
+  },
 ]
 
 /** 单行模板替换：未命中任何规则时返回原行。 */
@@ -570,6 +614,7 @@ function localizeText(text: string): string {
 //   subagent（结束通知）      → kind 'subagent-settled'
 //   tool-cordis             → kind 'tool-cordis'（0.2.1 起无 @pluginId 注入产出，
 //                             规则已删，kind 保留以兼容历史行）
+//   @deepseek-ai/dsh-time-context → kind 'time-context'（该包 `export const name`）
 /** 当前生产者自有 kind（0.1.7+ 新产出的官方注入）。 */
 const INJECT_KINDS = new Set([
   'agent-instructions', // 工作区指令帧（workspaceContextMessage）
@@ -580,6 +625,12 @@ const INJECT_KINDS = new Set([
   'cordis-host-runner', // 动态 Cordis 插件激活/失败通知
   'tool-cordis', // @pluginId 引用注入（创作模式）
   'schedule', // 定时提醒注入
+  // time-context：@deepseek-ai/dsh-time-context 的 `export const name`，
+  // 其 agent/pre-step 以 source.kind = name 注入「时间采样/浏览器时区/间隔」
+  // 三行正文（见该包 index.ts 的 createUserMessage）。漏掉这一项时整条消息
+  // 会被 isDshInjection 判为未知来源、原样放过——这正是提示词里时间三行
+  // 一直保持英文的根因，不是词典缺失。
+  'time-context',
 ])
 /** 旧 wrapper 形态的 plugin 名（0.1.6 及更早落盘、未经迁移的行）。 */
 const INJECT_PLUGINS = new Set([

@@ -5,12 +5,12 @@
 
 ## 适用范围
 
-- 支持 DeepSeek Harness ≥ 0.1.2-rc.1。完整浏览器增强运行在 `web`；一次性无头任务使用 `headless` profile，需单独安装本 bundle。
+- 支持 DeepSeek Harness `>=0.2.0-rc.2 <0.3.0`（`package.json` 的 `engines.dsh` 声明；覆盖 0.2.x 全家族，0.1.x 及更早会被 DSH 的插件兼容检查拒绝加载）。完整浏览器增强运行在 `web`；一次性无头任务使用 `headless` profile，需单独安装本 bundle。
 - profile 共用 `${DSH_HOME:-~/.dsh}/settings.yaml`，所以无头模式遵循 Web 已保存的 `dsh-zh` Host 设置；它没有 Client，浏览器增强不进入无头模式。
 - 无头模式没有额外日志约束；本插件处理自己的提示注入、DSH 官方工具/上下文，以及
   「网络搜索」的后端接管与 agent 作用域工具壳（headless profile 需单独安装本 bundle，
   详见「网络搜索」章）。
-- 本版本词典与 locale 契约按 DSH 0.1.2-rc.1 对齐，更旧的 DSH 上中文补全部分条目会失配。
+- 本版本词典与 locale 契约按 DSH 0.2.1-rc.2 对齐，更旧的 DSH 上中文补全部分条目会失配。
 - Node.js 要求：`^22.19.0 || >=24.0.0`。
 - 中文补全只在 Web 中文界面生效；其余 Web 界面增强在中文和英文界面都生效，只受各自开关控制，文案随界面语言切换。
 - 提示词注入只受自身开关控制，与界面语言无关，默认关闭。
@@ -132,8 +132,9 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
 默认关闭，存于 `settings.yaml` 命名空间 `dsh-zh`，与界面语言无关（同「提示词注入」）。
 开启后只改写**发往模型的请求内容**，不写会话历史、不注册模型工具：
 
-- `zhAgentPrompt`：默认代理（standard / ptc / minimal / cordis）在组装后按精确英文原文换成中文；保留 `{{model}}` / `{{cwd}}` 等动态占位符，自定义 persona 不匹配则原样保留。
+- `zhAgentPrompt`：默认代理（standard / ptc / minimal / cordis）在组装后按精确英文原文换成中文；保留 `{{model}}` 等动态占位符，自定义 persona 不匹配则原样保留。
   DSH 0.2.1 起三个 web preset 的 persona 统一为同一句短文本（cordis 旧版长文 persona 已删除）；persona suffix 各 preset 均不再设置，`deployment:persona-suffix` 规则仅覆盖自定义部署显式配置的英文 suffix。
+  **`{{cwd}}` 例外（DSH 0.2.1 破坏性变更）**：0.2.1 移除了内置 `{{cwd}}` 提示词变量（工作目录改由 working-directory 服务以 user-role context 提供），而 `renderPrompt` 对未注册变量是**抛错**、不是跳过，因此任何写回请求的 `{{cwd}}` 都会让该会话的每个模型请求在准入前失败。本插件据 `assembly.variables` 里有没有 `cwd` 提供者分流：有提供者（老运行时或第三方注册）仍译成中文句并保留占位符；无提供者（0.2.1 常规部署）**清空**该句——原文照抄同样会被拒，而目录信息已由 working-directory 服务的 context 给出，清空不丢信息。匹配键本身仍含 `{{cwd}}`：它是用来认出部署里那句英文原文的，不会被写进 prompt。
   同时替换系统级官方段落：`harness:identity`、`harness:source`、`app:web-surface`、`context:file-reference`、`ui:deliverable-file-references`。
   `harness:source` 与 `app:web-surface` 各有两个变体：0.1.x 形态把检出路径 / GUI URL 内联在段落里（动态值提取后拼入译文），0.2.1 起这些值搬进了同名运行时上下文、段落文本改为「值由 runtime context 给出」——两种形态都能翻译，因此老会话已 admitted 的旧段落不会被漏掉。
 - `zhToolDesc`：注入模型请求的工具说明按工具名替换为**DSH 官方工具**的中文版本，同时把
@@ -168,8 +169,7 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
     改用**分段替换**：固定句式逐段换中文，随条件变化的段与动态工具名原样保留。
     实测覆盖 standard / ptc / minimal 与 cordis；上述官方段落均按匹配规则换中文；minimal 的 complete persona 仍只含中文 persona。
 
-**2026-10-15 对齐 DSH 0.2.1-alpha.3**：本次升版补齐的官方工具说明包括
-`create_worktree`、`working_directory`、`terminal_open`/`terminal_send`/`terminal_read`/
+**2026-10-15 对齐 DSH 0.2.1-alpha.3**：本次升版补齐的官方工具说明包括`create_worktree`、`working_directory`、`terminal_open`/`terminal_send`/`terminal_read`/
 `terminal_signal`/`terminal_close`/`terminal_list`、`session_search`/`session_event_search`/
 `session_trace`/`session_event_trace`/`session_event_read`、`schedule_create`/`schedule_list`/
 `schedule_update`/`schedule_delete`、`plugin_manager`、`list_mcp_resources`/
@@ -183,10 +183,83 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
 exit_plan_mode 批准」）。第三方插件注册的工具（如 `dsh-codex-subscription` 的
 `codex_image_generate`）不纳入中文化匹配。
 
+**2026-10-18 补全（0.10.2）**：本轮修的是「0.2.1 下仍然漏出英文」的三类残留。
+- 补齐此前完全未收录、一直以英文发给模型的三个官方工具：`lsp`（查询语言服务器做代码
+  导航）、`plugin_market`（只读的插件市场索引/包/版本查询）、
+  `load_workspace_dependencies`（随附 Python 与库目录的绝对路径）。
+  其中 `tool:lsp` 段落早已汉化，缺的只是**工具描述**这一层。
+  译文中 `operation` 的四个枚举值（`goToDefinition` / `findReferences` /
+  `goToImplementation` / `hover`）、`line` / `character` 参数名、`UTF-16`、
+  `list_versions`、`plugin_manager install_bundle`、`target` / `registry`、第三方
+  Python 库名、`PATH`、`pnpm` 一律保持原文。
+- 补非持久 `bash` 的兜底译文：standard / ptc / cordis 三个 web preset 在 POSIX 平台
+  挂的是 `@deepseek-ai/dsh-tool-bash`，其描述由 `bashDescription()` 生成；此前 flavor
+  表只覆盖持久版（`*-persistent`）的两套文本，因此 POSIX 平台的标准会话里 `bash`
+  说明一直是英文。译文保留 `bash -c`、`$DSH_*`、`${VAR:?}`、`workdir`、`cd` 等标识符。
+- 修正两处**审计口径**问题（不是译文问题）：`TOOL_DESC_ZH` 里 `pwsh` 那条是 4 空格
+  缩进，而审计脚本的键名正则写死 2 空格，导致 coverage 误报 `pwsh` 未覆盖；
+  `bash` / `pwsh` / `str_replace_editor` 由 flavor 表（而非 `TOOL_DESC_ZH`）分派，
+  按「任一表分派即已覆盖」才算正确。这两处修正后审计脚本报
+  「词典未覆盖的官方工具: 0」。
+
+**2026-10-18 修复（0.10.3）：两类「提示词没汉化 / 错乱」的根因**
+
+用户反馈「系统提示词里的一部分没有汉化，要么有错乱」。实跑核对后确认是**两个不同
+机理**，症状与修法都不同：
+
+- **错乱 = 分段替换的 `en` 片段已过期**。分段替换是「拿英文原文片段做字符串查找、
+  命中就换成中文」，上游删句或改词时旧片段会**静默失效**——前半段翻成中文、后半段
+  英文原样留下，得到中英混杂的句子。这比整段英文更难发现（用户看到的不是「没翻译」，
+  而是「翻译坏了」）。
+  本轮命中三处：
+  - `tool:subagent` / `tool:subagent_fork`：0.2.1 删掉了
+    `When only waiting for their results remains, end your turn instead of
+    sleeping or polling; the next result starts a new turn.` 整句，旧 `en` 带着它 →
+    只翻前半。现在译文与 `en` 都只到 `…continue useful work while they run.`。
+  - `tools:sdk`：上游把参数顺序从「`description`, … and `code`」改成
+    「`code`, … and `description`」，并把首段与「Inside the program:」拆成
+    **`function-body` / `repl` 两种 programFormat 各一份**（差别是程序体说明与
+    第 4 个输出条目）。旧表是 description 在前的单份版本 → 这三段整段不命中、
+    300+ 字符英文残留。现在两个分支都收录。
+  - 旧 `tool:read` 的**译文**也带已经不存在的内容（见下条）。
+- **未汉化 = `match` 守卫过期**。守卫是「原文必须包含这个特征片段才替换」，
+  上游改词后守卫失配，`localizeSections` 会**整段跳过**，该段保持英文：
+  - `tool:read`：0.2.1 把 `cat, sed, head, or tail` 收窄成 `cat`，整段守卫失配 →
+    一直是英文。译文也同步删掉 sed/head/tail。守卫取**官方全文**而不是只到破折号
+    的短片段：hashline 开启 `replaceBuiltinEdit` 时注册的同名阴影 `tool:read` 以
+    `Use the ${readToolName} tool — not shell commands like cat — …` 开头，短片段会
+    把第三方阴影也盖成官方译文（本项目「不按名盖第三方段落」的核心原则）。
+  - `team:policy`：上游把首句截短为 `Agent Teams is available in this session`，
+    删掉了 `, but create teammates only when the user explicitly asks to use Agent
+    Teams or teammates.` 这半句约束。**译文同步删除该句**：在 0.2.1 源码树内搜
+    `create teammates only when` / `explicitly asks to use Agent Teams` 均无结果，
+    teammate 创建的唯一硬门禁是运行时的 `only the Team Lead can create teammates`
+    （那是「谁能创建」，不是「何时该创建」）。保留一条官方已不存在的使用时机约束，
+    会让模型遵守比官方更严的策略，也与英文原文不一致。
+- 两处**审计脚本自身**的误报（不是产品问题，已修正脚本口径）：`tool:workflow` 的
+  段落文本是模板 `` `Use the ${toolName} tool ONLY when …` ``（`toolName` 默认
+  `workflow`），`mcp-resource-servers` 的文本用 `+` 跨行拼接——两者按源码字面搜索
+  都永不命中，必须**按模板重建渲染后文本**再判定。`team:policy` 的守卫是独立常量
+  `TEAM_POLICY_MATCH`，旧脚本正则提不到还会崩溃。修正后这两条 guard 确认仍然有效，
+  无需改动。
+
+**通用守卫测试（本轮最重要的产出）**：逐条断言只能守住「已经想到的地方」，而上游
+每次改版都可能让某条 `en` 静默失效。`src/lib/english-residue.ts` 提供一条**与清单
+无关**的判据：对任何汉化结果，断言其中不存在「连续英文句子片段」。判据要求**三重
+同时成立**——片段 ≥20 字符、以空格分词且至少 3 个含字母的词、**且至少含一个英文
+功能词**（`the`/`a`/`is`/`to`/`and`/`you` …）。第三条是关键：必须保留的标识符序列
+（`update_goal action resume`、`plugin_manager install_bundle`）、产品名
+（`DeepSeek Harness Web GUI`）、工具名顿号列表都不含功能词，因此不会误报；而任何
+真正的英文句子必然含。判前先剥离围栏代码块、行内代码、markdown 链接、`[方括号标记]`
+与标题行（这些位置本来就该是英文）。`verify-cli.mts` 用它跑完整装配后的全部官方
+section 与全部已翻译工具描述，并附带正负样本自证（判据被放宽到永不命中时会失败）。
+局限：判据只认「句子」，不认孤立单词——`inactive` 这类单个英文词夹在中文里属于术语
+统一问题，靠逐条断言与人工复核，不靠本判据。
+
+
 **新会话生效、老会话不重新注入**：以会话是否产生过模型输出（`assistant/message`）
 判定新旧。会话首次模型请求时按当前开关状态锁定语言（中文或英文），锁定后开关翻转
 不再影响该会话：老会话永不改为中文，已锁定的新会话翻开关后保持中文。
-
 实现方式：在 `systemPrompt.assemble` 返回后原地改写最终 assembly 的 persona 与工具
 说明（complete persona 的 preset 同样生效）；开关全关或设置服务不可用时零改动。
 任何改写失败只告警一次并返回原内容，不阻断模型请求。
@@ -231,6 +304,17 @@ DSH 注入会话的官方英文上下文在 `agent/pre-step` 阶段、进入会�
     两种形态）、被停止、输出空间用尽、拒绝任务、失败、异常结束，以及「其结束消息：」/
     「它没有留下结束消息。」/ 结构化结果前缀。相邻代理转发消息（`agent-message`）的
     消息头也翻译，正文保留。
+- **时间上下文**（`time-context`，`@deepseek-ai/dsh-time-context` 以
+    `source.kind = 'time-context'` 注入的独立 user 消息，**不是**运行时上下文快照）：
+    采样行（`Time sampled while preparing turn N, step M: …`）、浏览器时区的三种形态
+    （resolved 单时区 / mixed 多时区 / missing 不可用）、以及距此前基线的间隔行。
+    基线的两个取值（`model-visible message` → 「模型可见消息」、`step context` →
+    「步骤上下文」）与两个状态词（`unavailable` → 「不可用」、`mixed` → 「混合」）
+    一并翻译；而**时间戳（含括号内 IANA 时区名）、时区名本身、时长（`1d 2h 3m 4s`）、
+    `mixed` 后的 JSON 数组都是数据，原样保留**。
+> 该包在 0.10.2 之前未进入注入来源白名单，整条消息被当作未知来源放行——这是提示词里
+> 「Time sampled…／Browser time zone…／Elapsed since…」三行长期保持英文的根因，
+> 不是词典缺条目。
 
 **已知限制与代价**：运行时上下文的头部行（`Current runtime context. This snapshot
 supersedes …` 及其清空变体）由 `joinContextSections` 硬编码拼接，官方渲染侧永远是英文；本开关
@@ -453,6 +537,14 @@ execute 走官方 web seam，因此自动获得上述后端级联与智谱联动
 
 旧值 `context` 读取时归一化为 `user`。文本框本地即时回显，静默 600ms 后写入 settings，
 失焦时立即写入。开关关闭或文本为空时两条通道都不注入。
+
+**`{{…}}` 占位符防护（`system` 目标，DSH 0.2.1 起）**：`system` 目标的文本会作为 section
+进入最终 system prompt，而 DSH 的 `renderPrompt` 对**未注册**或**值 undefined** 的
+`{{变量}}` 引用是抛错、不是跳过——用户若在文本框里写 `{{cwd}}`（0.2.1 已移除该内置变量），
+整个模型请求会在准入前失败，且报错点远离用户输入、很难排查。本插件检测到文本里含有当前
+请求解析不了的占位符时，把该 section 标记为 `interpolate: false`（官方为此场景提供的开关），
+文本**原样保留**、不做插值，请求照常发送。可解析的占位符（如 `{{model}}`）维持默认插值语义。
+`user` 目标不受影响（那条是普通会话消息，不走提示词插值）。
 
 ## 自动展开最新思考
 

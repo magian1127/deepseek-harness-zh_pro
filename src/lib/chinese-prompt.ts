@@ -202,6 +202,43 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
     // 生效：放在 persona 之前（与官方 -90 约定一致）；目标切走或开关关闭时
     // 移除同名 section。该方法在 assemble 之后执行，因此 complete persona
     // 无法把它丢弃。
+    //
+    // `{{…}}` 防护（DSH 0.2.1 起）：这里是**用户自定义文本**，而 renderPrompt
+    // 对解析不了的引用一律抛错、不是跳过——用户若在设置里写 `{{cwd}}`（0.2.1
+    // 已移除该内置变量），整个请求会在准入前失败，且失败点远离用户输入、极难排查。
+    // 官方给出的手段是该 section/context 的 `interpolate: false`（原样保留、
+    // 不解析）。但一律标 false 会让用户**有意**写的 `{{model}}` 也不再插值，
+    // 因此只在文本里含有当前 assembly 解析不了的引用时才降级为不插值。
+    //
+    // 判据严格照抄官方 interpolate()（system-prompt/src/index.ts）的三条失败路径：
+    //   GROUP_AT = /^\{\{([^{}]*)\}\}/     —— 先捞出 {{…}} 组
+    //   VARIABLE_NAME = /^[a-z][a-z0-9_]*$/ —— 组名不合规 → malformed
+    //        （大写 / 连字符 / 空名 / 带空格 全在此列，实测都会 throw，
+    //          不能当成「安全文本」放过）
+    //   未注册 → unknown；已注册但值 undefined → has no value
+    // `{{` 后完全找不到 `}}` 时官方按字面 prose 处理（不 throw）；但若中间夹花括号
+    // 导致「有 }} 却凑不出合规组」，走的是 malformed 路径。
+    const GROUP_AT = /^\{\{([^{}]*)\}\}/
+    const VARIABLE_NAME = /^[a-z][a-z0-9_]*$/
+    /** 该文本在 renderPrompt 下是否可能抛错（保守：能抛出就返回 true）。 */
+    const wouldFailInterpolation = function (text, variables) {
+      let pos = 0
+      for (;;) {
+        const open = text.indexOf('{{', pos)
+        if (open < 0) return false
+        const group = GROUP_AT.exec(text.slice(open))
+        if (group === null) {
+          // 后面没有 `}}`：字面 prose，安全；否则是 malformed 组。
+          if (text.indexOf('}}', open + 2) < 0) return false
+          return true
+        }
+        const name = group[1]
+        if (!VARIABLE_NAME.test(name)) return true
+        const value = variables !== null && typeof variables === 'object' ? variables[name] : undefined
+        if (typeof value !== 'string') return true
+        pos = open + group[0].length
+      }
+    }
     const syncAssemblySection = function (assembly) {
       if (assembly === null || typeof assembly !== 'object' || !Array.isArray(assembly.sections)) return
       const index = assembly.sections.findIndex(function (section) { return section?.name === ZH_PROMPT_SECTION_NAME })
@@ -209,7 +246,9 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
         if (index >= 0) assembly.sections.splice(index, 1)
         return
       }
-      const section = { name: ZH_PROMPT_SECTION_NAME, text: state.text }
+      const unsafe = wouldFailInterpolation(state.text, assembly?.variables)
+      const section: { name: string; text: string; interpolate?: boolean } = { name: ZH_PROMPT_SECTION_NAME, text: state.text }
+      if (unsafe) section.interpolate = false
       if (index >= 0) {
         assembly.sections[index] = section
         return

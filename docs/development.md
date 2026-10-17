@@ -47,6 +47,35 @@ npm test
 - `dsh.bundle.patch → ./cordis.patch.yml`；
 - `dsh.client` 的 web 平台、立即加载和依赖包名。
 
+### `engines` 门禁（DSH 0.2.1 起）
+
+DSH 0.2.1 的 plugin-compatibility（`packages/boot/app-boot/src/plugin-compatibility.ts`）
+先看清单有没有 `engines.dsh`：**有则它单独决定结果，`peerDependencies` 完全被忽略**；
+没有才回退到 peer 规则。判定用 `semver.satisfies(v, range, { includePrerelease: true })`，
+所以 `0.2.1-rc.2` 这类预发布版本不会因为缺 `includePrerelease` 被误判。
+
+本仓库声明：
+
+```jsonc
+"engines": {
+  "node": "^22.19.0 || >=24.0.0",
+  "dsh": ">=0.2.0-rc.2 <0.3.0-0"
+}
+```
+
+- `engines` 必须始终是**对象**，`engines.dsh` 必须是**字符串**，否则该包被拒绝加载。
+- 保留 `node` 键，只新增 `dsh` 键；不要把 `engines` 改成字符串或数组。
+- `engines.dsh` 里写 `workspace:*` / `workspace:^` 一律判不兼容（只有 peer 才允许 workspace 协议）。
+- 区间下界 `0.2.0-rc.2` 是**闭区间**，因此 `>=0.2.0-rc.2` 会放行 `0.2.0-rc.2` 本身；
+  要拒绝 0.2.0 系列应改用 `>0.2.0-rc.2` 或 `>=0.2.1-rc.1`。当前取值覆盖整个 0.2.x 家族。
+- 改完用共享验证器核对（直接调用官方 `evaluatePluginCompatibility`，不是复刻逻辑）：
+
+```powershell
+# 在 DSH checkout 目录下
+npx tsx <workspace>/temp/check-engines-dsh.mjs deepseek-harness-zh_pro
+npx tsx <workspace>/temp/check-engines-dsh.mjs deepseek-harness-zh_pro --runtime 0.1.8-rc.2   # 应判不兼容
+```
+
 `./package.json` 导出用于 client-modules 扫描；缺失时插件可能被静默跳过并返回 404。
 `bin/dsh-zh.mjs` 与 `bin/cli/*.mjs` 是发布时生成的运行入口，不进入 Git；`prepare` 和 `prepack`
 会在需要时从 `src/bin/` 生成完整 CLI 层。
@@ -212,6 +241,35 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
    部署树里**已不存在**（如 0.1.7 的 `tool:cordis`，其守卫一直失配、从未生效），整条规则连同
    专属常量文件一起删。**守卫片段里避免用撇号**（源码里写作 `\'`，逐字搜索会落空）；
    脚本已对 haystack 做反转义兜底，但单行无转义的片段最稳。
+
+   **2026-10-18（0.2.1-rc.2）新增两条铁律，两者都会造成「搜不到 → 误报」或「不命中 → 漏译」：**
+
+   - **守卫必须按「渲染后文本」判定，不能按源码字面搜。** `tool:workflow` 的段落文本是
+     模板 `` `Use the ${toolName} tool ONLY when …` ``（`toolName` 默认 `workflow`），
+     `mcp-resource-servers` 用 `+` 跨行拼接，`tool:subagent` 内嵌动态工具名列表——这些
+     在源码里都不以完整字面出现，字面搜索永远 0 命中。正确做法是先从模板**重建**
+     （拼接相邻字符串字面量、把 `${…}` 换成该包 Config 的默认值）再判定。
+   - **分段替换（`replacements`）的 `en` 必须与上游模板逐字一致，多一个字就静默失效。**
+     失效症状不是「整段英文」而是**半中半英**：前半段命中翻成中文、后半段英文原样留下。
+     2026-10-18 实测三处：`tool:subagent`/`tool:subagent_fork`（上游删掉
+     `When only waiting for their results remains…` 整句）、`tools:sdk`（参数顺序反转成
+     `code` 在前，且首段与程序内说明按 `function-body`/`repl` **各渲染一份**，必须两个
+     分支都收录）。`tools:sdk` 由运行时渲染器（`ts-types.ts`/`py-types.ts`）生成，源码树里
+     没有 `systemPrompt.section({name:'tools:sdk'})` 注册，判定要按渲染模板重建。
+     同一次还修了 `tool:read`（上游把 `cat, sed, head, or tail` 收窄成 `cat`，守卫失配 →
+     整段英文，译文也带着已删除的 sed/head/tail）与 `team:policy`（首句被截短，后半句
+     使用时机约束已被上游删除，**译文同步删掉该句**——不能凭空保留官方已不存在的规则；
+     已在 0.2.1 源码树内确认该约束没有搬到别处，唯一的硬门禁是运行时的
+     `only the Team Lead can create teammates`，那是「谁能创建」不是「何时创建」）。
+
+   **守卫长度要覆盖「官方独有后缀」，否则会盖掉第三方阴影段落。** `tool:read` 的守卫
+   不能只取到破折号的 `Use the read tool — not shell commands like cat —`：hashline 开启
+   `replaceBuiltinEdit` 时注册的同名阴影 `tool:read` 以
+   `Use the ${readToolName} tool — not shell commands like cat — to inspect UTF-8 text files. …`
+   开头，短片段会把第三方阴影也盖成官方译文。必须取官方全文
+   （`… to inspect text files. Use offset and limit to continue reading large files.`）。
+   同一条原则适用于所有 `match`：**第三方在 Agent 作用域注册的同名阴影段落不得被按名
+   盖成官方译文**。
 6. **核对段落覆盖（不是守卫是否有效，而是**表里根本没有这一项**）**——与第 5 步互补，漏的是
    另一种失败：守卫全绿、`npm test` 全绿，但某个官方段落从未被收录，于是一直整段英文。
    跑 `node temp/audit-section-coverage.mjs`：枚举部署版 `packages/` 里所有
@@ -243,6 +301,34 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
    （本插件 0.1.7 时代的 assemble 改写路径在 0.2.1 下静默失效，`npm test` 不覆盖）。
    同时注意快照新增的 context：`working-directory:current`（required）、`team:identity`
    （Agent Teams 会话）、`harness:source` / `app:web-surface` 的值形态。
+
+8. **绝不把 `{{…}}` 写回 section/context（0.2.1 起会直接拒掉整个请求）**：
+   `packages/core/system-prompt/src/index.ts` 的 `interpolate()` 对未注册变量是
+   **抛错**（`unknown prompt variable "{{cwd}}" in section "…"`），`renderPrompt` 在
+   请求准入前跑，所以一处未解析的占位符 = 该会话所有模型请求失败。0.2.1 只注册
+   `provider` / `model`（`packages/core/agent-loop/src/index.ts:389-390`），
+   **`{{cwd}}` 已被移除**，工作目录改由 working-directory 服务以 user-role context 提供。
+   排查口诀：
+   - **匹配键**里出现 `{{cwd}}` 是正常的——它的作用是认出部署里的英文原文，不进 prompt；
+   - **写回值**里出现未注册占位符就是致命 bug。
+   `model-locale.ts` 的 `deployment:persona-suffix` 分支属于后者，必须按
+   `assembly.variables` 里 cwd 能否解析出**字符串**分流（无提供者或值为 `undefined`
+   时清空该句）。注意 `interpolate()` 有三条失败路径，判据要一起挡：
+
+   | 路径 | 触发条件 | 例子 |
+   | --- | --- | --- |
+   | `malformed` | 组名不合 `/^[a-z][a-z0-9_]*$/` | `{{Model}}`、`{{cwd-x}}`、`{{}}`、`{{ cwd }}`、`{{a{b}}` |
+   | `unknown` | 名字合法但未注册 | `{{cwd}}`（0.2.1 常规部署） |
+   | `no value` | 已注册但 provider 返回 `undefined` | 第三方注册了 `cwd` 却没给值 |
+
+   只有「`{{` 后完全找不到 `}}`」按字面 prose 放行（如 `a {{ b`）。
+   提示词注入（`chinese-prompt.ts`）承载**用户自定义文本**，同源风险更大：
+   检测到会抛错的引用时把该 section 标 `interpolate: false`（官方为此场景提供的
+   开关），文本原样保留；能解析的 `{{model}}` 维持默认插值。
+   守护测试：`verify-cli.mjs` 断言「中文化后的 sections 不含未注册的 {{cwd}}」，
+   以及注入文本各形态（未知/畸形/prose）的降级判定。该判据已与官方
+   `renderPrompt` 逐例对拍（17 例 0 不一致）。
+   判定方法：新会话首个请求直接报 `unknown prompt variable`，或把开关关掉就恢复正常。
 
 ## DOM 文本层
 
@@ -618,6 +704,28 @@ WCAG 相对亮度公式算「底色 vs 文字」比值（正文要求 ≥ 4.5）
     逐字一致才替换；section 文本为空（非计划模式）时跳过，绝不凭空注入。
     `team:policy` 用 `match` 守卫（`TEAM_POLICY_MATCH`），另导出上游逐字副本
     `TEAM_POLICY_EN` 供回归脚本用真实原文驱动替换。
+- **分段替换必须与上游模板同步（2026-10-18 起的硬约束）**：`subagent` / `subagent_fork`
+  的工具描述、`tool:subagent` / `tool:subagent_fork` 段落、`tools:sdk` 与
+  `mcp-resource-servers` 都走 `replacements`（`split().join()`）。这类规则**失效时不报错**，
+  只留下「前半中文、后半英文」的残句，比整段英文更难发现。上游删句/改词时，`en` 会
+  静默不命中。因此：`en` 必须逐字复制上游当前模板（含标点与尾随空格）；一处模板渲染
+  多个分支时（`tools:sdk` 的 `function-body` / `repl`）**每个分支都要收录**；若上游
+  删掉某句，译文里对应的中文也必须删（见 `team:policy` 的 `create teammates only when`）。
+  发现手段见下条「通用英文残片守卫」。
+- **通用英文残片守卫（`src/lib/english-residue.ts`）**：逐条断言只守得住「已经想到的
+  地方」，所以另设一条**与清单无关**的判据——`findEnglishSentenceRuns(text)` 返回汉化
+  结果里残留的「连续英文句子片段」。判据是**三重与**：① 片段 ≥ 20 字符；② 以空格分词
+  且至少 3 个含字母的词；③ **至少含一个英文功能词**（`the`/`a`/`is`/`to`/`and`/`you` …）。
+  第 ③ 条是防误报的关键：必须保留的标识符序列（`update_goal action resume`、
+  `plugin_manager install_bundle`）、产品名（`DeepSeek Harness Web GUI`）、顿号分隔的
+  工具名列表都不含功能词，因此不报；真正的英文句子必然含。判前先剥离围栏代码块、
+  行内代码、markdown 链接、`[方括号标记]` 与标题行（这些位置本就该是英文）。
+  `verify-cli.mts` 用它跑**完整装配后**的全部官方 section（fixture 逐字取自 0.2.1-rc.2
+  源码）与全部**已翻译**的工具描述，并配正负样本自证：既断言判据不误报标识符，
+  也断言它确实能抓住「前半中文、后半英文」与「整句英文」两种形态——判据被放宽到
+  永不命中时测试会失败。工具描述只在「描述确实变了」时断言残片，因为第三方同名工具
+  （hashline 的 `edit`、第三方 `lsp`/`bash`）本来就该整段保持英文。
+  局限：判据只认句子，不认孤立单词；`inactive` 这类单词语态问题靠逐条断言与人工复核。
 - **唯一包装管线（assemble-patch.ts）**：chinese-prompt 与 model-locale 都通过
   `registerAssembleRewriter` 注册改写器，由 `ensureAssemblePatch` 保证
   `systemPrompt.assemble` 只包一层。**禁止再直接对 `systemPrompt.assemble` 赋值**：
@@ -629,6 +737,33 @@ WCAG 相对亮度公式算「底色 vs 文字」比值（正文要求 ≥ 4.5）
   中唯一包装 assemble 的插件，普通对象 stub 无原型方法时退回标记链终点）。
 - **不越界**：第三方插件的段落（`tool:hashline`、`team:policy` 等）与工具（`vision_*`、
   `agent_teams_*`、`codex_*`）不在表中，原样保留；工具名与参数名永不翻译。
+- **0.10.2 补全的三处**（均落在 `TOOL_MATCH` / `TOOL_DESC_ZH`，不改判定顺序）：
+  - `lsp` / `plugin_market` / `load_workspace_dependencies`：此前三张表都没有它们的
+    键，`localizeTools` 的第二行 `if (match === undefined && flavors === undefined &&
+    replacementRule === undefined) continue` 直接跳过，所以描述原样英文。特征片段取
+    各自官方描述的**首句逐字**，足够长、第三方同名工具不会撞上。
+  - `bash`：新增的是**非持久** `@deepseek-ai/dsh-tool-bash` 的兜底译文。`flavor` 表
+    只覆盖 `tool-bash-persistent`（包默认 + minimal preset 覆盖两套），而 standard /
+    ptc / cordis 三个 web preset 在 POSIX 平台挂的是非持久包，描述由
+    `bashDescription()` 生成。顺序上 flavor 先匹配、非持久文本不含持久版片段，因此
+    落回 `TOOL_MATCH` 兜底。
+  - 判定顺序仍是「分段替换 → flavor → `TOOL_MATCH` → `TOOL_DESC_ZH`」，新条目只
+    增加了「能命中」的工具数，不改变第三方同名工具的放行行为（回归用第三方
+    `lsp` / `bash` 各一条反向断言守住）。
+- **审计脚本的两个口径坑**（`temp/zh-audit/audit-tool-coverage.mjs`，一次性工具）：
+  - 键名正则原为 `^ {2}`（写死 2 空格），而 `TOOL_DESC_ZH.pwsh` 是 4 空格缩进，
+    于是误报 `pwsh` 未覆盖——现放宽为 `^[ \t]+`。
+  - 覆盖判定原只看 `TOOL_DESC_ZH` 键，于是把「由 flavor 表分派的 `bash` / `pwsh` /
+    `str_replace_editor`」全部误报为未覆盖——现按「`TOOL_DESC_ZH` ∪ `TOOL_FLAVOR_DESC_ZH`
+    ∪ `TOOL_DESC_REPLACEMENTS` 任一表按名分派即已覆盖」统计。
+  - 另：脚本只扫 `.ts`，而 minimal preset 的两条 flavor match 来自
+    `packages/bundle/web-app/presets/minimal.patch.yml` 的 `config.description`，
+    因此单列标注为「非 .ts 源码、已单独核对存在」，不计入失效——这两条**是有效的**，
+    不要因为脚本报失效就删掉分支。
+- **验证方式**：`temp/zh-audit/verify-real-text.mjs` 用「模型真正看到的英文原文」
+  复刻 `localizeTools` 判定顺序，报告哪些会命中（改后应 `未命中合计: 0 / N`）；
+  `src/verify-cli.mts` 侧则以真实 `localeAssembly` 断言译文生效、标识符保持原文、
+  第三方同名工具原样保留。
 - 实现位置：包装 `systemPrompt.assemble`，在官方组装返回后、agent-loop 使用前原地
   改写 `assembly.sections` 与 `assembly.tools`——complete persona 的 preset 同样生效。
 - 开关全关或 settings 服务不可用时零改动；改写失败只 warn 一次并返回原 assembly。
@@ -694,8 +829,24 @@ Host 半边热通道（2026-10-17 重写，逐层实测后的结论；实现见 
   替换（整行锚定正则 + 捕获组重建动态值），按 source 白名单识别官方注入
   （`agent-instructions` / `skill-catalog` / `user-approval` / `compact-checkpoint` /
   `runtime-context` / `plan-mode` / `cordis-host-runner` / `tool-cordis` / `schedule` /
-  `subagent-settled`）；source 与 id 原样保留——agent-instructions 的基线/变更去重、
-  skill 目录 digest、runtime-context 投影归属全部由 source 驱动。
+  `subagent-settled` / `time-context`）；source 与 id 原样保留——agent-instructions
+  的基线/变更去重、skill 目录 digest、runtime-context 投影归属全部由 source 驱动。
+- **time-context 为什么此前整段英文（0.10.2 修）**：`@deepseek-ai/dsh-time-context`
+  以自己的 `export const name`（`'time-context'`）作为 `source.kind` 注入一条**独立
+  user 消息**，既不叫 `runtime-context`、也不是快照形态，因此 `isDshInjection`
+  根本不放行——`LINE_RULES` 里加多少条规则都不会被执行。修复是**两件事**：把
+  `'time-context'` 加进 `INJECT_KINDS` 白名单，再补 5 条整行规则（采样行 1 条、
+  浏览器时区 resolved / mixed / missing 3 条、间隔行 1 条）。
+  该消息正文由 `renderText()` 与 `renderBrowserTimeZoneContext()` 拼出，格式稳定：
+  `Time sampled while preparing turn N, step M: <ts>` / `Browser time zone for this
+  request: <…>` / `Elapsed since the preceding <baseline>: <elapsed>`。
+  **数据与叙述的边界**：时间戳（含括号内 IANA 时区名）、时区名本身、`formatDuration()`
+  的时长（`1d 2h 3m 4s`）、`mixed` 后的 JSON 数组全部原样回填，只翻叙述文字与两个
+  状态词（`unavailable` → 「不可用」、`mixed` → 「混合」）、两个基线名
+  （`model-visible message` → 「模型可见消息」、`step context` → 「步骤上下文」）。
+  回归见 `verify-cli.mts` 的四组断言（三种时区形态 + 老会话零改动）。
+  注意它**不是** `localizeSnapshotBody` 路径：那条只对 `source.kind ===
+  'runtime-context'` 的快照生效，所以规则必须加在 `LINE_RULES`。
 
 **source.kind 的两代形态（DSH 0.1.7 起必读）**：会话格式 v4 要求消息 `source.kind` 是
 「生产者自有」的非空字符串，且**显式拒绝 `'plugin'`**——`v3 → v4` 迁移只重写**已落盘**的
