@@ -322,13 +322,13 @@ function installWebSearchRetry(ctx: HostContext): void {
     return dispose !== undefined
   }
   if (install()) return
+  // 退订用 ctx.on 返回的 disposer（cordis 没有 ctx.off）。
+  let stopRetry: (() => unknown) | undefined
   const retry = function (): void {
-    if (install() && typeof ctx.off === 'function') ctx.off('internal/service', retry)
+    if (!install()) return
+    const dispose = stopRetry
+    stopRetry = undefined
+    if (typeof dispose === 'function') dispose()
   }
-  ctx.on('internal/service', retry)
-  ctx.effect(function () {
-    return function () {
-      if (typeof ctx.off === 'function') ctx.off('internal/service', retry)
-    }
-  }, 'dsh-zh: web search provider retry')
+  stopRetry = ctx.on('internal/service', retry)
 }

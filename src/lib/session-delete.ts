@@ -994,16 +994,15 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
 
   if (!install()) {
     // webServer 晚于本插件出现：等待 internal/service 事件。
-    const retryService = function (name: string) {
-      if (name === 'webServer') {
-        if (install() && typeof ctx.off === 'function') ctx.off('internal/service', retryService)
-      }
+    // 退订用 ctx.on 返回的 disposer（cordis 没有 ctx.off）。
+    let stopRetry: (() => unknown) | undefined
+    const retryService = function (name: string): void {
+      if (name !== 'webServer') return
+      if (!install()) return
+      const dispose = stopRetry
+      stopRetry = undefined
+      if (typeof dispose === 'function') dispose()
     }
-    ctx.on('internal/service', retryService)
-    ctx.effect(function () {
-      return function () {
-        if (typeof ctx.off === 'function') ctx.off('internal/service', retryService)
-      }
-    }, 'dsh-zh: session delete route retry')
+    stopRetry = ctx.on('internal/service', retryService)
   }
 }

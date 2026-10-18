@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import * as path from 'node:path'
 import { delimiter, dirname, join } from 'node:path'
 import * as fs from 'node:fs'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -25,6 +25,20 @@ function tempRoot(label) {
 
 async function importCli(label) {
   return import(`./bin/dsh-zh.mjs?verify=${label}-${Date.now()}-${Math.random()}`)
+}
+
+// 静态契约:cordis 没有 ctx.off。读它会被 Context 代理当成未注入服务直接抛
+// `cannot get property "off" without inject`;这条错误出现在 internal/service
+// 回调里会升级成 `dsh: fatal load failure`,整个 dsh web 起不来(2026-10-18 实证)。
+// 退订只能用 ctx.on(...) 返回的 disposer —— 这里守住不许再写回来。
+{
+  const here = dirname(fileURLToPath(import.meta.url))
+  const hostDir = existsSync(join(here, 'lib')) ? join(here, 'lib') : join(here, 'src', 'lib')
+  const offenders = readdirSync(hostDir, { withFileTypes: true })
+    .filter(function (entry) { return entry.isFile() && /\.(ts|js)$/.test(entry.name) })
+    .filter(function (entry) { return /(?:typeof\s+ctx\.off|ctx\.off\s*\()/.test(readFileSync(join(hostDir, entry.name), 'utf8')) })
+    .map(function (entry) { return entry.name })
+  check(offenders, [], '主机/客户端源码不使用 ctx.off（cordis 无该方法，读取即抛）')
 }
 
 // 忠实模拟 Cordis waterfall 的 agent/pre-step 监听链执行顺序：

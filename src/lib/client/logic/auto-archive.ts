@@ -210,17 +210,17 @@ function installAutoArchive(ctx) {
     return true
   }
   // 立即尝试初始化；服务未就绪时监听 internal/service 事件，出现时重试。
+  // 退订用 ctx.on 返回的 disposer：浏览器 cordis 与主机同代，也没有 ctx.off
+  // （读取会抛 cannot get property "off" without inject）。
   if (!autoArchive()) {
+    let stopRetry = null
     const retryService = function (name) {
-      if (name === 'sessions' || name === 'workspaces' || name === 'configForms') {
-        if (autoArchive()) {
-          ctx.off('internal/service', retryService)
-        }
-      }
+      if (name !== 'sessions' && name !== 'workspaces' && name !== 'configForms') return
+      if (!autoArchive()) return
+      const dispose = stopRetry
+      stopRetry = null
+      if (typeof dispose === 'function') dispose()
     }
-    ctx.on('internal/service', retryService)
-    ctx.effect(function () {
-      return function () { ctx.off('internal/service', retryService) }
-    }, 'dsh-zh: auto archive service retry')
+    stopRetry = ctx.on('internal/service', retryService)
   }
 }

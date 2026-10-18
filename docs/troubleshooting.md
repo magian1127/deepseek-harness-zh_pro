@@ -14,6 +14,33 @@ node --check bin/dsh-zh.mjs
 npm test
 ```
 
+## dsh web 起不来：`fatal load failure: cannot get property "off" without inject`
+
+症状：启动器等到超时后弹「dsh web failed to start on port 3080」，日志末尾是
+`dsh: fatal load failure: Error: cannot get property "off" without inject`，栈顶指向本包
+`lib/*.js` 里的一个 `internal/service` 重试回调。
+
+原因：当前 cordis 的 Context **没有 `ctx.off`**。Context 代理把未知属性当服务解析，
+未声明 `inject` 就直接抛上面这条错误；这条错误发生在事件回调里会升级成 fatal load
+failure，`dsh web` 整个进程退出。`typeof ctx.off === 'function'` 这种写法同样会抛——
+`typeof` 也要先读属性。
+
+正确做法：退订只用 `ctx.on(...)` 返回的 disposer（Fiber 卸载时 cordis 也会自动清），
+不要碰 `ctx.off`。照抄这段模式：
+
+```ts
+let stopRetry: (() => unknown) | undefined
+const retry = function (): void {
+  if (!install()) return
+  const dispose = stopRetry
+  stopRetry = undefined
+  if (typeof dispose === 'function') dispose()
+}
+stopRetry = ctx.on('internal/service', retry)
+```
+
+`verify-cli.mjs` 有静态守护：主机源码出现 `ctx.off` 直接失败。
+
 ## 删除会话后会话残留在列表（或移到了「未分组」）
 
 症状：点击「删除会话/批量删除」后提示已删除，但会话仍出现在官方列表的「未分组」

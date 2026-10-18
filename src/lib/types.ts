@@ -30,8 +30,11 @@ export interface HostContext {
   loader: LoaderLike
   get(name: string): any
   effect(setup: () => unknown, label?: string): unknown
-  on(name: string, handler: (...args: any[]) => unknown, options?: { prepend?: boolean }): unknown
-  off(name: string, handler: (...args: any[]) => unknown): unknown
+  // cordis 的 ctx.on 返回 disposer，并随 fiber 自动清理；当前 cordis 没有 ctx.off
+  // —— 访问它会被 Context 代理当成未注入的服务而抛
+  // `cannot get property "off" without inject`（2026-10-18 实测导致 dsh web 致命
+  // 加载失败）。取消监听只能用这里返回的 disposer 或 fiber 卸载。
+  on(name: string, handler: (...args: any[]) => unknown, options?: { prepend?: boolean }): (() => unknown) | undefined
   plugin(plugin: unknown, config: Record<string, unknown>): PluginHandleLike
 }
 

@@ -492,16 +492,17 @@ export function installSelfHotReload(ctx: HostContext): void {
   }
   if (attempt()) return
   // hmr 尚未就绪：监听服务注入事件，就绪后补装（一次性）。
+  // 退订只能用 ctx.on 的返回值：当前 cordis 没有 ctx.off，读它会抛
+  // `cannot get property "off" without inject`（2026-10-18 实测 dsh web 致命加载
+  // 失败就死在这里）。fiber 卸载时 cordis 也会自动清掉监听，无需额外 effect。
+  let stopRetry: (() => unknown) | undefined
   const retry = function (): void {
     if (!attempt()) return
-    if (typeof ctx.off === 'function') ctx.off('internal/service', retry)
+    const dispose = stopRetry
+    stopRetry = undefined
+    if (typeof dispose === 'function') dispose()
   }
-  ctx.on('internal/service', retry)
-  ctx.effect(function () {
-    return function () {
-      if (typeof ctx.off === 'function') ctx.off('internal/service', retry)
-    }
-  }, 'dsh-zh: hot reload retry')
+  stopRetry = ctx.on('internal/service', retry)
 }
 
 /** `hmr` 服务在本插件里用到的全部形状（跨代际并集）。 */
