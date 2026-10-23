@@ -772,6 +772,34 @@ check(toolDescToggle !== null && toolDescToggle.props.disabled === true, true, '
 check(locale.lookup('dsh-zh-settings', 'zhAgentPrompt'), '代理角色提示中文化', '代理角色提示 中文文案')
 check(locale.lookup('dsh-zh-settings', 'zhToolDesc'), '工具说明中文化', '工具说明 中文文案')
 
+// 「排序位置」（zhPromptOrder）：仅「初始系统提示」目标可见，默认 100。
+// 设置服务缺失时目标按 system 处理，因此这一行仍会渲染（禁用态）。
+const promptOrderInput = findElement(settingsTree, function (node) {
+  return node.type === 'input' && node.props && node.props['aria-label'] === '排序位置'
+})
+check(promptOrderInput !== null, true, '排序位置 设置输入框存在')
+check(promptOrderInput === null || promptOrderInput.props.value, '100', '排序位置 默认值 100')
+check(promptOrderInput !== null && promptOrderInput.props.disabled === true, true, '设置服务缺失时禁用排序位置输入')
+check(promptOrderInput === null || promptOrderInput.props.type, 'number', '排序位置 输入框为数字类型')
+check(locale.lookup('dsh-zh-settings', 'promptOrderLabel'), '排序位置', '排序位置 中文文案')
+check(locale.lookup('dsh-zh-settings', 'promptOrderInvalid'), '请输入 1–9999 的整数', '排序位置 非法输入提示文案')
+// 排序位置默认值与范围：客户端只负责展示与写入，真实默认值在主机侧
+// constants.ts（ZH_PROMPT_ORDER_DEFAULT / MIN / MAX）。两侧必须同值。
+{
+  const hostConstants = fs.readFileSync(__dirname + '/lib/constants.js', 'utf8')
+  const clientSource = fs.readFileSync(__dirname + '/lib/client.js', 'utf8')
+  check(/ZH_PROMPT_ORDER_DEFAULT\s*=\s*100/.test(hostConstants), true, '主机侧排序位置默认值为 100')
+  check(/ZH_PROMPT_ORDER_MIN\s*=\s*1\b/.test(hostConstants), true, '主机侧排序位置下界为 1')
+  check(/ZH_PROMPT_ORDER_MAX\s*=\s*9999/.test(hostConstants), true, '主机侧排序位置上界为 9999')
+  check(/DEFAULT_PROMPT_ORDER\s*=\s*100/.test(clientSource), true, '客户端排序位置默认值与主机一致（100）')
+  check(/PROMPT_ORDER_MIN\s*=\s*1\b/.test(clientSource), true, '客户端排序位置下界与主机一致（1）')
+  check(/PROMPT_ORDER_MAX\s*=\s*9999/.test(clientSource), true, '客户端排序位置上界与主机一致（9999）')
+  // DSH 官方 persona 前缀 order 为 0；默认 100 必须落在它之后（回退表守护）。
+  const hostPrompt = fs.readFileSync(__dirname + '/lib/chinese-prompt.js', 'utf8')
+  check(/DEPLOYMENT_PERSONA_PREFIX:\s*0\b/.test(hostPrompt), true, '回退表里 persona-prefix 的 order 为 0')
+  check(/ZH_PROMPT_ORDER_DEFAULT\s*=\s*100/.test(hostConstants), true, '默认排序位置 100 在 persona（order 0）之后')
+}
+
 // 默认展开行数（thinkMaxLines）：设置行渲染 + 思考正文折叠/展开/收起
 const maxLinesInput = findElement(settingsRender(), function (node) {
   return node.type === 'input' && node.props && node.props['aria-label'] === '默认展开行数'

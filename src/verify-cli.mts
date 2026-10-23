@@ -214,7 +214,7 @@ try {
   ].join('\n'))
   // 模拟宿主物化 volatile 引用：apply 直接收 config（字段带 .get()），实时
   // 变更改状态对象后派发 loader/volatile-update。
-  const configState: Record<string, unknown> = { zhPrompt: true, zhPromptText: '始终使用中文', zhPromptTarget: 'system' }
+  const configState: Record<string, unknown> = { zhPrompt: true, zhPromptText: '始终使用中文', zhPromptTarget: 'system', zhPromptOrder: 100 }
   const configRef: Record<string, unknown> = {}
   for (const key of Object.keys(configState))
     configRef[key] = { get: function () { return configState[key] } }
@@ -222,7 +222,19 @@ try {
     // 真实 assembly 总带 variables（renderPrompt 的插值依据）。chinese-prompt
     // 的 {{…}} 防护要读它判断「文本里有没有解析不了的占位符」，因此 stub 必须
     // 提供同一形状的字段；只给 model，cwd 不可解析，正是 0.2.1 的常规形状。
-    return { sections: [{ name: 'deployment:persona-prefix', text: 'persona' }], variables: { model: 'deepseek-v4.1-flash' } }
+    // sections 按官方 order 升序（与真实 assemble 返回一致）：identity(-1000)
+    // → persona-prefix(0) → tool:read(1100) → ui:deliverable-file-references
+    // (9000) → persona-suffix(10200)，用来验证「排序位置」的落点。
+    return {
+      sections: [
+        { name: 'harness:identity', text: 'identity' },
+        { name: 'deployment:persona-prefix', text: 'persona' },
+        { name: 'tool:read', text: 'read' },
+        { name: 'ui:deliverable-file-references', text: 'refs' },
+        { name: 'deployment:persona-suffix', text: 'suffix' },
+      ],
+      variables: { model: 'deepseek-v4.1-flash' },
+    }
   }
   const systemPrompt = { assemble: originalAssemble }
   const handlers = {}
@@ -261,7 +273,46 @@ try {
     console.warn = originalConsoleWarn
   }
   let assembly = await systemPrompt.assemble({})
-  check(assembly.sections.map(function (section) { return section.name }), ['dsh-zh:language', 'deployment:persona-prefix'], 'system 目标写入最终提示')
+  check(assembly.sections.map(function (section) { return section.name }),
+    ['harness:identity', 'deployment:persona-prefix', 'dsh-zh:language', 'tool:read', 'ui:deliverable-file-references', 'deployment:persona-suffix'],
+    'system 目标写入最终提示，默认排序位置（100）落在 persona 之后、官方工具说明之前')
+  // ---- 排序位置（zhPromptOrder）：与官方 SECTION_ORDERS 同一坐标系 ----
+  // sections 已按官方 order 升序，注入段插在「第一个 order 更大的官方段」之前。
+  {
+    const savedTarget = configState.zhPromptTarget
+    Object.assign(configState, { zhPrompt: true, zhPromptTarget: 'system', zhPromptText: '只用中文' })
+    const namesAt = async function (order: unknown) {
+      if (order === undefined) delete configState.zhPromptOrder
+      else configState.zhPromptOrder = order
+      for (const entry of handlers['loader/volatile-update'] ?? []) entry.handler([])
+      const next = await systemPrompt.assemble({})
+      return next.sections.map(function (section: { name: string }) { return section.name })
+    }
+    const BEFORE_TOOLS = ['harness:identity', 'deployment:persona-prefix', 'dsh-zh:language', 'tool:read', 'ui:deliverable-file-references', 'deployment:persona-suffix']
+    check((await namesAt(undefined)).join('>'), BEFORE_TOOLS.join('>'), '缺省排序位置按默认 100 处理')
+    check((await namesAt(100)).join('>'), BEFORE_TOOLS.join('>'), '100 落在 persona 之后、tool:read(1100) 之前')
+    check((await namesAt(1)).join('>'), BEFORE_TOOLS.join('>'), '1 仍排在 persona（order 0）之后')
+    check((await namesAt(0)).join('>'), BEFORE_TOOLS.join('>'), '小于下界的值钳到 1（persona 之后）')
+    check((await namesAt(1100)).join('>'),
+      ['harness:identity', 'deployment:persona-prefix', 'tool:read', 'dsh-zh:language', 'ui:deliverable-file-references', 'deployment:persona-suffix'].join('>'),
+      '等于官方段 order 时排在该段之后')
+    check((await namesAt(5000)).join('>'),
+      ['harness:identity', 'deployment:persona-prefix', 'tool:read', 'dsh-zh:language', 'ui:deliverable-file-references', 'deployment:persona-suffix'].join('>'),
+      '5000 落在工具说明区之后、交付物引用段之前')
+    check((await namesAt(9000)).join('>'),
+      ['harness:identity', 'deployment:persona-prefix', 'tool:read', 'ui:deliverable-file-references', 'dsh-zh:language', 'deployment:persona-suffix'].join('>'),
+      '9000 落在交付物引用段之后、persona 收尾句之前')
+    check((await namesAt(20000)).join('>'),
+      ['harness:identity', 'deployment:persona-prefix', 'tool:read', 'ui:deliverable-file-references', 'dsh-zh:language', 'deployment:persona-suffix'].join('>'),
+      '超过上界的值钳到 9999（persona 收尾句之前）')
+    check((await namesAt('不是数字')).join('>'), BEFORE_TOOLS.join('>'), '非数字排序位置回退默认值')
+    // 重复同步不会留双份：改位置后同名段始终只有一个。
+    const stable = await namesAt(100)
+    check(stable.filter(function (name) { return name === 'dsh-zh:language' }).length, 1, '反复同步后注入段只有一份')
+    delete configState.zhPromptOrder
+    configState.zhPromptTarget = savedTarget
+    for (const entry of handlers['loader/volatile-update'] ?? []) entry.handler([])
+  }
   // ---- {{…}} 防护（DSH 0.2.1）：注入文本是**用户自定义**的，renderPrompt 对
   // 未注册变量是抛错、不是跳过——用户写 {{cwd}}（0.2.1 已移除该内置变量）
   // 会让整个请求在准入前失败。含解析不了的占位符时必须降级为 interpolate:false，
@@ -315,7 +366,9 @@ try {
   for (const entry of handlers['loader/volatile-update'] ?? [])
     entry.handler([])
   assembly = await systemPrompt.assemble({})
-  check(assembly.sections.map(function (section) { return section.name }), ['deployment:persona-prefix'], 'user 目标不写 system prompt')
+  check(assembly.sections.map(function (section) { return section.name }),
+    ['harness:identity', 'deployment:persona-prefix', 'tool:read', 'ui:deliverable-file-references', 'deployment:persona-suffix'],
+    'user 目标不写 system prompt（注入段被移除，其余段落原样）')
   const claimed = { role: 'user', id: 'claimed', content: [{ type: 'text', text: '问题' }] }
     const dispatchPreStep = makePreStepDispatcher(handlers)
     const decision = await dispatchPreStep({

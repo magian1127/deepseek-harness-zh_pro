@@ -333,6 +333,18 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
    `renderPrompt` 逐例对拍（17 例 0 不一致）。
    判定方法：新会话首个请求直接报 `unknown prompt variable`，或把开关关掉就恢复正常。
 
+- **注入段落点**（`chinese-prompt.ts`）：`zhPromptOrder`（1–9999，默认 100）与官方
+  `SECTION_ORDERS` 同一坐标系。`AssembledSection` 只带 name/text/interpolate、**不带
+  order**，因此模块内维护「官方段名 → SECTION_ORDERS 键名」表
+  （`OFFICIAL_SECTION_ORDER_NAMES`）：优先用运行时 `systemPrompt.getSectionOrder(key)`
+  取真实数值（官方调整档位时自动跟随），旧宿主回退 `OFFICIAL_SECTION_ORDER_FALLBACK`；
+  MCP 段按 `mcp:` 前缀归到 `MCP_SERVERS`。插入位置 = 第一个 order 更大的官方段之前，
+  未收录的第三方新增段不参与定位。DSH 新增官方段或调档时同步这张表；守护在
+  `verify-cli.mjs`（默认 100 落在 persona 之后、等于官方 order 时的先后、越界钳制、
+  非数字回退、反复同步不产生双份）与 `verify-pairs.cjs`（双侧默认值/范围一致）。
+  **不得**回到「按名字硬插在 persona 之前」的旧实现：那会让注入段越过所有系统自带
+  段落排到最前面。
+
 ## DOM 文本层
 
 词典无法覆盖主机下发名称和组件字面量，因此 `lib/client.js` 对有限清单执行 DOM 增强。

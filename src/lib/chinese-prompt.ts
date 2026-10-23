@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { PKG } from '../bin/dsh-zh.mjs'
 import {
   ZH_AUTO_ARCHIVE_DAYS_DEFAULT, ZH_FETCH_ORDER_DEFAULT, ZH_FETCH_ORDER_MAX,
+  ZH_PROMPT_ORDER_DEFAULT, ZH_PROMPT_ORDER_MAX, ZH_PROMPT_ORDER_MIN,
   ZH_PROMPT_SECTION_NAME, ZH_PROMPT_TARGET_LEGACY,
   ZH_PROMPT_TARGET_SYSTEM, ZH_PROMPT_TARGET_USER, ZH_PROMPT_TEXT,
   ZH_PROVIDER_KEY, ZH_SEARCH_ORDER_DEFAULT, ZH_SEARCH_ORDER_MAX,
@@ -23,6 +24,110 @@ import { applyWebFetchSelection } from './web-fetch.js'
 import { applyWebSearchSelection } from './web-search.js'
 import { log, warn } from './util.js'
 import type { HostContext } from './types.js'
+// ============ 「排序位置」的落点计算 ============
+// assemble 返回的 sections 已按官方 order 升序排列，但 AssembledSection 只带
+// name/text/interpolate、不带 order。要把用户设置的排序位置落成数组下标，
+// 只能用「官方段名 → SECTION_ORDERS 键名」的表反查每段的 order。
+// 表里没收录的段（第三方插件新增段）跳过、不参与定位——注入段会落在它后面
+// 最近的官方段之前，宁可按官方坐标系近似，也不猜第三方数值。
+const OFFICIAL_SECTION_ORDER_NAMES: Record<string, string> = {
+  'harness:identity': 'HARNESS_IDENTITY',
+  'deployment:persona-prefix': 'DEPLOYMENT_PERSONA_PREFIX',
+  'plan:policy': 'PLAN_POLICY',
+  'team:policy': 'TEAM_POLICY',
+  'tools:ptc-only': 'PTC_ONLY',
+  'context:file-reference': 'FILE_REFERENCE',
+  'tool:bash': 'TOOL_BASH',
+  'tool:pwsh': 'TOOL_PWSH',
+  'tool:read': 'TOOL_READ',
+  'tool:write': 'TOOL_WRITE',
+  'tool:edit': 'TOOL_EDIT',
+  'tool:glob': 'TOOL_GLOB',
+  'tool:grep': 'TOOL_GREP',
+  'tool:jobs': 'TOOL_JOBS',
+  'tool:pty': 'TOOL_PTY',
+  'tool:web_search': 'TOOL_WEB_SEARCH',
+  'tool:web_fetch': 'TOOL_WEB_FETCH',
+  'tool:lsp': 'TOOL_LSP',
+  'tool:session-query': 'TOOL_SESSION_QUERY',
+  'tool:goal': 'TOOL_GOAL',
+  'tool:workflow': 'TOOL_WORKFLOW',
+  'tool:ralph': 'TOOL_RALPH',
+  'tool:subagent': 'TOOL_SUBAGENT',
+  'tool:report': 'TOOL_REPORT',
+  'tool:structured_output': 'STRUCTURED_OUTPUT',
+  'tool:computer-use': 'TOOL_COMPUTER_USE',
+  'tools:sdk': 'TOOLS_SDK',
+  'ui:deliverable-file-references': 'DELIVERABLE_FILE_REFERENCES',
+  'harness:source': 'HARNESS_SOURCE',
+  'app:web-surface': 'WEB_SURFACE',
+  'deployment:persona-suffix': 'DEPLOYMENT_PERSONA_SUFFIX',
+}
+
+// 宿主没有 getSectionOrder（DSH 0.1.5 之前）时的回退值，抄自 0.2.1 的
+// SECTION_ORDERS；正常宿主一律走运行时读取，官方调整档位时自动跟随。
+const OFFICIAL_SECTION_ORDER_FALLBACK: Record<string, number> = {
+  HARNESS_IDENTITY: -1000,
+  DEPLOYMENT_PERSONA_PREFIX: 0,
+  PLAN_POLICY: 500,
+  TEAM_POLICY: 600,
+  PTC_ONLY: 800,
+  FILE_REFERENCE: 900,
+  TOOL_BASH: 1000,
+  TOOL_PWSH: 1010,
+  TOOL_READ: 1100,
+  TOOL_WRITE: 1200,
+  TOOL_EDIT: 1300,
+  TOOL_GLOB: 1400,
+  TOOL_GREP: 1500,
+  TOOL_JOBS: 1600,
+  TOOL_PTY: 1700,
+  TOOL_WEB_SEARCH: 2000,
+  TOOL_WEB_FETCH: 2100,
+  TOOL_LSP: 2200,
+  TOOL_SESSION_QUERY: 2300,
+  TOOL_GOAL: 2400,
+  TOOL_WORKFLOW: 2600,
+  TOOL_RALPH: 2700,
+  TOOL_SUBAGENT: 2800,
+  TOOL_REPORT: 2900,
+  TOOL_COMPUTER_USE: 3000,
+  MCP_SERVERS: 3100,
+  TOOLS_SDK: 5000,
+  DELIVERABLE_FILE_REFERENCES: 9000,
+  STRUCTURED_OUTPUT: 9900,
+  HARNESS_SOURCE: 10000,
+  WEB_SURFACE: 10100,
+  DEPLOYMENT_PERSONA_SUFFIX: 10200,
+}
+
+/** 读取官方段落在 system prompt 里的 order；非官方段返回 undefined。 */
+function officialSectionOrder(systemPrompt: unknown, name: unknown): number | undefined {
+  if (typeof name !== 'string') return undefined
+  let key = OFFICIAL_SECTION_ORDER_NAMES[name]
+  // mcp-client / mcp-resources 的段名按服务器动态生成（`mcp:<server>`）。
+  if (key === undefined && (name === 'mcp-resource-servers' || name.startsWith('mcp:'))) key = 'MCP_SERVERS'
+  if (key === undefined) return undefined
+  const service = systemPrompt as { getSectionOrder?: (key: string) => unknown } | null | undefined
+  if (service !== undefined && service !== null && typeof service.getSectionOrder === 'function') {
+    try {
+      const order = service.getSectionOrder(key)
+      if (typeof order === 'number' && Number.isFinite(order)) return order
+    } catch { /* 旧宿主或非官方键：落到回退表 */ }
+  }
+  const fallback = OFFICIAL_SECTION_ORDER_FALLBACK[key]
+  return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : undefined
+}
+
+/** 排序位置 → 已排序 sections 里的插入下标（第一个 order 更大的段之前）。 */
+function resolveInsertIndex(sections: readonly unknown[], targetOrder: number, systemPrompt: unknown): number {
+  for (let i = 0; i < sections.length; i += 1) {
+    const entry = sections[i] as { name?: unknown } | null | undefined
+    const order = officialSectionOrder(systemPrompt, entry?.name)
+    if (order !== undefined && order > targetOrder) return i
+  }
+  return sections.length
+}
 
 // 「模型请求中文化」共享状态：由本文件（dsh-zh Config 的唯一维护者）维护，
 // model-locale.js 通过 getModelState() 读取。ready 表示 Config 快照已就绪
@@ -65,6 +170,14 @@ function normalizePerQuery(value: unknown): number {
   return n > ZH_SEARCH_PER_QUERY_MAX ? ZH_SEARCH_PER_QUERY_MAX : n
 }
 
+/** 排序位置归一化：非数字/非有限回退默认值，四舍五入后钳到 1–9999。 */
+function normalizePromptOrder(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return ZH_PROMPT_ORDER_DEFAULT
+  const n = Math.round(value)
+  if (n < ZH_PROMPT_ORDER_MIN) return ZH_PROMPT_ORDER_MIN
+  return n > ZH_PROMPT_ORDER_MAX ? ZH_PROMPT_ORDER_MAX : n
+}
+
 /**
  * 插件 Config schema（宿主 0.1.7+ 投影配置表单与物化引用的依据）。字段全
  * volatile：插件页/模型页可实时编辑、不经重启生效。schemastery 不可用时
@@ -86,6 +199,9 @@ export function createZhConfigSchema(z: any): unknown {
     zhPrompt: mark(z.boolean().default(false)),
     zhPromptText: mark(z.string().default(ZH_PROMPT_TEXT)),
     zhPromptTarget: mark(z.string().default(ZH_PROMPT_TARGET_SYSTEM)),
+    // 初始系统提示目标下的段落排序位置（与官方 SECTION_ORDERS 同坐标系，
+    // 1–9999，默认 100 = persona 之后、官方政策/工具说明之前）。
+    zhPromptOrder: mark(z.number().default(ZH_PROMPT_ORDER_DEFAULT)),
     zhAutoArchiveDays: mark(z.number().default(ZH_AUTO_ARCHIVE_DAYS_DEFAULT)),
     zhAgentPrompt: mark(z.boolean().default(false)),
     zhToolDesc: mark(z.boolean().default(false)),
@@ -118,7 +234,10 @@ function dereferenceZhConfig(config: Record<string, unknown> | undefined): Recor
 
 export function installChinesePrompt(ctx: HostContext, config: Record<string, unknown>, hooks: { onModelStateChanged?: () => void } = {}): void {
   try {
-    const state = { enabled: false, text: ZH_PROMPT_TEXT, target: ZH_PROMPT_TARGET_SYSTEM }
+    const state = { enabled: false, text: ZH_PROMPT_TEXT, target: ZH_PROMPT_TARGET_SYSTEM, order: ZH_PROMPT_ORDER_DEFAULT }
+    // systemPrompt 服务：段落的「排序位置」反查（getSectionOrder）与 assemble
+    // 包装都用它；旧宿主可能没有（届时回退到内置 order 表）。
+    const systemPrompt = ctx.get('systemPrompt')
     // 目标归一化：'user' 与旧值 'context' 都视为首用户提示词；其余视为
     // 初始系统提示。旧版本曾注册 'context' 目标（未实现的初始上下文）。
     const normalizeTarget = function (value: unknown) {
@@ -138,6 +257,7 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
       state.enabled = snapshot.zhPrompt === true
       if (typeof snapshot.zhPromptText === 'string') state.text = snapshot.zhPromptText
       state.target = normalizeTarget(snapshot.zhPromptTarget)
+      state.order = normalizePromptOrder(snapshot.zhPromptOrder)
       modelState.ready = true
       modelState.zhPrompt = snapshot.zhPrompt === true
       modelState.zhAgentPrompt = snapshot.zhAgentPrompt === true
@@ -217,9 +337,11 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
       }
     }
     // 把提示同步进已组装的 system prompt sections。仅「初始系统提示」目标
-    // 生效：放在 persona 之前（与官方 -90 约定一致）；目标切走或开关关闭时
-    // 移除同名 section。该方法在 assemble 之后执行，因此 complete persona
-    // 无法把它丢弃。
+    // 生效，落点由「排序位置」（zhPromptOrder，默认 100）决定：与官方
+    // SECTION_ORDERS 同一坐标系，默认排在 deployment:persona-prefix（order 0，
+    // 「你是一个由 … 模型驱动的编码代理。」）之后、官方政策与工具说明区之前。
+    // 目标切走、开关关闭或文本为空时移除同名 section。
+    // 该方法在 assemble 之后执行，因此 complete persona 无法把它丢弃。
     //
     // `{{…}}` 防护（DSH 0.2.1 起）：这里是**用户自定义文本**，而 renderPrompt
     // 对解析不了的引用一律抛错、不是跳过——用户若在设置里写 `{{cwd}}`（0.2.1
@@ -259,30 +381,20 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
     }
     const syncAssemblySection = function (assembly) {
       if (assembly === null || typeof assembly !== 'object' || !Array.isArray(assembly.sections)) return
-      const index = assembly.sections.findIndex(function (section) { return section?.name === ZH_PROMPT_SECTION_NAME })
-      if (state.enabled !== true || state.text === '' || state.target !== ZH_PROMPT_TARGET_SYSTEM) {
-        if (index >= 0) assembly.sections.splice(index, 1)
-        return
-      }
+      // 每次同步都先摘掉旧段、再按当前排序位置重新插入：用户改了位置、或
+      // 其它改写器调整过段落顺序时，原地替换索引会留下错位。
+      const existing = assembly.sections.findIndex(function (section) { return section?.name === ZH_PROMPT_SECTION_NAME })
+      if (existing >= 0) assembly.sections.splice(existing, 1)
+      if (state.enabled !== true || state.text === '' || state.target !== ZH_PROMPT_TARGET_SYSTEM) return
       const unsafe = wouldFailInterpolation(state.text, assembly?.variables)
       const section: { name: string; text: string; interpolate?: boolean } = { name: ZH_PROMPT_SECTION_NAME, text: state.text }
       if (unsafe) section.interpolate = false
-      if (index >= 0) {
-        assembly.sections[index] = section
-        return
-      }
-      // DSH 0.1.5 起 persona 拆分为 deployment:persona-prefix（order 0）与
-      // deployment:persona-suffix（order 10200）。提示仍插在 persona 之前，
-      // 因此以 prefix 段定位；suffix 段（cwd 句）渲染在全段最后，不受影响。
-      const personaIndex = assembly.sections.findIndex(function (entry) { return entry?.name === 'deployment:persona-prefix' })
-      if (personaIndex >= 0) assembly.sections.splice(personaIndex, 0, section)
-      else assembly.sections.push(section)
+      assembly.sections.splice(resolveInsertIndex(assembly.sections, state.order, systemPrompt), 0, section)
     }
     // 官方 complete persona 会在 SystemPrompt.assemble 返回前把其它 section
     // 全部丢弃。这里在共享 assemble 管线上注册改写器：在官方组装返回之后、
     // agent-loop 使用之前，把提示同步进最终 assembly —— 首次模型调用就会带上，
     // 且任何 preset 都无法在后续 waterfall 中把它移除。
-    const systemPrompt = ctx.get('systemPrompt')
     let assemblyWarningShown = false
     ctx.effect(function () {
       return registerAssembleRewriter(function (assembly) {

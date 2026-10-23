@@ -106,6 +106,27 @@ const ZhSettingsSection = function (props) {
     && (promptSnapshot.value.zhPromptTarget === 'user' || promptSnapshot.value.zhPromptTarget === 'context'))
     ? 'user'
     : 'system'
+  // 排序位置（仅初始系统提示目标可见）：与官方 SECTION_ORDERS 同一坐标系，
+  // 主机侧默认 100 = persona 之后、官方政策与工具说明之前。
+  const promptOrderBase = (promptReady
+    && typeof promptSnapshot.value.zhPromptOrder === 'number'
+    && Number.isFinite(promptSnapshot.value.zhPromptOrder))
+    ? Math.round(promptSnapshot.value.zhPromptOrder)
+    : DEFAULT_PROMPT_ORDER
+  // 本地草稿优先于主机值：输入过程中不回弹，失焦/回车才提交并钳制到范围。
+  const promptOrderDraftState = React.useState(null)
+  const promptOrderDraft = promptOrderDraftState[0]
+  const setPromptOrderDraft = promptOrderDraftState[1]
+  const shownPromptOrder = promptOrderDraft !== null ? promptOrderDraft : String(promptOrderBase)
+  const commitPromptOrder = function (raw) {
+    setPromptOrderDraft(null)
+    if (boundPromptScope === null || promptReady !== true) return
+    const parsed = Number.parseInt(String(raw).trim(), 10)
+    if (!Number.isFinite(parsed)) return
+    const next = parsed < PROMPT_ORDER_MIN ? PROMPT_ORDER_MIN : (parsed > PROMPT_ORDER_MAX ? PROMPT_ORDER_MAX : parsed)
+    if (next === promptOrderBase) return
+    void boundPromptScope.set('zhPromptOrder', next)
+  }
   // 本地草稿优先于主机值：编辑期间即时回显，防抖后写回主机 settings。
   const promptDraftState = React.useState(null)
   const promptDraft = promptDraftState[0]
@@ -545,6 +566,43 @@ const ZhSettingsSection = function (props) {
           },
             React.createElement('option', { value: 'system' }, t('promptTargetSystem')),
             React.createElement('option', { value: 'user' }, t('promptTargetUser')))),
+        // 排序位置只在「初始系统提示」目标下有意义（首用户提示词是聊天记录
+        // 里的一条消息，没有段落顺序可调）。
+        promptTargetValue === 'system'
+          ? React.createElement('div', {
+            key: 'promptOrder',
+            style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' },
+          },
+            React.createElement('div', { style: zhRowTextStyle },
+              React.createElement('div', { style: zhRowTitleStyle }, t('promptOrderLabel')),
+              React.createElement('div', { style: zhDescStyle }, t('promptOrderDesc'))),
+            React.createElement('input', {
+              type: 'number',
+              min: PROMPT_ORDER_MIN,
+              max: PROMPT_ORDER_MAX,
+              step: 1,
+              value: shownPromptOrder,
+              disabled: promptReady === false,
+              title: t('promptOrderInvalid'),
+              'aria-label': t('promptOrderLabel'),
+              style: {
+                flex: 'none', width: 88, boxSizing: 'border-box',
+                padding: '4px 8px', borderRadius: 8, textAlign: 'right',
+                border: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.35))',
+                background: 'var(--dsw-alias-bg-layer-3, transparent)',
+                color: 'var(--dsw-alias-label-primary, inherit)',
+                fontFamily: 'inherit', fontSize: 13, lineHeight: '20px',
+                opacity: promptReady === false ? 0.55 : 1,
+              },
+              onChange: function (event) { setPromptOrderDraft(event.target.value) },
+              onBlur: function (event) { commitPromptOrder(event.target.value) },
+              onKeyDown: function (event) {
+                // 输入法组合中（中文数字输入）不触发提交；回车只做失焦提交。
+                if (event.key !== 'Enter' || event.isComposing === true) return
+                event.currentTarget.blur()
+              },
+            }))
+          : null,
         React.createElement('div', { style: zhRowTitleStyle }, t('promptTextLabel')),
         React.createElement('textarea', {
           value: shownPromptText,

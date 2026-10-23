@@ -32,7 +32,7 @@
 | 网络搜索 | 每查询返回条数 `zhSearchPerQuery` | 0 | `settings.yaml` | 实时生效；0 = 不接管（官方 8 条 + 轮询），1–50 = 分组保留 N 条 |
 | 平铺 | 免 Key 网页读取 `zhWebFetch` | 开 | `settings.yaml` | 实时生效；详见「网页读取」章 |
 | 网页读取 | 读取后端优先级 `zhFetchOrder` | `deepseek-fetch-api` → `zhipu-web-reader` → `dsh-zh-free-fetch` → `http` | `settings.yaml` | 实时生效；▲/▼ 调整，空列表 = 不接管 |
-| 平铺 | 提示词注入 `zhPrompt` / `zhPromptText` / `zhPromptTarget` | 关；文本为“思考过程和回复始终使用中文输出”；目标为 `system` | `settings.yaml` | 后续模型请求；目标可改为 `user` |
+| 平铺 | 提示词注入 `zhPrompt` / `zhPromptText` / `zhPromptTarget` / `zhPromptOrder` | 关；文本为“思考过程和回复始终使用中文输出”；目标为 `system`；排序位置 100 | `settings.yaml` | 后续模型请求；目标可改为 `user`；排序位置仅在 `system` 目标下可见（1–9999） |
 | 对话样式相关 | 自动展开最新思考 `thinkingAuto` | 开 | localStorage | 中文/英文界面 |
 | 对话样式相关 | 默认展开行数与方向 `thinkMaxLines` / `thinkMaxLinesFrom` | 20；`latest` | localStorage | 0–200；方向可选 `latest` / `earliest` |
 | 对话样式相关 | 展开模式 `thinkMode` | `button` | localStorage | 可选 `button` / `scroll` |
@@ -655,7 +655,12 @@ execute 走官方 web seam，因此自动获得上述后端级联与智谱联动
 提示词从设置变更后的后续模型请求开始生效，目标二选一：
 
 - `system`：在 `systemPrompt.assemble` 返回后，把文本作为 `dsh-zh:language` section
-  写入最终 system prompt，不产生可见上下文消息。
+  写入最终 system prompt，不产生可见上下文消息。落点由「排序位置」（`zhPromptOrder`，
+  1–9999，默认 100）决定，与 DSH 官方 `SECTION_ORDERS` 同一坐标系：默认排在
+  `deployment:persona-prefix`（order 0，即「你是一个由 … 模型驱动的编码代理。」）之后、
+  官方政策与工具说明区之前。设置页只在 `system` 目标下显示该输入框；输入在失焦或回车时
+  提交，非整数回弹为当前值，超出范围的数字钳到 1 或 9999。落点按「第一个 order 更大的
+  系统自带段之前」计算，未收录的第三方新增段不参与定位。
 - `user`：不修改 system sections，在 `agent/pre-step` 插入一条来源为
   `deepseek-harness-zh_pro`、form 为 `notice` 的 `user/message`；聊天记录可展开查看全文。
   该消息的 `source.kind` 为 `plugin:deepseek-harness-zh_pro`（DSH 0.1.7 起会话格式 v4

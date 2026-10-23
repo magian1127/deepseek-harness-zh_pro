@@ -26,6 +26,14 @@ export const ZH_PROMPT_TEXT = '思考过程和回复始终使用中文输出'
 export const ZH_PROMPT_TARGET_SYSTEM = 'system'
 export const ZH_PROMPT_TARGET_USER = 'user'
 export const ZH_PROMPT_TARGET_LEGACY = 'context'
+// 「排序位置」（仅初始系统提示目标）：注入段在 system prompt 里的落点，
+// 与 DSH 官方 SECTION_ORDERS 同一坐标系（数值越小越靠前）。默认 100 ——
+// 紧跟在 deployment:persona-prefix（order 0，即「你是一个由 … 模型驱动的
+// 编码代理。」）之后、官方政策与工具说明区之前。取值钳在 1–9999。
+export const ZH_PROMPT_ORDER_KEY = 'zhPromptOrder'
+export const ZH_PROMPT_ORDER_DEFAULT = 100
+export const ZH_PROMPT_ORDER_MIN = 1
+export const ZH_PROMPT_ORDER_MAX = 9999
 
 // ============ 模型请求中文化（settings 命名空间字段名） ============
 // 两个独立开关，默认关闭，只作用于「新会话」（首次模型请求时锁定语言）。
