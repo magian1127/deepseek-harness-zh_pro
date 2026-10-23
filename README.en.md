@@ -27,6 +27,7 @@ The rows below follow **DSH Settings → Enhancements** from top to bottom:
 | Tool-description localization | Off | Localizes confirmed built-in DSH tool descriptions and guidance; tool names, parameter names, and third-party tools remain unchanged; new sessions only |
 | Injected-context localization | Off | Replaces DSH-injected official context (workspace instruction frames, skill catalog frames, runtime context including its header line, approval/mode switch notices, dynamic-plugin notices, scheduled reminders, compaction checkpoint preambles) with Chinese before it enters session history; GUI and model requests stay consistent, new sessions only; translating the snapshot header makes DSH inject one replacement snapshot per step (slight session-log growth) |
 | Web search | On | Takes over the conversational web_search backend according to the "Search backend priority" list, defaulting to DeepSeek Search API → Zhipu → keyless multi-engine, reorderable with ▲/▼ in settings (move DeepSeek Search API to the bottom once it starts billing). A backend that is not installed, unavailable, or fails falls through to the next one, only a total failure reports an error, and a user cancellation never retries. The keyless multi-engine backend covers DuckDuckGo (best-effort), Yandex (legacy `/search/site/`), Bing (cn.bing.com RSS first, then www and the HTML endpoint) and Wikipedia; with `TAVILY_API_KEY` in credentials, Tavily goes first. The "Web search" settings card lets you add or clear the Tavily API key directly (effective immediately, no restart) |
+| Keyless web reader | On | Takes over the conversational web_fetch backend according to the "Fetch backend priority" list, defaulting to DeepSeek cloud reader → Zhipu webReader → keyless ring → local fetch, reorderable with ▲/▼ in settings; not installed / unavailable / failed backends fall through, and only a total failure reports an error. The keyless ring is modeled on the Hermes agent's keyless extraction ring and walks Exa MCP → Parallel MCP → Keenable public endpoints (Firecrawl was excluded after a 2026-10-19 live test returned HTTP 403 for anonymous scraping); fetching sends the URL to the selected backend's cloud service, and the body is wrapped in an "external web content (untrusted)" boundary marker. Safety gate: public http(s) only, URLs with embedded credentials and local/private addresses are refused |
 | Results per query | 0 (no takeover) | The official `web_search` hardcodes its merge cap at 8 sources and interleaves multiple queries round-robin; the "Results per search" field on the Web search settings page only controls how many results a single query asks the API for and cannot change that cap. Setting this to N (1–50) groups results by query — query one N sources, then query two N sources — drops cross-query duplicate links, and renders the model-facing text as `Sources for "<query>"` sections; 0 leaves the official behavior in place. The effective count is also capped by "Results per search", so both numbers must be raised together |
 | Prompt injection | Off | Injects editable text into subsequent requests; the default text asks for Chinese reasoning and replies, and the default target is the initial system prompt |
 | Auto-expand latest thinking | On | Expands the newest streaming thinking block and collapses the previous block that the plugin auto-expanded; after a turn closes under the DSH v0.1.2 compact view it stays hidden with the official process fold (see the behavior contract) |
@@ -164,7 +165,7 @@ Removal is profile-scoped; short-lived profiles stop loading it on their next in
 | Data | Storage |
 | --- | --- |
 | Chinese completion, thinking display, stats, archived-session view, session deletion, session multi-select, service monitor, and the three cards' open state | Browser localStorage: `deepseek-harness-zh_pro:enhancements` |
-| Agent-role localization, tool-description localization, injected-context localization, web search, search backend priority, results per query, prompt toggle/text/target, and auto-archive days | DSH `settings.yaml`, namespace `dsh-zh` |
+| Agent-role localization, tool-description localization, injected-context localization, web search, search backend priority, results per query, keyless web reader, fetch backend priority, prompt toggle/text/target, and auto-archive days | DSH `settings.yaml`, namespace `dsh-zh` |
 | Optional Tavily API key (when present, search prefers Tavily) | DSH credentials: key `TAVILY_API_KEY` under the `refs:` section of `${DSH_HOME:-~/.dsh}/.credentials.yaml`, or an environment variable of the same name (read on every call, never cached); you can also add or clear it right in the "Web search" settings card (same location; the UI only ever sees a masked hint) |
 
 The plugin uploads no data; its only model-tool registration is the `web_search` tool shell
@@ -184,6 +185,13 @@ and available (handled by that plugin), the Tavily API when TAVILY_API_KEY is pr
 credentials (the key travels only in the Authorization header), otherwise the public
 DuckDuckGo/Yandex/Bing/Wikipedia endpoints; this plugin stores no queries or results, and
 never writes the key into config, logs, or diagnostics snapshots.
+The keyless web reader analogously takes over the `web` row's `fetchProvider` (writes
+`dsh-zh-web-fetch`, restores on off/unload). In the default order, DeepSeek cloud reader and
+Zhipu webReader are skipped when not installed or lacking a key; the keyless ring walks
+Exa → Parallel → Keenable (30s per endpoint, a rate-limited endpoint is skipped for 60s);
+the fetch request's URL is sent to the selected backend (keyless endpoints are public cloud
+services), the body is wrapped in an "external web content (untrusted)" boundary marker, and
+this plugin stores neither URLs nor bodies.
 Chinese completion only applies to the Chinese interface; the
 other interface enhancements also apply to the English interface. Each model-request
 feature is controlled solely by its own toggle.

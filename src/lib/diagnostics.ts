@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { PKG } from '../bin/dsh-zh.mjs'
 import { preMountEvictionRecord, reloadRecord, reloadSequence, unloadEvictionRecord, watchState } from './hot-reload.js'
 import { getConfiguredWebSearchProvider, getLiveWebSearchSelection, getWebSearchFallbackState, getWebSearchSelectionState, getWebSearchSnippetFallbackState } from './web-search.js'
+import { getWebFetchFallbackState, getWebFetchSelectionState } from './web-fetch.js'
 
 interface RouteRequest {
   method?: string
@@ -80,6 +81,8 @@ export function handleDiagnosticsRoute(_req: RouteRequest, res: RouteResponse, p
       webSearchLive: getLiveWebSearchSelection() ?? null,
       webSearchFallback: getWebSearchFallbackState(),
       webSearchSnippetFallback: getWebSearchSnippetFallbackState(),
+      webFetchSelection: getWebFetchSelectionState() ?? null,
+      webFetchFallback: getWebFetchFallbackState(),
     },
   })
   return true

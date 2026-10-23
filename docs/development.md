@@ -910,6 +910,12 @@ agent-loop 硬编码拼接，官方渲染侧永远是英文；按用户需求在
   **官方占用是唯一例外**：`zhSearchPerQuery > 0` 时接管官方定义（官方
   `tool-web` 把合并上限硬编码成 `WEB_SEARCH_MAX_RESULTS = 8` 且多查询轮询交错，
   不阴影就拿不回控制权）；为 0 时维持原让位，保证零回归。
+- **`tool:web_search` 是替换段，不是新增段（2026-10-23 修正）**：官方
+  `dsh-tool-web` 以 `order = getSectionOrder('TOOL_WEB_SEARCH')`（2000）注册同名
+  section；本壳若自定 order（曾用 110），同名覆盖后会把整段从工具说明区挪到
+  persona 之后，违反「只替换文本、不改排序」的契约。注册时用
+  `systemPrompt.getSectionOrder('TOOL_WEB_SEARCH')`，旧宿主无该方法时回退 2000。
+  智谱插件的 `tool:web_search` 同样是替换段，两侧必须同改。
 - **`zhSearchPerQuery` 与 `zhWebSearch` 解耦**：壳的装壳条件是
   `isEnabled() || perQuery() > 0`。前者管「后端由谁提供」，后者管「结果怎么
   裁剪/合并」，用户可能只要后者（后端仍走部署配置）。execute 每次实时读
@@ -1010,6 +1016,39 @@ agent-loop 硬编码拼接，官方渲染侧永远是英文；按用户需求在
   **智谱优先场景的 mock 必须给结果带 `snippet`**（如「联动: 智谱已注册且可用」
   与「智谱敏感过滤失败」两组），否则会被缺简介闸门判定为降级、转去免费引擎，
   断言随之失效。
+
+### 网页读取（web-fetch）
+
+`src/lib/web-fetch.ts` 注册组合 provider `dsh-zh-web-fetch` 并接管 `web.fetchProvider`，
+结构与 web-search 完全同构（WeakMap 记忆原值、三通道写入、注册 effect 异步驱动的
+接管重试、duplicate 复用分支），开关 `zhWebFetch`（默认开）与优先级
+`zhFetchOrder`（默认 `deepseek-fetch-api` → `zhipu-web-reader` →
+`ZH_FREE_FETCH_BACKEND_ID`(`dsh-zh-free-fetch`) → `http`）经
+`getModelState()` 读取、`syncFromSnapshot` 联动（`chinese-prompt.ts` 同步维护）。
+实现要点与差异：
+
+- **复用搜索的传输层但独立导出**：`webFetchTransport.request` 委托
+  `webSearchTransport.request`（同一 Chrome 指纹实现）。单独包一层对象的原因：
+  verify 注入 mock 时替换 `webFetchTransport.request` 属性，与搜索回归的
+  mock 恢复顺序互不踩踏。
+- **免 Key 环（占位 id `dsh-zh-free-fetch`）**：参考 Hermes agent 的
+  `plugins/web/keyless_mcp.py`。三家端点：Exa MCP（SSE 壳，`parseMcpText`
+  按 JSON body 与 `data: ` 行双路剥壳——SSE 分割只认 CRLF/CR/LF，
+  `splitlines()` 会把 CJK 正文里的 U+2028/U+0085 当换行切断 `data:` 行）、
+  Parallel MCP（JSON 壳，`full_content` 缺失拼接 `excerpts`）、Keenable
+  （GET + `X-Keenable-Title` 头）。**Firecrawl 未纳入**：2026-10-19 实测匿名
+  `/v2/scrape` 对本机 IP 返回 HTTP 403。限流记忆 `rateLimitedUntil`（60s，
+  `resetWebFetchEngineState` 重置）。与 Hermes 的 round-robin 差异（固定顺序）
+  与原因见 behavior.md「网页读取」章。
+- **URL 闸门 `isFetchableUrl`**：仅公开 http(s)、拒绝内嵌凭据与本机/私网字面量；
+  不做 DNS rebinding 防护（与智谱 http-fallback 同边界）。正文包不可信边界标记
+  （`wrapUntrusted`），200k 字符截断（`clampContent`）。
+- **诊断**：`getWebFetchSelectionState` / `getWebFetchFallbackState` 经
+  `/dsh-zh/api/diagnostics` 的 `webFetchSelection` / `webFetchFallback` 暴露。
+- 行为回归在 `verify-websearch.cjs` 尾部（fetch 5 组：parseMcpText 壳/U+2028、
+  URL 闸门、免 Key 环限流记忆、优先级链与开关联动、接管/幂等/恢复原值）。
+  接管测试夹具注意：mock 的 `settings.update` 必须把 `fetchProvider` 回写到
+  实例字段（模拟宿主 volatile 同步），否则幂等断言会误判产生新写入。
 
 ## CLI 规则
 

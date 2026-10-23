@@ -51,6 +51,7 @@ import {
 import { installPreMountCacheEviction, installSelfHotReload, installUnloadCacheEviction } from './hot-reload.js'
 import { installSessionDeleteRoute } from './session-delete.js'
 import { installWebSearchProvider } from './web-search.js'
+import { installWebFetchProvider } from './web-fetch.js'
 import { installAgentSearchTool, type AgentSearchToolHandle } from './agent-search-tool.js'
 import { argvProfile, localProfileDir, log, manifestPath, warn } from './util.js'
 import type { HostContext, PackageSnapshot } from './types.js'
@@ -250,6 +251,9 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
   // internal/service 事件重试（与 session-delete 同款模式）。开关状态与优先级
   // 都经 getModelState() 读取（dsh-zh 命名空间，volatile 实时生效）。
   if (ownsPromptRegistration(ctx)) installWebSearchRetry(ctx)
+  // 「网页读取」：注册 dsh-zh-web-fetch 组合 provider（按 zhFetchOrder 优先级
+  // 依次尝试，内置免 Key 环为其中一项）。与搜索装配同门槛、同重试模式。
+  if (ownsPromptRegistration(ctx)) installWebFetchRetry(ctx)
 
   // 「服务监控」无独立后台任务：主机只在网页拉取快照时即时扫描一次
   // （netstat），节奏完全由面板刷新间隔（serviceMonitorIntervalSec）驱动。
@@ -323,6 +327,29 @@ function installWebSearchRetry(ctx: HostContext): void {
   }
   if (install()) return
   // 退订用 ctx.on 返回的 disposer（cordis 没有 ctx.off）。
+  let stopRetry: (() => unknown) | undefined
+  const retry = function (): void {
+    if (!install()) return
+    const dispose = stopRetry
+    stopRetry = undefined
+    if (typeof dispose === 'function') dispose()
+  }
+  stopRetry = ctx.on('internal/service', retry)
+}
+
+// 「网页读取」：web 服务可能在本文之后才挂载完成，注册失败/缺席时监听
+// internal/service 事件重试（与网络搜索同款模式）。
+function installWebFetchRetry(ctx: HostContext): void {
+  const install = function (): boolean {
+    const web = ctx.get('web')
+    if (web === undefined || web === null) return false
+    const dispose = installWebFetchProvider(ctx, {
+      isEnabled: () => getModelState().zhWebFetch,
+      fetchOrder: () => getModelState().zhFetchOrder,
+    })
+    return dispose !== undefined
+  }
+  if (install()) return
   let stopRetry: (() => unknown) | undefined
   const retry = function (): void {
     if (!install()) return

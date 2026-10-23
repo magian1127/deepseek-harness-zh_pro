@@ -73,6 +73,10 @@ const zhSwitchKnob = function (on) {
 // verify-cli.mts 会断言两侧一致。
 const SEARCH_ORDER_DEFAULT = ['deepseek-search-api', 'zhipu-web-search-prime', 'dsh-zh-free']
 const ZH_FREE_MULTI_BACKEND_ID = 'dsh-zh-free'
+// 读取后端优先级：与主机侧 ZH_FETCH_ORDER_DEFAULT（constants.ts）同值副本；
+// verify-cli.mts 会断言两侧一致。
+const FETCH_ORDER_DEFAULT = ['deepseek-fetch-api', 'zhipu-web-reader', 'dsh-zh-free-fetch', 'http']
+const ZH_FREE_FETCH_BACKEND_ID = 'dsh-zh-free-fetch'
 
 const ZhSettingsSection = function (props) {
   const t = props.t
@@ -235,6 +239,32 @@ const ZhSettingsSection = function (props) {
   const restoreSearchOrder = function () {
     if (!searchOrderWritable) return
     void boundPromptScope.set('zhSearchOrder', SEARCH_ORDER_DEFAULT.slice())
+  }
+  // ---- 网页读取（web_fetch 后端）：与搜索链同构的状态与动作 ----
+  const fetchToggleOn = promptReady && promptSnapshot.value.zhWebFetch !== false
+  const fetchOrderFromHost = (promptReady && Array.isArray(promptSnapshot.value.zhFetchOrder))
+    ? promptSnapshot.value.zhFetchOrder.filter(function (id) { return typeof id === 'string' })
+    : []
+  const fetchOrder = fetchOrderFromHost.length > 0 ? fetchOrderFromHost : FETCH_ORDER_DEFAULT.slice()
+  const fetchOrderLabel = function (backendId, tt) {
+    if (backendId === 'deepseek-fetch-api') return tt('fetchOrderBackendDeepseekApi')
+    if (backendId === 'zhipu-web-reader') return tt('fetchOrderBackendZhipu')
+    if (backendId === ZH_FREE_FETCH_BACKEND_ID) return tt('fetchOrderBackendFree')
+    if (backendId === 'http') return tt('fetchOrderBackendLocal')
+    return tt('fetchOrderBackendUnknown') + ' · ' + backendId
+  }
+  const moveFetchOrder = function (index, delta) {
+    if (!searchOrderWritable) return
+    const next = fetchOrder.slice()
+    const target = index + delta
+    if (target < 0 || target >= next.length) return
+    const moved = next.splice(index, 1)[0]
+    next.splice(target, 0, moved)
+    void boundPromptScope.set('zhFetchOrder', next)
+  }
+  const restoreFetchOrder = function () {
+    if (!searchOrderWritable) return
+    void boundPromptScope.set('zhFetchOrder', FETCH_ORDER_DEFAULT.slice())
   }
   const submitSearchCredential = function () {
     const key = credKeyDraft.trim()
@@ -731,6 +761,70 @@ const ZhSettingsSection = function (props) {
                 ? Object.assign({}, svcGhostButtonStyle, { opacity: 0.45, cursor: 'not-allowed' })
                 : svcGhostButtonStyle,
             }, t('searchOrderRestore')))),
+        // 网页读取开关 + 读取后端优先级（与搜索链同构；web_fetch 工具的后端）。
+        row('zhWebFetch', t('zhWebFetch'), t('zhWebFetchDesc'),
+          toggle(fetchToggleOn, function () {
+            if (boundPromptScope !== null && promptReady === true) {
+              void boundPromptScope.set('zhWebFetch', !fetchToggleOn)
+            }
+          }, boundPromptScope === null, t('zhWebFetch'))),
+        React.createElement('div', {
+          key: 'fetchOrder',
+          style: Object.assign({}, zhRowStyle, { flexDirection: 'column', alignItems: 'stretch', gap: '10px' }),
+        },
+          React.createElement('div', { style: Object.assign({}, zhRowTextStyle, { flex: '0 0 auto' }) },
+            React.createElement('div', { style: zhRowTitleStyle }, t('fetchOrder')),
+            React.createElement('div', { style: zhDescStyle }, t('fetchOrderDesc'))),
+          fetchOrder.length === 0
+            ? React.createElement('div', { style: zhDescStyle }, t('fetchOrderEmpty'))
+            : React.createElement('ol', {
+              style: { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '6px' },
+            }, fetchOrder.map(function (backendId, index) {
+              const canMoveUp = index > 0
+              const canMoveDown = index < fetchOrder.length - 1
+              return React.createElement('li', {
+                key: 'fetch-order-' + backendId,
+                style: {
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  padding: '6px 8px', borderRadius: 8,
+                  background: 'var(--dsw-alias-bg-layer-3, transparent)',
+                  border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.28))',
+                },
+              },
+                React.createElement('span', {
+                  style: { flex: 'none', minWidth: '16px', fontSize: 12, color: 'var(--dsw-alias-label-tertiary, #666)' },
+                }, String(index + 1)),
+                React.createElement('span', {
+                  style: Object.assign({}, zhRowTitleStyle, { flex: '1 1 auto', minWidth: 0, fontSize: 13 }),
+                }, fetchOrderLabel(backendId, t)),
+                React.createElement('button', {
+                  type: 'button',
+                  'aria-label': t('fetchOrderMoveUp'),
+                  disabled: !canMoveUp || blocked,
+                  onClick: function () { moveFetchOrder(index, -1) },
+                  style: !canMoveUp || blocked
+                    ? Object.assign({}, svcGhostButtonStyle, { opacity: 0.45, cursor: 'not-allowed', padding: '2px 8px' })
+                    : Object.assign({}, svcGhostButtonStyle, { padding: '2px 8px' }),
+                }, '▲'),
+                React.createElement('button', {
+                  type: 'button',
+                  'aria-label': t('fetchOrderMoveDown'),
+                  disabled: !canMoveDown || blocked,
+                  onClick: function () { moveFetchOrder(index, 1) },
+                  style: !canMoveDown || blocked
+                    ? Object.assign({}, svcGhostButtonStyle, { opacity: 0.45, cursor: 'not-allowed', padding: '2px 8px' })
+                    : Object.assign({}, svcGhostButtonStyle, { padding: '2px 8px' }),
+                }, '▼'))
+            })),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+            React.createElement('button', {
+              type: 'button',
+              onClick: function () { restoreFetchOrder() },
+              disabled: blocked,
+              style: blocked
+                ? Object.assign({}, svcGhostButtonStyle, { opacity: 0.45, cursor: 'not-allowed' })
+                : svcGhostButtonStyle,
+            }, t('fetchOrderRestore')))),
         // Key 行：整行纵向布局（key 约 58 字符，横排放不下）；输入框用 password
         // 形态，保存后由主机回的脱敏提示确认写入结果。
         React.createElement('div', {

@@ -39,6 +39,14 @@ const SEARCH_MAX_QUERIES = 4
 /** 壳级超时：覆盖 DDG(html/lite)→Bing 免费级联的单查询最坏耗时（15s×3）。 */
 const SEARCH_TIMEOUT_MS = 45_000
 
+/**
+ * 官方 tool-web 的 `tool:web_search` 段位置（DSH `SECTION_ORDERS.TOOL_WEB_SEARCH`）。
+ * 本壳的说明段是**同名替换**，不是新增段：order 必须与官方一致，否则中文化会把
+ * 整段从工具说明区（read/write/edit/glob/grep 之后）挪到 persona 之后。
+ * 运行时优先读 `systemPrompt.getSectionOrder('TOOL_WEB_SEARCH')`，此常量只作旧宿主回退。
+ */
+const OFFICIAL_WEB_SEARCH_ORDER = 2000
+
 /** 官方 web_search 工具描述的特征片段（与 model-locale.ts TOOL_MATCH.web_search 同源，改动需双侧同步）。 */
 const OFFICIAL_DESC_MARKER = 'Search the web for current information'
 /** 智谱壳描述特征（其 en/zh 文案分别含 Zhipu/智谱）。 */
@@ -86,6 +94,18 @@ interface ScopeWebLike {
 
 interface ScopeSystemPromptLike {
   section(section: { name: string; order?: number; text: string | (() => string) }): Disposer
+  /** DSH systemPrompt 服务的官方段位置查询；旧宿主缺席时回退 {@link OFFICIAL_WEB_SEARCH_ORDER}。 */
+  getSectionOrder?(name: string): number
+}
+
+/** 官方 `tool:web_search` 段位置：替换型 section 必须沿用原版 order。 */
+function officialWebSearchOrder(prompt: ScopeSystemPromptLike): number {
+  try {
+    const order = prompt.getSectionOrder?.('TOOL_WEB_SEARCH')
+    return typeof order === 'number' && Number.isFinite(order) ? order : OFFICIAL_WEB_SEARCH_ORDER
+  } catch {
+    return OFFICIAL_WEB_SEARCH_ORDER
+  }
 }
 
 interface GlobalToolsLike {
@@ -631,7 +651,8 @@ export function installAgentSearchTool(ctx: HostContext, deps: AgentSearchToolDe
       if (scopedSystemPrompt !== undefined && scopedSystemPrompt !== null && typeof scopedSystemPrompt.section === 'function') {
         disposers.push(scopedSystemPrompt.section({
           name: 'tool:web_search',
-          order: 110,
+          // 替换官方同名段，不是新增段：位置必须与官方 TOOL_WEB_SEARCH 一致。
+          order: officialWebSearchOrder(scopedSystemPrompt),
           text: () => pick(WEB_SEARCH_SECTION, deps),
         }))
       }

@@ -62,8 +62,9 @@
 6. 数据边界：不上传数据；模型工具注册仅限「网络搜索」的 agent 作用域
    `web_search` 工具壳（用户明确要求的例外，随 `zhWebSearch` 开关装卸、
    Agent own scope、卸载可逆，见 `docs/behavior.md`「网络搜索」章），除此之外
-   不注册模型工具。允许的持久化仅限行为契约中列出的 localStorage 和
-   settings 命名空间 `dsh-zh`。
+   不注册模型工具。「免 Key 网页读取」（`web-fetch.ts`）只注册 web seam 的
+   fetch provider 并接管 `web.fetchProvider`（不注册模型工具）。允许的持久化
+   仅限行为契约中列出的 localStorage 和 settings 命名空间 `dsh-zh`。
 7. 术语修改优先改 `TERMS`（`data/terms.ts`）——它是部分翻译（`ZH_PARTIAL`）的
    术语唯一来源；整句覆盖（`ZH`）与字面对在各自条目内维护，改动时同样全局搜索
    旧名和新名，不能只依赖 `node --check`。

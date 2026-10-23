@@ -76,6 +76,34 @@ export const ZH_SEARCH_ORDER_DEFAULT: readonly string[] = [
   ZH_FREE_MULTI_BACKEND_ID,
 ]
 
+// ============ 网络读取（web fetch seam 组合 provider，web-fetch.ts） ============
+// 与「网络搜索」同构的第二条链：接管官方 web_fetch 工具的后端选择。
+// dsh-zh 命名空间开关（默认开启：免 Key 端点零配置；隐私边界见 behavior.md
+// ——免 Key 端点是公共云服务，会把请求的 URL 发给对应厂商）。
+export const ZH_WEB_FETCH_KEY = 'zhWebFetch'
+
+// 读取后端优先级：有序 provider id 列表，复合 provider（dsh-zh-web-fetch）
+// 按此顺序依次尝试。空数组 = 不接管 fetch 后端选择。
+export const ZH_FETCH_ORDER_KEY = 'zhFetchOrder'
+/** 优先级列表上限（与搜索列表同款防误配）。 */
+export const ZH_FETCH_ORDER_MAX = 8
+
+/**
+ * 优先级列表里的「本插件免 Key 多引擎读取后端」占位 id。
+ * 不是真实注册的 provider id：复合 provider 用它表示「走内置的
+ * Exa/Parallel/Keenable 免 Key 环」（见 web-fetch.ts 的 freeFetch）。
+ * 2026-10-19 实测：Firecrawl 无 Key 匿名抓取对本机 IP 返回 HTTP 403，未纳入。
+ */
+export const ZH_FREE_FETCH_BACKEND_ID = 'dsh-zh-free-fetch'
+
+/** 默认读取优先级：DeepSeek 云端读取 → 智谱 webReader → 免 Key 环 → 本地 http。 */
+export const ZH_FETCH_ORDER_DEFAULT: readonly string[] = [
+  'deepseek-fetch-api',
+  'zhipu-web-reader',
+  ZH_FREE_FETCH_BACKEND_ID,
+  'http',
+]
+
 // 智谱插件 npm 包名（其 Loader 行的 name 恒为包名，行 id 随挂载方式变化）。
 // agent-search-tool 以「包行存在」为让位信号：智谱在 → 智谱壳是 web_search
 // 工具壳的唯一 owner，本插件只保留 web seam 的 provider 接管（联动）。

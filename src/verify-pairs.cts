@@ -801,6 +801,29 @@ check(locale.lookup('dsh-zh-settings', 'searchPerQuery'), '每查询返回条数
   check(/'dsh-zh-free'/.test(hostConstants), true, '主机侧免 Key 多引擎占位 id 为 dsh-zh-free')
 }
 
+// 读取后端优先级：与搜索优先级同款双侧一致性断言（constants.ts ↔ settings-section.ts）。
+check(locale.lookup('dsh-zh-settings', 'fetchOrder'), '读取后端优先级', '读取优先级 中文标题')
+{
+  const hostConstants = fs.readFileSync(__dirname + '/lib/constants.js', 'utf8')
+  const clientSource = fs.readFileSync(__dirname + '/lib/client.js', 'utf8')
+  const fetchOrderMatch = /ZH_FETCH_ORDER_DEFAULT\s*=\s*\[([^\]]*)\]/.exec(hostConstants)
+  check(fetchOrderMatch !== null, true, '主机侧导出 ZH_FETCH_ORDER_DEFAULT')
+  const clientFetchMatch = /FETCH_ORDER_DEFAULT\s*=\s*\[([^\]]*)\]/.exec(clientSource)
+  check(clientFetchMatch !== null, true, '客户端侧保留 FETCH_ORDER_DEFAULT 副本')
+  const clientFetchOrder = clientFetchMatch === null ? [] : Array.from(clientFetchMatch[1].matchAll(/'([^']+)'|"([^"]+)"/g))
+    .map(function (m) { return m[1] ?? m[2] })
+  check(
+    JSON.stringify(clientFetchOrder),
+    JSON.stringify(['deepseek-fetch-api', 'zhipu-web-reader', 'dsh-zh-free-fetch', 'http']),
+    '客户端读取默认顺序与约定的四项一致',
+  )
+  // 主机侧：前两项与末项是字面量，第三项是 ZH_FREE_FETCH_BACKEND_ID 常量引用。
+  check(/'deepseek-fetch-api'/.test(hostConstants), true, '主机侧读取默认首项为 deepseek-fetch-api')
+  check(/'zhipu-web-reader'/.test(hostConstants), true, '主机侧读取默认次项为 zhipu-web-reader')
+  check(/'dsh-zh-free-fetch'/.test(hostConstants), true, '主机侧免 Key 读取占位 id 为 dsh-zh-free-fetch')
+  check(/'http'/.test(hostConstants), true, '主机侧读取默认末项为 http')
+}
+
 // 凭据错误码映射：**只有主机的校验码才归因为「Key 不合法」**。
 // 回归 2026-09-23：主机未重启时 POST 落到分发器兜底 404（code=not-found），旧映射
 // 把任何未知码都报成「Key 不合法」，用户拿着完全合法的 key 却看到该提示。

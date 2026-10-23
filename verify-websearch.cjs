@@ -7,6 +7,8 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
+const SEARCH_ORDER_FOR_TESTS = ['deepseek-search-api', 'zhipu-web-search-prime', 'dsh-zh-free']
+
 function makeCtx(webService) {
   const effects = []
   return {
@@ -21,12 +23,19 @@ function makeCtx(webService) {
 
 function makeWebService(providers) {
   const searchProviders = new Map(Object.entries(providers))
+  const fetchProviders = new Map()
   return {
     searchProviders,
+    fetchProviders,
     registerSearchProvider(provider) {
       if (searchProviders.has(provider.id)) throw new Error(`a web provider with id "${provider.id}" is already registered`)
       searchProviders.set(provider.id, provider)
       return () => searchProviders.delete(provider.id)
+    },
+    registerFetchProvider(provider) {
+      if (fetchProviders.has(provider.id)) throw new Error(`a web provider with id "${provider.id}" is already registered`)
+      fetchProviders.set(provider.id, provider)
+      return () => fetchProviders.delete(provider.id)
     },
   }
 }
@@ -302,7 +311,7 @@ async function main() {
     resetScenario(ddgOk)
     const web = makeWebService({})
     const ctx = makeCtx(web)
-    const dispose = mod.installWebSearchProvider(ctx, { isEnabled: () => enabled })
+    const dispose = mod.installWebSearchProvider(ctx, { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     assert.ok(dispose !== undefined, '应注册成功')
     const provider = web.searchProviders.get('dsh-zh-web')
     assert.ok(provider !== undefined, '注册表应有 dsh-zh-web')
@@ -342,7 +351,7 @@ async function main() {
       },
     }
     const web = makeWebService({ 'zhipu-web-search-prime': zhipu })
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const combo = web.searchProviders.get('dsh-zh-web')
     const r = await combo.search({ query: '联动测试' })
     assert.strictEqual(zhipuCalls, 1, '智谱应被调用一次')
@@ -364,7 +373,7 @@ async function main() {
       },
     }
     const web = makeWebService({ 'zhipu-web-search-prime': zhipuFiltered })
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const combo = web.searchProviders.get('dsh-zh-web')
     const r = await combo.search({ query: '敏感查询' })
     assert.ok(r.sources.length >= 1, 'DDG 回退应返回结果')
@@ -382,7 +391,7 @@ async function main() {
       async search() { throw new Error('should not be called') },
     }
     const web = makeWebService({ 'zhipu-web-search-prime': zhipuOff })
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const combo = web.searchProviders.get('dsh-zh-web')
     const r = await combo.search({ query: 'zhipu off' })
     assert.ok(r.sources.length >= 1)
@@ -399,7 +408,7 @@ async function main() {
       },
     }
     const webAbort = makeWebService({ 'zhipu-web-search-prime': zhipuAbort })
-    mod.installWebSearchProvider(makeCtx(webAbort), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(webAbort), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const comboAbort = webAbort.searchProviders.get('dsh-zh-web')
     await assert.rejects(() => comboAbort.search({ query: 'x' }), (e) => e.name === 'AbortError', '中止应向上抛')
     assert.strictEqual(transportLog.length, 1, '中止不应触发免费引擎重试（只有上面那次 DDG）')
@@ -427,7 +436,7 @@ async function main() {
       },
     }
     const web = makeWebService({ 'zhipu-web-search-prime': zhipuNoSnippet })
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const combo = web.searchProviders.get('dsh-zh-web')
     const r = await combo.search({ query: '缺简介测试' })
     assert.strictEqual(r.sources[0].url, 'https://example.com/a', '应改用免费引擎结果')
@@ -454,7 +463,7 @@ async function main() {
       },
     }
     const webHalf = makeWebService({ 'zhipu-web-search-prime': zhipuHalf })
-    mod.installWebSearchProvider(makeCtx(webHalf), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(webHalf), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const comboHalf = webHalf.searchProviders.get('dsh-zh-web')
     const rHalf = await comboHalf.search({ query: '半数有简介' })
     assert.strictEqual(rHalf.sources[0].url, 'https://half.example/a', '半数有简介 → 仍用智谱')
@@ -474,7 +483,7 @@ async function main() {
       },
     }
     const webDown = makeWebService({ 'zhipu-web-search-prime': zhipuNoSnippet2 })
-    mod.installWebSearchProvider(makeCtx(webDown), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(webDown), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const comboDown = webDown.searchProviders.get('dsh-zh-web')
     const rDown = await comboDown.search({ query: '免费后端故障' })
     assert.strictEqual(rDown.sources[0].url, 'https://nosnippet.example/c', '免费后端失败 → 回落智谱无简介结果')
@@ -483,7 +492,7 @@ async function main() {
     // 8b-3. 智谱缺简介 + 免费引擎「通但无结果」→ 同样回落智谱结果。
     resetScenario(emptyOk)
     const webEmpty = makeWebService({ 'zhipu-web-search-prime': zhipuNoSnippet2 })
-    mod.installWebSearchProvider(makeCtx(webEmpty), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(webEmpty), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const comboEmpty = webEmpty.searchProviders.get('dsh-zh-web')
     const rEmpty = await comboEmpty.search({ query: '免费后端无结果' })
     assert.strictEqual(rEmpty.sources[0].url, 'https://nosnippet.example/c', '免费后端无结果 → 回落智谱无简介结果')
@@ -497,7 +506,7 @@ async function main() {
       async search() { return { sources: [], truncated: false } },
     }
     const webZero = makeWebService({ 'zhipu-web-search-prime': zhipuEmpty })
-    mod.installWebSearchProvider(makeCtx(webZero), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(webZero), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const comboZero = webZero.searchProviders.get('dsh-zh-web')
     const rZero = await comboZero.search({ query: '智谱无结果' })
     assert.deepStrictEqual(rZero.sources, [], '空结果是合法结局')
@@ -519,7 +528,7 @@ async function main() {
   // ── 9. web 服务缺失 → 返回 undefined ──
   {
     resetScenario(null)
-    const none = mod.installWebSearchProvider(makeCtx(undefined), { isEnabled: () => true })
+    const none = mod.installWebSearchProvider(makeCtx(undefined), { isEnabled: () => true, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     assert.strictEqual(none, undefined)
     results.push('provider: web 服务缺失 → undefined（由 internal/service 重试接管）✓')
   }
@@ -531,11 +540,11 @@ async function main() {
     web.searchProviderId = 'deepseek-official' // 模拟官方 web 行 config
     const ctx = makeCtx(web)
     let enabled10 = true
-    const dispose = mod.installWebSearchProvider(ctx, { isEnabled: () => enabled10 })
+    const dispose = mod.installWebSearchProvider(ctx, { isEnabled: () => enabled10, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     assert.strictEqual(web.searchProviderId, 'dsh-zh-web', '安装（开关开）应接管后端选择')
     mod.applyWebSearchSelection(ctx, false)
     assert.strictEqual(web.searchProviderId, 'deepseek-official', '关闭应恢复原 searchProviderId')
-    mod.applyWebSearchSelection(ctx, true)
+    mod.applyWebSearchSelection(ctx, true, SEARCH_ORDER_FOR_TESTS)
     assert.strictEqual(web.searchProviderId, 'dsh-zh-web', '重开应再次接管')
     dispose()
     assert.strictEqual(web.searchProviderId, 'deepseek-official', '卸载应恢复原 searchProviderId')
@@ -545,7 +554,7 @@ async function main() {
     // 与智谱共存时：原值是智谱 id，卸载恢复到智谱。
     const webCo = makeWebService({ 'zhipu-web-search-prime': { id: 'zhipu-web-search-prime', available: () => true, async search() { return { sources: [], truncated: false } } } })
     webCo.searchProviderId = 'zhipu-web-search-prime'
-    const disposeCo = mod.installWebSearchProvider(makeCtx(webCo), { isEnabled: () => true })
+    const disposeCo = mod.installWebSearchProvider(makeCtx(webCo), { isEnabled: () => true, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     assert.strictEqual(webCo.searchProviderId, 'dsh-zh-web', '共存时仍接管为组合 provider（内部智谱优先）')
     disposeCo()
     assert.strictEqual(webCo.searchProviderId, 'zhipu-web-search-prime', '卸载应恢复为智谱 provider id')
@@ -565,7 +574,7 @@ async function main() {
     }
     resetScenario(rateLimited)
     const web = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider = web.searchProviders.get('dsh-zh-web')
 
     const r1 = await provider.search({ query: 'bing 限流测试' }) // 查询含 bing：相关性闸门要求结果与查询词元有重叠（夹具结果来自 Bing 示例页）
@@ -609,7 +618,7 @@ async function main() {
     }
     resetScenario(ddgEmpty)
     const web = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider = web.searchProviders.get('dsh-zh-web')
     const r = await provider.search({ query: 'bing 冷门查询' })
     assert.ok(r.sources.length >= 3, 'DDG 空结果应从 Bing 兜底取结果')
@@ -625,7 +634,7 @@ async function main() {
     const allFail = async () => ({ status: 500, url: 'x', headers: {}, body: '' })
     resetScenario(allFail)
     const web = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider = web.searchProviders.get('dsh-zh-web')
     await assert.rejects(
       () => provider.search({ query: '全挂' }),
@@ -637,7 +646,7 @@ async function main() {
     const allEmpty = async () => ({ status: 200, url: 'x', headers: {}, body: '<html></html>' })
     resetScenario(allEmpty)
     const web2 = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web2), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web2), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider2 = web2.searchProviders.get('dsh-zh-web')
     const r2 = await provider2.search({ query: '全空' })
     assert.deepStrictEqual(r2.sources, [], '全引擎无结果且无错误 → 空数组')
@@ -656,7 +665,7 @@ async function main() {
     }
     resetScenario(allBlocked)
     const web = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider = web.searchProviders.get('dsh-zh-web')
     await assert.rejects(
       () => provider.search({ query: 'bing 全空且限流' }),
@@ -690,7 +699,7 @@ async function main() {
     }
     resetScenario(cnPoisoned)
     const web = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider = web.searchProviders.get('dsh-zh-web')
     const r = await provider.search({ query: 'asyncio 教程' })
     assert.strictEqual(r.sources.length, 1, '投毒主机的整批结果应被丢弃，采用次选主机的沾边结果')
@@ -709,7 +718,7 @@ async function main() {
     }
     resetScenario(allPoisoned)
     const web2 = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web2), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web2), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider2 = web2.searchProviders.get('dsh-zh-web')
     await assert.rejects(
       () => provider2.search({ query: 'asyncio 教程' }),
@@ -746,7 +755,7 @@ async function main() {
     }
     resetScenario(yandexOk)
     const web = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider = web.searchProviders.get('dsh-zh-web')
     const r = await provider.search({ query: '深圳 天气' })
     assert.strictEqual(r.sources.length, 2, `Yandex 两条结果应被采用，实际 ${r.sources.length}`)
@@ -765,7 +774,7 @@ async function main() {
     }
     resetScenario(yandexCaptcha)
     const web2 = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web2), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web2), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider2 = web2.searchProviders.get('dsh-zh-web')
     await assert.rejects(
       () => provider2.search({ query: '深圳 天气' }),
@@ -791,7 +800,7 @@ async function main() {
     }
     resetScenario(tavilyOk)
     const web = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider = web.searchProviders.get('dsh-zh-web')
     const r = await provider.search({ query: 'tavily 测试' })
     assert.strictEqual(r.sources.length, 2, '应采用 Tavily 结果')
@@ -817,7 +826,7 @@ async function main() {
     }
     resetScenario(noCred)
     const web = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider = web.searchProviders.get('dsh-zh-web')
     const r = await provider.search({ query: 'test query' })
     assert.ok(r.sources.length >= 1, '无 Tavily 凭据时免费路径照常')
@@ -835,7 +844,7 @@ async function main() {
     }
     resetScenario(quotaOut)
     const web2 = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web2), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web2), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider2 = web2.searchProviders.get('dsh-zh-web')
     const r1 = await provider2.search({ query: 'test query' })
     assert.ok(r1.sources.length >= 1, '额度耗尽应降级到免费引擎，而不是把搜索整体打成失败')
@@ -861,7 +870,7 @@ async function main() {
     }
     resetScenario(slowDdg)
     const web = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider = web.searchProviders.get('dsh-zh-web')
     const [ra, rb] = await Promise.all([
       provider.search({ query: '并发一' }),
@@ -885,7 +894,7 @@ async function main() {
     }
     resetScenario(abortOnDdg)
     const web = makeWebService({})
-    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled })
+    mod.installWebSearchProvider(makeCtx(web), { isEnabled: () => enabled, searchOrder: () => SEARCH_ORDER_FOR_TESTS })
     const provider = web.searchProviders.get('dsh-zh-web')
     await assert.rejects(() => provider.search({ query: '中止' }), (e) => e.name === 'AbortError')
     assert.strictEqual(ddgCalls().length, 1, 'html 中止应立即上抛，不再触 lite/Bing/Wikipedia')
@@ -955,6 +964,8 @@ async function main() {
         if (name === 'systemPrompt') {
           return {
             section(section) { sections.push(section); return () => { const i = sections.indexOf(section); if (i >= 0) sections.splice(i, 1) } },
+            // 官方段位置查询：替换型 section 必须沿用官方 order（DSH TOOL_WEB_SEARCH=2000）。
+            getSectionOrder: (orderName) => orderName === 'TOOL_WEB_SEARCH' ? 2000 : 0,
           }
         }
         return undefined
@@ -971,12 +982,12 @@ async function main() {
   {
     const agent = makeAgent()
     const ctx = makeShellCtx({ agents: makeAgents([agent]) })
-    const handle = shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false })
+    const handle = shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false, perQuery: () => 0 })
     assert.ok(handle !== undefined, 'agents 在场时 handle 不应为 undefined')
     assert.strictEqual(agent._registered.length, 1, '应注册 web_search 工具壳')
     assert.strictEqual(agent._registered[0].name, 'web_search')
     assert.strictEqual(agent._registered[0].timeoutMs, 45000)
-    assert.ok(agent._sections.some((s) => s.name === 'tool:web_search' && s.order === 110), '应注册 tool:web_search section')
+    assert.ok(agent._sections.some((s) => s.name === 'tool:web_search' && s.order === 2000), '替换官方段的 order 必须与官方 TOOL_WEB_SEARCH 一致（2000）')
     assert.match(agent._registered[0].description, /zh_pro combined backend/, '英文描述应含本壳特征')
     const result = await agent._registered[0].execute({ queries: ['单查询'] }, {})
     assert.strictEqual(agent._searchCalls.length, 1)
@@ -995,12 +1006,12 @@ async function main() {
   {
     const agent = makeAgent()
     const ctx = makeShellCtx({ agents: makeAgents([agent]), loaderEntries: [{ options: { id: 'dsh-zhipu', name: 'deepseek-harness-zhipu_plan_tools' } }] })
-    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false })
+    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false, perQuery: () => 0 })
     assert.strictEqual(agent._registered.length, 0, '智谱在 → 让位不注册')
     ctx._loaderEntries.length = 0 // 智谱被移除
     // refresh 由 reconcile（智谱 removed）触发；此处直接模拟 handle 调用。
     const ctx2 = makeShellCtx({ agents: makeAgents([agent]) })
-    const handle2 = shellMod.installAgentSearchTool(ctx2, { isEnabled: () => true, useZh: () => false })
+    const handle2 = shellMod.installAgentSearchTool(ctx2, { isEnabled: () => true, useZh: () => false, perQuery: () => 0 })
     assert.strictEqual(agent._registered.length, 1, '智谱移除 → 补壳')
     handle2?.refresh()
     assert.strictEqual(agent._registered.length, 1, 'refresh 幂等')
@@ -1012,7 +1023,7 @@ async function main() {
     for (const [label, def] of [['官方', OFFICIAL_DEF], ['智谱', ZHIPU_DEF], ['未知', UNKNOWN_DEF]]) {
       const agent = makeAgent()
       const ctx = makeShellCtx({ agents: makeAgents([agent]), globalTools: makeGlobalTools(def) })
-      shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false })
+      shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false, perQuery: () => 0 })
       assert.strictEqual(agent._registered.length, 0, `${label}壳在场 → 让位不注册`)
     }
     results.push('shell: 视图占用（官方/智谱/未知）→ 让位，不覆盖他人注册 ✓')
@@ -1022,7 +1033,7 @@ async function main() {
   {
     const agent = makeAgent()
     const ctx = makeShellCtx({ agents: makeAgents([agent]), globalTools: makeGlobalTools(OWN_DEF) })
-    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false })
+    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false, perQuery: () => 0 })
     assert.strictEqual(agent._registered.length, 0, 'own 特征 → 幂等跳过')
     results.push('shell: 视图为本壳特征 → 幂等跳过 ✓')
   }
@@ -1032,7 +1043,7 @@ async function main() {
     const agent = makeAgent()
     let enabled20 = true
     const ctx = makeShellCtx({ agents: makeAgents([agent]) })
-    const handle = shellMod.installAgentSearchTool(ctx, { isEnabled: () => enabled20, useZh: () => false })
+    const handle = shellMod.installAgentSearchTool(ctx, { isEnabled: () => enabled20, useZh: () => false, perQuery: () => 0 })
     assert.strictEqual(agent._registered.length, 1, '开关开 → 注册')
     enabled20 = false
     handle.refresh()
@@ -1045,7 +1056,7 @@ async function main() {
   {
     const agent = makeAgent()
     const ctx = makeShellCtx({ agents: makeAgents([agent]), agentPresets: makePresets('minimal') })
-    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false })
+    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false, perQuery: () => 0 })
     assert.strictEqual(agent._registered.length, 0, '极简模式 → 不注入')
     results.push('shell: minimal 预设（双工具承诺）→ 不注入 ✓')
   }
@@ -1054,7 +1065,7 @@ async function main() {
   {
     const existing = makeAgent()
     const ctx = makeShellCtx({ agents: makeAgents([existing]) })
-    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false })
+    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false, perQuery: () => 0 })
     assert.strictEqual(existing._registered.length, 1)
     const created = makeAgent()
     for (const handler of ctx._listeners['agent/created'] ?? []) handler({ agent: created })
@@ -1072,7 +1083,7 @@ async function main() {
   {
     const agent = makeAgent({ failRegisterTimes: 1 })
     const ctx = makeShellCtx({ agents: makeAgents([agent]) })
-    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false })
+    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false, perQuery: () => 0 })
     assert.strictEqual(agent._registered.length, 0, '冲突时不重复注册')
     await sleep(120) // 8 次 × 25ms 重试窗口内首次重试即成功
     assert.strictEqual(agent._registered.length, 1, '旧注册释放后重试接管成功')
@@ -1084,7 +1095,7 @@ async function main() {
   {
     const agent = makeAgent({ failRegisterTimes: 1 })
     const ctx = makeShellCtx({ agents: makeAgents([agent]) })
-    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false })
+    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false, perQuery: () => 0 })
     ctx._loaderEntries.push({ options: { id: 'dsh-zhipu', name: 'deepseek-harness-zhipu_plan_tools' } })
     await sleep(120)
     assert.strictEqual(agent._registered.length, 0, '智谱出现 → 重试路径让位，绝不竞速')
@@ -1101,7 +1112,7 @@ async function main() {
         : { sources: [{ url: 'https://example.com/1' }, { url: 'https://example.com/3' }], truncated: false },
     })
     const ctx = makeShellCtx({ agents: makeAgents([agent]) })
-    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false })
+    shellMod.installAgentSearchTool(ctx, { isEnabled: () => true, useZh: () => false, perQuery: () => 0 })
     const result = await agent._registered[0].execute({ queries: ['a', 'b', 'a'] }, {})
     assert.strictEqual(agent._searchCalls.length, 2, '重复查询去重 → 2 次 seam 调用')
     assert.deepStrictEqual(result.sources.map((s) => s.url), [
@@ -1135,14 +1146,218 @@ async function main() {
     assert.ok(!cache.has(`file:///${libDir}/index.js`), '本包条目应被移除')
     assert.ok(cache.has(`file:///${siblingDir}/lib/index.js`), '兄弟包条目必须保留')
     assert.ok(cache.has(42), '非字符串键跳过')
-    // 缓存缺席 / 形状异常：安全返回，绝不抛错。
-    assert.deepStrictEqual(cacheMod.evictOwnModuleCache(undefined), { loaderFound: false, cleared: 0 })
-    assert.deepStrictEqual(cacheMod.evictOwnModuleCache({ internal: { loadCache: {} } }), { loaderFound: false, cleared: 0 })
+    // 缓存缺席 / 形状异常：安全返回，绝不抛错（按字段断言：返回值可能带 reason 说明）。
+    const absent = cacheMod.evictOwnModuleCache(undefined)
+    assert.strictEqual(absent.loaderFound, false, 'loader 缺席 → loaderFound=false')
+    assert.strictEqual(absent.cleared, 0, 'loader 缺席 → cleared=0')
+    const malformed = cacheMod.evictOwnModuleCache({ internal: { loadCache: {} } })
+    assert.strictEqual(malformed.loaderFound, false, '形状异常 → loaderFound=false')
+    assert.strictEqual(malformed.cleared, 0, '形状异常 → cleared=0')
     results.push('esm-cache: 卸载逐出按包内目录收敛，兄弟包/异形键安全 ✓')
+  }
+
+  // ══════════ 免 Key 网页读取（web-fetch.ts）══════════
+  const fetchMod = await import('./lib/web-fetch.js')
+
+  /** web-fetch 的 transport mock：替换导出对象 webFetchTransport.request。 */
+  const originalFetchTransport = fetchMod.webFetchTransport.request
+  let fetchTransportLog = []
+  let fetchHandler = null
+  fetchMod.webFetchTransport.request = async (req) => {
+    fetchTransportLog.push({ url: req.url, method: req.method, body: req.body, headers: req.headers })
+    if (fetchHandler === null) throw new Error(`unexpected fetch transport call: ${req.url}`)
+    return fetchHandler(req)
+  }
+  const resetFetchScenario = (newHandler) => {
+    fetchMod.resetWebFetchEngineState()
+    fetchTransportLog = []
+    fetchHandler = newHandler
+  }
+  const exaCalls = () => fetchTransportLog.filter((c) => c.url.includes('mcp.exa.ai'))
+  const parallelCalls = () => fetchTransportLog.filter((c) => c.url.includes('search.parallel.ai'))
+  const keenableCalls = () => fetchTransportLog.filter((c) => c.url.includes('api.keenable.ai'))
+  /** MCP SSE 响应（Exa 形状）。 */
+  const sse = (text) => ({ status: 200, url: '', headers: {}, body: `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text }] } })}\n` })
+  /** MCP JSON 响应（Parallel 形状）。 */
+  const mcpJson = (payloadText) => ({ status: 200, url: '', headers: {}, body: JSON.stringify({ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: payloadText }] } }) })
+
+  // ── 27. parseMcpText：JSON 壳、SSE 壳、JSON-RPC error、isError、空内容 ──
+  {
+    assert.strictEqual(fetchMod.parseMcpText(mcpJson('hello').body), 'hello', 'JSON 壳应剥出 text')
+    assert.strictEqual(fetchMod.parseMcpText(sse('sse-body').body), 'sse-body', 'SSE data: 行应剥出 text')
+    assert.throws(() => fetchMod.parseMcpText(JSON.stringify({ jsonrpc: '2.0', id: 1, error: { message: 'boom' } })), /boom/, 'JSON-RPC error 应抛错')
+    assert.throws(
+      () => fetchMod.parseMcpText(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { isError: true, content: [{ type: 'text', text: 'rate limit exceeded' }] } })),
+      /rate limit/,
+      'isError 结果应抛错（限流标记可被 failover 识别）',
+    )
+    assert.throws(() => fetchMod.parseMcpText('not json at all'), /无法识别/, '非 MCP 形状应抛错')
+    // CJK 正文里的 U+2028 不得切断 data: 行（splitlines 陷阱）。
+    const cjkSse = `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: '前\u2028后' }] } })}\n`
+    assert.strictEqual(fetchMod.parseMcpText(cjkSse), '前\u2028后', 'U+2028 不得切断 SSE 行')
+    results.push('fetch: parseMcpText JSON/SSE 壳 + error/isError/空 + U+2028 ✓')
+  }
+
+  // ── 28. URL 安全闸门：公开 http(s) 放行；内嵌凭据/本机/私网/非 http 拒绝 ──
+  {
+    assert.strictEqual(fetchMod.isFetchableUrl('https://example.com/a'), true)
+    assert.strictEqual(fetchMod.isFetchableUrl('http://example.com/'), true)
+    assert.strictEqual(fetchMod.isFetchableUrl('ftp://example.com/'), false, '非 http(s) 拒绝')
+    assert.strictEqual(fetchMod.isFetchableUrl('https://user:pass@example.com/'), false, '内嵌凭据拒绝')
+    assert.strictEqual(fetchMod.isFetchableUrl('https://localhost/x'), false)
+    assert.strictEqual(fetchMod.isFetchableUrl('https://127.0.0.1/x'), false)
+    assert.strictEqual(fetchMod.isFetchableUrl('https://10.1.2.3/x'), false)
+    assert.strictEqual(fetchMod.isFetchableUrl('https://192.168.1.1/x'), false)
+    assert.strictEqual(fetchMod.isFetchableUrl('https://172.16.0.9/x'), false)
+    assert.strictEqual(fetchMod.isFetchableUrl('https://169.254.1.1/x'), false)
+    assert.strictEqual(fetchMod.isFetchableUrl('https://[::1]/x'), false)
+    assert.strictEqual(fetchMod.isFetchableUrl('https://[fe80::1]/x'), false)
+    assert.strictEqual(fetchMod.isFetchableUrl('https://[fd00::1]/x'), false)
+    assert.strictEqual(fetchMod.isFetchableUrl('not a url'), false)
+    results.push('fetch: URL 安全闸门（http(s)/凭据/本机/私网/IPv6）✓')
+  }
+
+  // ── 29. 免 Key 环：Exa 成功直返；Exa 限流 → 记忆窗口内跳过 → Parallel 兜底 ──
+  {
+    resetFetchScenario((req) => {
+      if (req.url.includes('mcp.exa.ai')) return sse('# Example\nURL: https://example.com/\n\nExample body text')
+      throw new Error(`unexpected endpoint: ${req.url}`)
+    })
+    const webService = makeWebService({})
+    const ctx = makeCtx(webService)
+    const dispose = fetchMod.installWebFetchProvider(ctx, { isEnabled: () => true, fetchOrder: () => ['dsh-zh-free-fetch'] })
+    assert.ok(dispose !== undefined, 'web 服务在场时应装配成功')
+    const provider = webService.fetchProviders.get('dsh-zh-web-fetch')
+    assert.ok(provider, '应注册 dsh-zh-web-fetch provider')
+    const result = await provider.fetch({ url: 'https://example.com/' })
+    assert.strictEqual(exaCalls().length, 1)
+    assert.ok(result.body.content.includes('外部网页内容（不可信）'), '正文应带不可信边界标记')
+    assert.ok(result.body.content.includes('Example body text'))
+    assert.strictEqual(result.body.kind, 'text')
+    assert.strictEqual(result.truncated, false)
+
+    // Exa 限流一次 → 记忆窗口内直接跳过，走 Parallel。
+    resetFetchScenario((req) => {
+      if (req.url.includes('mcp.exa.ai')) return { status: 200, url: '', headers: {}, body: JSON.stringify({ jsonrpc: '2.0', id: 1, result: { isError: true, content: [{ type: 'text', text: 'rate limit exceeded, slow down' }] } }) }
+      if (req.url.includes('search.parallel.ai')) return mcpJson(JSON.stringify({ results: [{ url: req.body.includes('x') ? 'https://example.com/x' : 'https://example.com/', title: 'P', full_content: 'parallel body' }], errors: [] }))
+      if (req.url.includes('api.keenable.ai')) return { status: 200, url: '', headers: {}, body: JSON.stringify({ url: 'https://example.com/', title: 'K', content: 'keenable body' }) }
+      throw new Error(`unexpected endpoint: ${req.url}`)
+    })
+    const r2 = await provider.fetch({ url: 'https://example.com/' })
+    assert.strictEqual(exaCalls().length, 1, '第一次调用应打 Exa 并失败')
+    assert.strictEqual(parallelCalls().length, 1, '限流后应兜底到 Parallel')
+    assert.ok(r2.body.content.includes('parallel body'))
+    const r3 = await provider.fetch({ url: 'https://example.com/' })
+    assert.strictEqual(exaCalls().length, 1, '记忆窗口内 Exa 不再被打')
+    assert.strictEqual(parallelCalls().length, 2, '第二次仍走 Parallel')
+    assert.ok(r3.body.content.includes('parallel body'))
+    dispose()
+    results.push('fetch: 免 Key 环 Exa 成功 + 限流记忆窗口跳过 → Parallel 兜底 ✓')
+  }
+
+  // ── 30. 优先级链：DeepSeek 可用直返；失败/缺席降级免 Key 环；全失败抛错 ──
+  {
+    resetFetchScenario((req) => {
+      if (req.url.includes('api.keenable.ai')) return { status: 200, url: '', headers: {}, body: JSON.stringify({ url: 'https://example.com/', title: 'K', content: 'keenable body' }) }
+      throw new Error(`unexpected endpoint: ${req.url}`)
+    })
+    let deepseekAvailable = true
+    let deepseekCalls = 0
+    const webService = makeWebService({})
+    webService.fetchProviders.set('deepseek-fetch-api', {
+      id: 'deepseek-fetch-api',
+      available() { return deepseekAvailable },
+      async fetch() { deepseekCalls += 1; throw new Error('[WEB_PROVIDER_ERROR] DeepSeek 限流') },
+    })
+    const ctx = makeCtx(webService)
+    let installEnabled = true
+    const dispose = fetchMod.installWebFetchProvider(ctx, {
+      isEnabled: () => installEnabled,
+      fetchOrder: () => ['deepseek-fetch-api', 'dsh-zh-free-fetch', 'http', 'ghost-provider'],
+    })
+    const provider = webService.fetchProviders.get('dsh-zh-web-fetch')
+    // DeepSeek 失败 → 免 Key 环（Exa 限流记忆已清，但本场景 Exa/Parallel 不在 handler 里 → 免 Key 环落到 Keenable）。
+    const r = await provider.fetch({ url: 'https://example.com/' })
+    assert.strictEqual(deepseekCalls, 1, 'DeepSeek 应先被尝试')
+    assert.ok(r.body.content.includes('keenable body'), '免 Key 环兜底应命中 Keenable')
+    assert.strictEqual(keenableCalls().length, 1)
+    // DeepSeek 恢复 → 直返不再走环。
+    webService.fetchProviders.set('deepseek-fetch-api', {
+      id: 'deepseek-fetch-api',
+      available() { return true },
+      async fetch(request) { return { url: request.url, statusCode: 200, body: { kind: 'text', content: 'deepseek body' }, truncated: false } },
+    })
+    const r2 = await provider.fetch({ url: 'https://example.com/' })
+    assert.ok(r2.body.content.includes('deepseek body'), 'DeepSeek 可用时应直返')
+    // 不可用（available=false）→ 跳过不发请求。
+    webService.fetchProviders.set('deepseek-fetch-api', { id: 'deepseek-fetch-api', available: () => false, async fetch() { throw new Error('should not be called') } })
+    const r3 = await provider.fetch({ url: 'https://example.com/' })
+    assert.ok(r3.body.content.includes('keenable body'), 'available=false 应跳过')
+    // 未注册 id（ghost-provider、http 未注册）静默跳过：免 Key 环全败时抛 ZhWebError。
+    resetFetchScenario(() => { throw new Error('network down') })
+    await assert.rejects(() => provider.fetch({ url: 'https://example.com/' }), (e) => e.code === 'WEB_PROVIDER_ERROR', '全后端失败应抛 WEB_PROVIDER_ERROR')
+    // 开关关 → available()=false；空 URL / 非法 URL 拒绝（provider 闭包读 deps，翻转标志即可）。
+    installEnabled = false
+    assert.strictEqual(provider.available(), false, '开关关 → available false')
+    await assert.rejects(() => provider.fetch({ url: '' }), /non-empty/, '空 URL 拒绝')
+    await assert.rejects(() => provider.fetch({ url: 'https://192.168.1.5/x' }), /安全闸门/, '私网 URL 拒绝')
+    dispose()
+    results.push('fetch: 优先级链 DeepSeek 失败降级环 → Keenable；available/未注册跳过；开关联动 ✓')
+  }
+
+  // ── 31. 接管与恢复：settings.update 写 fetchProvider；关闭恢复 unset ──
+  {
+    resetFetchScenario((req) => {
+      if (req.url.includes('api.keenable.ai')) return { status: 200, url: '', headers: {}, body: JSON.stringify({ url: 'https://example.com/', title: 'K', content: 'k' }) }
+      throw new Error(`unexpected endpoint: ${req.url}`)
+    })
+    const settingsWrites = []
+    const webService = makeWebService({})
+    webService.fetchProviderId = 'deepseek-fetch-api' // 模拟原配置（旧代际可读字段）
+    const ctx = makeCtx(webService)
+    ctx.get = (name) => {
+      if (name === 'web') return webService
+      if (name === 'settings') return {
+        // 模拟宿主：settings.update 落盘后当前值可读（此处用实例字段近似 volatile 引用）。
+        update: async (ns, patch) => {
+          settingsWrites.push([ns, patch])
+          if (ns === 'web' && Object.prototype.hasOwnProperty.call(patch, 'fetchProvider')) webService.fetchProviderId = patch.fetchProvider
+        },
+        mutate: async (ns, ops) => {
+          settingsWrites.push([ns, ops])
+          if (ns === 'web' && Array.isArray(ops)) {
+            for (const op of ops) {
+              if (op.op === 'unset' && op.path[0] === 'fetchProvider') webService.fetchProviderId = undefined
+              if (op.op === 'set' && op.path[0] === 'fetchProvider') webService.fetchProviderId = op.value
+            }
+          }
+        },
+      }
+      return undefined
+    }
+    const dispose = fetchMod.installWebFetchProvider(ctx, { isEnabled: () => true, fetchOrder: () => ['dsh-zh-free-fetch'] })
+    assert.ok(dispose !== undefined, '装配应成功（install 内部已含接管）')
+    await sleep(120) // install 内部接管：注册 effect 异步驱动 + settings.update 异步落定
+    assert.ok(settingsWrites.some(([ns, patch]) => ns === 'web' && patch.fetchProvider === 'dsh-zh-web-fetch'), '安装即应写入 web.fetchProvider')
+    // 幂等：已是本插件时再次接管返回 true 且不产生新写入。
+    const writesBefore = settingsWrites.length
+    const took = fetchMod.applyWebFetchSelection(ctx, true, ['dsh-zh-free-fetch'])
+    assert.strictEqual(took, true, '再次接管应成功（幂等）')
+    await sleep(30)
+    assert.strictEqual(settingsWrites.length, writesBefore, '幂等接管不应产生新写入')
+    // 关闭 → 恢复：原值是 deepseek-fetch-api（字符串），应写回原值而非 unset。
+    const restored = fetchMod.applyWebFetchSelection(ctx, false, [])
+    assert.strictEqual(restored, false, '恢复后应返回 false')
+    await sleep(30)
+    assert.ok(settingsWrites.some(([ns, patch]) => ns === 'web' && patch.fetchProvider === 'deepseek-fetch-api'), '恢复应写回原 provider id')
+    assert.strictEqual(webService.fetchProviderId, 'deepseek-fetch-api', '实例上的当前值应回到原 provider')
+    dispose()
+    results.push('fetch: 接管写入 web.fetchProvider + 幂等 + 关闭恢复原值 ✓')
   }
 
   // ══════════ 收尾 ══════════
   mod.webSearchTransport.request = originalRequest
+  fetchMod.webFetchTransport.request = originalFetchTransport
   fs.rmSync(credHome, { recursive: true, force: true })
   if (previousDshHome === undefined) delete process.env.DSH_HOME
   else process.env.DSH_HOME = previousDshHome

@@ -30,6 +30,8 @@
 | 平铺 | 网络搜索 `zhWebSearch` | 开 | `settings.yaml` | 实时生效；详见「网络搜索」章 |
 | 网络搜索 | 搜索后端优先级 `zhSearchOrder` | `deepseek-search-api` → `zhipu-web-search-prime` → `dsh-zh-free` | `settings.yaml` | 实时生效；▲/▼ 调整，空列表 = 不接管 |
 | 网络搜索 | 每查询返回条数 `zhSearchPerQuery` | 0 | `settings.yaml` | 实时生效；0 = 不接管（官方 8 条 + 轮询），1–50 = 分组保留 N 条 |
+| 平铺 | 免 Key 网页读取 `zhWebFetch` | 开 | `settings.yaml` | 实时生效；详见「网页读取」章 |
+| 网页读取 | 读取后端优先级 `zhFetchOrder` | `deepseek-fetch-api` → `zhipu-web-reader` → `dsh-zh-free-fetch` → `http` | `settings.yaml` | 实时生效；▲/▼ 调整，空列表 = 不接管 |
 | 平铺 | 提示词注入 `zhPrompt` / `zhPromptText` / `zhPromptTarget` | 关；文本为“思考过程和回复始终使用中文输出”；目标为 `system` | `settings.yaml` | 后续模型请求；目标可改为 `user` |
 | 对话样式相关 | 自动展开最新思考 `thinkingAuto` | 开 | localStorage | 中文/英文界面 |
 | 对话样式相关 | 默认展开行数与方向 `thinkMaxLines` / `thinkMaxLinesFrom` | 20；`latest` | localStorage | 0–200；方向可选 `latest` / `earliest` |
@@ -448,7 +450,10 @@ assemble 管线改写 contexts 正文（0.1.x 兼容路径）；任何改写失�
 **2. agent 作用域 `web_search` 工具壳**：Web profile 的官方 `dsh-tool-web` 行被
 禁用、agent preset 默认不暴露 web_search 时，仅切后端模型看不到工具。本插件在
 每个**非极简** Agent 的自身作用域注册同名 `web_search` 工具（参数为 1–4 条
-`queries` 数组并合并去重结果）与 `tool:web_search` 指引 section（order 110），
+`queries` 数组并合并去重结果）与 `tool:web_search` 指引 section。该 section 是
+对官方 `dsh-tool-web` 同名段的**替换**，`order` 沿用官方 `TOOL_WEB_SEARCH`
+（2000，运行时经 `systemPrompt.getSectionOrder` 读取），因此中文化不会改变系统
+提示词里的位置；
 结果渲染官方 `card:'web'`/`kind:'search'` 搜索卡片，单次调用超时 45 秒；工具的
 execute 走官方 web seam，因此自动获得上述后端级联与智谱联动。壳的描述与指引
 文本随「提示词注入」开关（`zhPrompt`）选择中英文，实时切换。
@@ -521,6 +526,61 @@ execute 走官方 web seam，因此自动获得上述后端级联与智谱联动
   后端缓存或 Yandex/Bing 快速响应时通常无感。诊断快照的
   `webSearchSnippetFallback.count` 可查该闸门在本进程内触发过几次。
   该闸门只覆盖「整批/过半缺简介」；智谱偶尔只给出少量简介时按覆盖率正常放行。
+
+## 网页读取
+
+由「免 Key 网页读取」开关（`zhWebFetch`，`settings.yaml` 命名空间 `dsh-zh`，**默认开**，
+实时生效）控制。开启后本插件为官方 `web_fetch`（网页读取）工具提供后端接管，结构与
+「网络搜索」章完全同构，包含两个层面：
+
+**1. 读取后端接管（web fetch seam provider）**：向官方 web 服务注册组合 provider
+`dsh-zh-web-fetch`，并把 `web` 行的 `fetchProvider` 切到它（经官方 settings 通道持久化；
+关闭开关、空优先级列表或卸载时按接管前的值还原，与搜索的 `searchProvider` 接管同款
+三通道写入）。每次抓取按**「读取后端优先级」列表**（`zhFetchOrder`）从上到下挑选后端：
+
+- 默认顺序：`deepseek-fetch-api`（DeepSeek 云端读取）→ `zhipu-web-reader`（智谱
+  webReader）→ `dsh-zh-free-fetch`（本插件内置免 Key 环）→ `http`（官方本地受限抓取，
+  最终兜底）；
+- 未注册（如智谱三件套未安装）或 `available()` 为假（如 DeepSeek 未配 Key）的后端
+  直接跳过；调用失败记入降级诊断（`webFetchFallback`）后继续下一个；用户中止
+  （AbortError）不降级、直接上抛；
+- 设置页「网络搜索」卡片内用 ▲/▼ 调整顺序，改动写入 `zhFetchOrder` 后立即重新接管。
+
+**2. 内置免 Key 环（占位 id `dsh-zh-free-fetch`）**：参考 Hermes agent 的 keyless
+提取环（`plugins/web/keyless_mcp.py`）实现，按固定顺序依次尝试三家免 Key 公共端点：
+
+- **Exa**（`mcp.exa.ai/mcp`，`web_fetch_exa` 工具）：SSE 响应，返回 markdown 正文；
+  从 `# `/`Title:` 行提取标题；
+- **Parallel**（`search.parallel.ai/mcp`，`web_fetch` 工具）：JSON 响应；
+  `full_content` 缺失时拼接 `excerpts`（实测为摘录级内容）；
+- **Keenable**（`api.keenable.ai/v1/fetch/public`）：GET + `X-Keenable-Title` 应用 id，
+  返回干净的 `{url,title,content}` JSON；
+- 单端点超时 30 秒；触发限流的端点记 60 秒记忆窗口，窗口内直接跳过；
+- **Firecrawl 未纳入**：2026-10-19 实测其匿名抓取（`/v2/scrape` 不带 Authorization）
+  对本机 IP 返回 HTTP 403（IP 信誉门槛）；
+- 与 Hermes 的差异：Hermes 按 per-process 随机光标做 round-robin 起始（多实例分散
+  负载），本插件单用户场景固定 Exa → Parallel → Keenable 顺序，行为更可预测。
+
+**安全与数据边界**：
+
+- URL 闸门：仅公开 http(s)；拒绝 URL 内嵌凭据（`user:pass@`）与本机/私网地址字面量
+  （localhost、127/8、10/8、172.16/12、192.168/16、169.254/16、`::1`、ULA、链路本地）；
+  **未做完整 DNS rebinding 防护**（域名解析到私网 IP 的场景不拦，与智谱插件的
+  http-fallback 同一残余边界，如实文档化）；
+- 隐私：抓取会把 URL 发给所选后端——免 Key 环的三家都是公共云服务（云端抓取、
+  本机不直连目标），敏感 URL 应在设置里把免 Key 环移到末位或关闭本开关；
+- 正文前后包「外部网页内容（不可信）」边界标记；正文本地截断上限 200,000 字符
+  （超限置 `truncated`）；本插件不存储 URL 与正文，不落盘；
+- 不注册任何模型工具（红线同网络搜索）；诊断快照新增 `webFetchSelection` 与
+  `webFetchFallback` 字段。
+
+**已知限制**：
+
+- 免 Key 端点都是尽力而为的公共服务：Parallel 免费层常只给摘录级内容（`full_content`
+  为 null）；Exa/Keenable 对部分站点可能返回空正文（视为该端点失败，换下一家）；
+- 免 Key 环优先级固定，多端点同时限流时全部跳过后按列表继续（本地 `http` 兜底仍在）；
+- `http` 兜底是官方 `web-fetch-http` provider：旧版 DSH 的 Web 组合若未挂该行，
+  该项自动跳过（未注册 → 静默降级语义）。
 
 ## 提示词注入
 
