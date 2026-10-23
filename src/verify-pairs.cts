@@ -1011,6 +1011,34 @@ check(findElement(settingsRender(), function (node) {
 }) !== null, true, '插件同步 路由未就绪时显示重启提示')
 syncSnapshotOverride = null
 
+// 无需折叠分支（total ≤ max）不得写 scrollTop（issue #14）。现场：长单段落按
+// 「显式换行」只算 1 行，total ≤ 20 → 每次 pass 都走 thinkClearClamp；若清理时
+// 无条件 scrollTop = 0，dsh-streamfold 把同一正文做成滚动窗并逐帧追底，就形成
+// 「归零→追底」死循环。清掉 max-height/overflow 后本插件已不再滚动该元素，浏览器
+// 会自己把偏移钳回 0，无需也不应替外部滚动窗决定位置。
+const extBody = makeFakeEl()
+const extHeader = makeFakeEl()
+extHeader.setAttribute('data-disclosure-row', '')
+const extOpen = makeFakeEl()
+extOpen.setAttribute('data-open', '')
+extOpen.appendChild(extHeader)
+extOpen.appendChild(extBody)
+extOpen.firstElementChild = extHeader
+extHeader.nextElementSibling = extBody
+const extRoot = makeFakeEl()
+extRoot.setAttribute('data-variant', 'think')
+extRoot.setAttribute('data-state', 'ok')
+extRoot.querySelector = function (selector) {
+  return selector === '[data-variant="think"] [data-open]' ? extOpen : null
+}
+injectedThinkRoots = [extRoot]
+extBody.textContent = 'x'.repeat(3000)
+extBody.scrollTop = 220
+fakeObserverCbs[0].cb(undefined)
+check(extBody.scrollTop, 220, '无需折叠 不重置外部滚动窗的 scrollTop（issue #14）')
+check(extBody.getAttribute('data-dsh-zh-think'), null, '无需折叠 不打折叠标记')
+injectedThinkRoots = []
+
 // 构造一个超过行数上限的思考块假 DOM（data-state=ok 避免触发自动展开）。
 const thinkBody = makeFakeEl()
 const headerEl = makeFakeEl()

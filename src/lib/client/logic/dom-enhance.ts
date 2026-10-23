@@ -445,7 +445,10 @@ function installChineseEnhance(ctx) {
             body.style.maxHeight = ''
             body.style.overflow = ''
             body.style.overflowY = ''
-            body.scrollTop = 0
+            // 不写 scrollTop：清掉 max-height/overflow 后本插件已不再滚动这个
+            // 元素，浏览器会把偏移自然钳回 0；而元素若仍被别的插件（如
+            // dsh-streamfold 的滚动窗）保持可滚动，位置不归本插件管。无条件
+            // 归零会与对方的逐帧追底形成「归零→追底」死循环（issue #14）。
           }
           body.__dshZhThink = undefined
           if (typeof body.removeAttribute === 'function') body.removeAttribute(THINK_LINES_ATTR)
