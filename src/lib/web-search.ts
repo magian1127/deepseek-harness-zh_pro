@@ -68,7 +68,7 @@
 import https from 'node:https'
 import zlib from 'node:zlib'
 import { ZH_FREE_MULTI_BACKEND_ID } from './constants.js'
-import { log, warn } from './util.js'
+import { log, sharedWeakMap, warn } from './util.js'
 import { credentialAvailable, resolveApiKey } from './credentials.js'
 import type { HostContext } from './types.js'
 
@@ -1211,10 +1211,14 @@ export interface WebSearchInstallDeps {
 
 /**
  * 各 web seam 实例被接管前的原始 searchProvider 值。
- * 用 WeakMap 以 web 实例为键：关闭开关或本插件卸载时恢复到「没有 zh_pro 时」
- * 的值（可能是 deepseek-search-api、deepseek-official 或智谱的 provider）。
+ *
+ * 必须放在 globalThis 品牌符号里：模块级 WeakMap 会随热重载换实例而丢失，
+ * 新实例可能把「当前值（已经是本插件）」误记成原值，卸载时“恢复”到自己，
+ * 留下指向已注销 provider 的选路（2026-10-23 卸载实测）。
  */
-const originalSearchProviderIds = new WeakMap<object, string | undefined>()
+const originalSearchProviderIds = sharedWeakMap<object, string | undefined>(
+  Symbol.for('deepseek-harness-zh_pro.web-search-originals'),
+)
 
 /**
  * 宿主 settings 服务的最小形状（官方 dsh-settings）。
@@ -1237,6 +1241,58 @@ interface SettingsMutateLike {
 
 interface WebInstanceLike {
   searchProviders?: Map<string, WebSearchProviderLike>
+}
+
+/** web 行持久化配置里的 searchProvider（不是运行时 volatile 覆盖）。 */
+function persistedSearchProvider(ctx: HostContext): string | undefined {
+  try {
+    for (const entry of ctx.loader.entries()) {
+      if (entry?.options?.name !== '@deepseek-ai/dsh-web') continue
+      const value = entry.options.config?.searchProvider
+      return typeof value === 'string' && value.length > 0 ? value : undefined
+    }
+  } catch {
+    // loader 不可用：按未知处理。
+  }
+  return undefined
+}
+
+/**
+ * 记录接管前的原值。当前值已经是本插件时回退读持久化配置——否则热重载后的
+ * 新实例会把 dsh-zh-web 自己当成原值。持久化值也已经是本插件（跨进程接管过）
+ * 时不再写入，由卸载时的 fallback 选择可用官方 provider。
+ */
+function rememberOriginalSearchProvider(ctx: HostContext, web: WebInstanceLike, current: string | undefined): void {
+  if (originalSearchProviderIds.has(web)) return
+  // 持久化配置是用户选择的权威来源；运行时值可能被别的路径临时重置。
+  const persisted = persistedSearchProvider(ctx)
+  if (persisted !== undefined && persisted !== ZH_WEB_SEARCH_PROVIDER_ID) {
+    originalSearchProviderIds.set(web, persisted)
+    return
+  }
+  if (current !== undefined && current !== ZH_WEB_SEARCH_PROVIDER_ID) {
+    originalSearchProviderIds.set(web, current)
+    return
+  }
+  // 当前值本来就是 undefined（未配置）或持久化值也已是本插件：记一条「未知」，
+  // 让卸载时走清空/可用 provider 兜底，而不是因为没有记录就跳过恢复。
+  originalSearchProviderIds.set(web, undefined)
+}
+
+/** 原值丢失时选一个可用的非本插件 provider，避免清空后 seam 报 ambiguous。 */
+function fallbackSearchProvider(web: WebInstanceLike): string | undefined {
+  const providers = web.searchProviders
+  if (!(providers instanceof Map)) return undefined
+  const usable: string[] = []
+  for (const [id, candidate] of providers) {
+    if (id === ZH_WEB_SEARCH_PROVIDER_ID) continue
+    try {
+      if (typeof candidate?.available === 'function' && candidate.available()) usable.push(id)
+    } catch {
+      // available() 抛错：当作不可用。
+    }
+  }
+  return usable.find((id) => id === OFFICIAL_DEEPSEEK_PROVIDER_ID) ?? usable[0]
 }
 
 /**
@@ -1307,27 +1363,39 @@ export function applyWebSearchSelection(
   // 空优先级列表 = 用户不想接管：与关闭开关等价。
   const wantActive = active && order.length > 0
   const current = readConfiguredSearchProvider(web)
-  publishLiveSelection(ctx)
 
   if (wantActive) {
-    if (!originalSearchProviderIds.has(web)) originalSearchProviderIds.set(web, current)
+    rememberOriginalSearchProvider(ctx, web, current)
     if (current === ZH_WEB_SEARCH_PROVIDER_ID) {
       // 已经是本插件：不需要写盘，但要留下痕迹，否则诊断里看起来「什么都没发生」。
       writeSelectionState({
         at: new Date().toISOString(), target: ZH_WEB_SEARCH_PROVIDER_ID, before: current,
+        original: originalSearchProviderIds.get(web) ?? null,
         channel: 'none', outcome: 'ok', error: '已是本插件（无需写入）',
       })
+      publishLiveSelection(ctx)
       return true
     }
-    return writeSearchProviderSelection(ctx, web, ZH_WEB_SEARCH_PROVIDER_ID)
+    const took = writeSearchProviderSelection(ctx, web, ZH_WEB_SEARCH_PROVIDER_ID)
+    // 写入后再发布快照：写入前发布会让诊断里的 configured 永远停在旧值。
+    publishLiveSelection(ctx)
+    return took
   }
 
   // 只有本插件确实接管过才还原，否则不要覆盖用户在别处做的选择。
-  if (!originalSearchProviderIds.has(web)) return false
-  if (current !== ZH_WEB_SEARCH_PROVIDER_ID) return false
+  if (current !== ZH_WEB_SEARCH_PROVIDER_ID) {
+    publishLiveSelection(ctx)
+    return false
+  }
   const original = originalSearchProviderIds.get(web)
-  if (original === undefined) restoreSearchProviderSelection(ctx, web, true)
-  else writeSearchProviderSelection(ctx, web, original)
+  if (original !== undefined && original !== ZH_WEB_SEARCH_PROVIDER_ID) {
+    writeSearchProviderSelection(ctx, web, original)
+  } else {
+    // 原值未知（热重载丢记录 / 跨进程接管过）：选一个可用官方 provider 或清空。
+    // 绝不能把已注销的 dsh-zh-web 留在配置里，否则卸载后所有搜索报 not registered。
+    restoreSearchProviderSelection(ctx, web, true)
+  }
+  publishLiveSelection(ctx)
   return false
 }
 
@@ -1355,6 +1423,8 @@ export interface WebSearchSelectionRecord {
   error?: string
   /** 写入前的既有值。 */
   before: string | null
+  /** 记录到的接管前原值（null/缺省 = 未知，卸载时走清空/回落）。 */
+  original?: string | null
 }
 
 const SELECTION_STATE_KEY = Symbol.for('deepseek-harness-zh_pro.web-search-selection')
@@ -1430,51 +1500,72 @@ export function getLiveWebSearchSelection(): { configured: string | null; regist
 
 
 /**
- * 写入后端选择。三条通道按可用性依次尝试，首个成功即返回。
- * 通道 3 只改内存（不持久化），用于 settings 服务缺席的降级场景。
+ * 写入后端选择。**先写运行态，再持久化**：
+ * - 运行态通道（旧实例字段 / volatile 引用）不经过 Loader，在 HMR 事务内也安全；
+ * - `settings.update` 会走 `configEditor.edit → hmr.runExclusive`。运行中安装/热重载
+ *   的 apply 本身就在 HMR 事务里，嵌套调用必被拒（2026-10-23 实测：
+ *   `HMR transactions cannot be nested`）。因此它只负责持久化：失败时本进程的
+ *   运行态已经生效，不能再把整次接管标记为失败，否则热重载永远救不回来。
+ *
  * 每次尝试都落一条运行态记录（见 getWebSearchSelectionState）。
  */
 function writeSearchProviderSelection(ctx: HostContext, web: WebInstanceLike, id: string): boolean {
   const before = readConfiguredSearchProvider(web) ?? null
-  const base = { at: new Date().toISOString(), target: id, before }
-  // 通道 1：官方 settings 服务（持久 + volatile 实时生效）。
+  const base = { at: new Date().toISOString(), target: id, before, original: originalSearchProviderIds.get(web) ?? null }
+  const effective = (): boolean => readConfiguredSearchProvider(web) === id
+
+  // 通道 0：运行态（不经过 Loader，HMR 事务内安全）。
+  const legacy = (web as { searchProviderId?: unknown }).searchProviderId
+  let runtimeWritten = false
+  if (legacy !== undefined || 'searchProviderId' in (web as object)) {
+    ;(web as { searchProviderId?: string }).searchProviderId = id
+    runtimeWritten = true
+    writeSelectionState({ ...base, channel: 'legacy-field', outcome: effective() ? 'ok' : 'error' })
+  } else {
+    runtimeWritten = writeVolatileSearchProvider(web, id)
+    if (runtimeWritten) {
+      writeSelectionState({ ...base, channel: 'volatile', outcome: effective() ? 'ok' : 'error' })
+    }
+  }
+
+  // 通道 1：官方 settings 服务（持久化）。运行态已生效时，失败只影响重启后的值，
+  // 不影响本进程；下次 apply（冷启动）会再次尝试落盘。
   const settings = ctx.get('settings') as SettingsServiceLike | undefined | null
   if (settings !== undefined && settings !== null && typeof settings.update === 'function') {
-    writeSelectionState({ ...base, channel: 'settings', outcome: 'pending' })
     try {
       void settings.update('web', { searchProvider: id }).then(() => {
-        patchSelectionState({ outcome: 'ok' })
+        patchSelectionState({
+          channel: 'settings',
+          outcome: effective() ? 'ok' : 'error',
+          error: effective() ? undefined : '持久化成功但选路未指向目标 provider',
+        })
       }, (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error)
-        patchSelectionState({ outcome: 'error', error: message.slice(0, 200) })
-        warn(`写入 web.searchProvider 失败: ${message}`)
+        patchSelectionState({
+          outcome: runtimeWritten && effective() ? 'ok' : 'error',
+          error: `持久化失败（运行态${runtimeWritten ? '已' : '未'}生效）: ${message}`.slice(0, 200),
+        })
+        warn(`持久化 web.searchProvider 失败（运行态${runtimeWritten ? '已' : '未'}生效）: ${message}`)
       })
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      patchSelectionState({ outcome: 'error', error: message.slice(0, 200) })
+      patchSelectionState({
+        outcome: runtimeWritten && effective() ? 'ok' : 'error',
+        error: message.slice(0, 200),
+      })
       warn(`调用 settings.update 失败: ${message}`)
     }
   }
-  // 通道 2：旧宿主实例字段。
-  const legacy = (web as { searchProviderId?: unknown }).searchProviderId
-  if (legacy !== undefined || 'searchProviderId' in (web as object)) {
-    ;(web as { searchProviderId?: string }).searchProviderId = id
-    writeSelectionState({ ...base, channel: 'legacy-field', outcome: 'ok' })
-    return true
-  }
-  // 通道 3：cordis volatile 引用（不持久化）。
-  const viaVolatile = writeVolatileSearchProvider(web, id)
-  if (!viaVolatile) {
+
+  if (!runtimeWritten) {
     const reason = `无可用写通道（settings=${settings === null || settings === undefined ? 'absent' : typeof settings}`
       + `，web.searchProviderId=${legacy !== undefined ? 'present' : 'absent'}`
       + `，web.config.searchProvider=${volatileRefPresent(web) ? 'present' : 'absent'}）`
     writeSelectionState({ ...base, channel: 'none', outcome: 'error', error: reason.slice(0, 200) })
     warn(reason)
-  } else {
-    writeSelectionState({ ...base, channel: 'volatile', outcome: 'ok' })
   }
-  return viaVolatile
+  return runtimeWritten
 }
 
 /** 诊断用：web 实例上是否存在可写的 searchProvider volatile 引用。 */
@@ -1492,6 +1583,25 @@ function volatileRefPresent(web: WebInstanceLike): boolean {
  */
 function restoreSearchProviderSelection(ctx: HostContext, web: WebInstanceLike, clear: boolean): boolean {
   if (!clear) return false
+  // 原值未知时的安全落点：恢复到一个可用的非本插件 provider。直接清空会让
+  // seam 在多个可用 provider 之间报 WEB_PROVIDER_AMBIGUOUS；留着 dsh-zh-web
+  // 则在其注销后报 not registered。
+  const fallback = fallbackSearchProvider(web)
+  if (fallback !== undefined) {
+    const took = writeSearchProviderSelection(ctx, web, fallback)
+    log(`搜索后端原值未知，已回落到可用后端 ${fallback}`)
+    return took
+  }
+  // 运行态先恢复：卸载/关闭同样可能发生在 HMR 事务内，settings.mutate 会嵌套失败。
+  // 若只走 settings，失败后会残留指向已注销 provider 的 dsh-zh-web，所有搜索报错。
+  let runtimeRestored = false
+  const legacy = (web as { searchProviderId?: unknown }).searchProviderId
+  if (legacy !== undefined || 'searchProviderId' in (web as object)) {
+    ;(web as { searchProviderId?: string }).searchProviderId = undefined
+    runtimeRestored = true
+  } else {
+    runtimeRestored = writeVolatileSearchProvider(web, undefined)
+  }
   const settings = ctx.get('settings') as SettingsMutateLike | undefined | null
   if (settings !== undefined && settings !== null) {
     const run = function (): void {
@@ -1511,17 +1621,11 @@ function restoreSearchProviderSelection(ctx: HostContext, web: WebInstanceLike, 
     }
     try {
       run()
-      return true
     } catch (error) {
       warn(`清除 web.searchProvider 失败: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  const legacy = (web as { searchProviderId?: unknown }).searchProviderId
-  if (legacy !== undefined || 'searchProviderId' in (web as object)) {
-    ;(web as { searchProviderId?: string }).searchProviderId = undefined
-    return true
-  }
-  return writeVolatileSearchProvider(web, undefined)
+  return runtimeRestored
 }
 
 /** cordis 的 volatile 写协议（`createVolatile` 定义的共享符号）。 */
@@ -1536,7 +1640,9 @@ function writeVolatileSearchProvider(web: WebInstanceLike, id: string | undefine
   if (typeof write !== 'function') return false
   try {
     ;(write as (value: unknown) => void).call(ref, id)
-    log(`已通过 volatile 引用切换搜索后端为 ${String(id)}（内存态，重启后恢复）`)
+    log(id === undefined
+      ? '已通过 volatile 引用清除搜索后端选择（内存态）'
+      : `已通过 volatile 引用切换搜索后端为 ${id}（内存态）`)
     return true
   } catch (error) {
     warn(`切换 volatile searchProvider 失败: ${error instanceof Error ? error.message : String(error)}`)
@@ -1547,8 +1653,14 @@ function writeVolatileSearchProvider(web: WebInstanceLike, id: string | undefine
 /** 卸载时恢复后端选择（若本插件接管过）。 */
 function restoreWebSearchSelection(ctx: HostContext, web: WebServiceLike): void {
   const original = originalSearchProviderIds.get(web as object)
-  if (!originalSearchProviderIds.has(web as object)) return
-  writeSearchProviderSelection(ctx, web as WebInstanceLike, original as string)
+  const current = readConfiguredSearchProvider(web as object)
+  // 从未接管、且当前也不是本插件：不要碰用户的选择。
+  if (!originalSearchProviderIds.has(web as object) && current !== ZH_WEB_SEARCH_PROVIDER_ID) return
+  if (original !== undefined && original !== ZH_WEB_SEARCH_PROVIDER_ID) {
+    writeSearchProviderSelection(ctx, web as WebInstanceLike, original)
+  } else {
+    restoreSearchProviderSelection(ctx, web as WebInstanceLike, true)
+  }
 }
 
 /**
@@ -1676,7 +1788,13 @@ export function installWebSearchProvider(ctx: HostContext, deps: WebSearchInstal
     const attemptSelection = (): boolean => {
       const took = applyWebSearchSelection(ctx, deps.isEnabled(), deps.searchOrder())
       if (took) {
-        log(`搜索后端已接管（provider id: ${ZH_WEB_SEARCH_PROVIDER_ID}，优先级：${deps.searchOrder().join(' → ')}）`)
+        const live = getConfiguredWebSearchProvider(ctx)
+        if (live === ZH_WEB_SEARCH_PROVIDER_ID) {
+          log(`搜索后端已接管（provider id: ${ZH_WEB_SEARCH_PROVIDER_ID}，优先级：${deps.searchOrder().join(' → ')}）`)
+        } else {
+          // 运行态写入与持久化是两条通道；异步通道尚未落地时不能谎报「已接管」。
+          log(`搜索后端接管已提交（当前 configured=${live ?? 'null'}，等待持久化通道生效）`)
+        }
       }
       return took
     }
@@ -1719,7 +1837,12 @@ export function installWebSearchProvider(ctx: HostContext, deps: WebSearchInstal
       log('网络搜索 provider 已由上一实例注册，复用其注册并继续接管选路')
       try {
         const took = applyWebSearchSelection(ctx, deps.isEnabled(), deps.searchOrder())
-        if (took) log(`搜索后端已接管（复用注册，provider id: ${ZH_WEB_SEARCH_PROVIDER_ID}）`)
+        if (took) {
+          const live = getConfiguredWebSearchProvider(ctx)
+          log(live === ZH_WEB_SEARCH_PROVIDER_ID
+            ? `搜索后端已接管（复用注册，provider id: ${ZH_WEB_SEARCH_PROVIDER_ID}）`
+            : `搜索后端接管已提交（复用注册，当前 configured=${live ?? 'null'}）`)
+        }
       } catch {
         // 接管失败不影响插件其余功能。
       }

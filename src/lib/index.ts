@@ -328,19 +328,27 @@ function resolveSessionDeleteDeps(ctx: HostContext) {
 // 「网络搜索」：web 服务可能在本文之后才挂载完成，注册失败/缺席时监听
 // internal/service 事件重试（session-delete 同款模式）；成功注册或本插件
 // 卸载后停止重试。Fiber 卸载时 provider 由 web seam 的 effect 自行释放
-// （registerProvider 内部 ctx.effect 绑定调用方 fiber）。
+// （registerProvider 内部 ctx.effect 绑定调用方 fiber），选路恢复由下面注册的
+// cleanup effect 负责。
 function installWebSearchRetry(ctx: HostContext): void {
+  let cleanup: (() => unknown) | undefined
+  // 选路恢复必须挂到本插件的 fiber 上。installWebSearchProvider 返回的 disposer
+  // 只负责「恢复原值 + 注销 provider」，不注册 ctx.effect 就不会在卸载时执行：
+  // web seam 会自行释放 provider，但 searchProvider 永远停在 dsh-zh-web，
+  // 卸载后所有搜索报 configured provider not registered（2026-10-23 实测）。
+  ctx.effect(() => () => cleanup?.(), 'dsh-zh web search selection restore')
+
   const install = function (): boolean {
     const web = ctx.get('web')
     if (web === undefined || web === null) return false
-    const dispose = installWebSearchProvider(ctx, {
+    cleanup = installWebSearchProvider(ctx, {
       isEnabled: () => getModelState().zhWebSearch,
       searchOrder: () => getModelState().zhSearchOrder,
     })
     // provider 注册成功后补一次工具壳评估：agent 枚举早于 web 服务就绪时，
     // 壳因 scoped web 缺席未装上，此时补装。
-    if (dispose !== undefined) agentSearchToolHandle?.refresh()
-    return dispose !== undefined
+    if (cleanup !== undefined) agentSearchToolHandle?.refresh()
+    return cleanup !== undefined
   }
   if (install()) return
   // 退订用 ctx.on 返回的 disposer（cordis 没有 ctx.off）。
@@ -357,14 +365,19 @@ function installWebSearchRetry(ctx: HostContext): void {
 // 「网页读取」：web 服务可能在本文之后才挂载完成，注册失败/缺席时监听
 // internal/service 事件重试（与网络搜索同款模式）。
 function installWebFetchRetry(ctx: HostContext): void {
+  let cleanup: (() => unknown) | undefined
+  // 同搜索链：恢复选路必须挂到 fiber 上，否则卸载后 fetchProvider 停在已注销的
+  // dsh-zh-web-fetch（2026-10-23 实测）。
+  ctx.effect(() => () => cleanup?.(), 'dsh-zh web fetch selection restore')
+
   const install = function (): boolean {
     const web = ctx.get('web')
     if (web === undefined || web === null) return false
-    const dispose = installWebFetchProvider(ctx, {
+    cleanup = installWebFetchProvider(ctx, {
       isEnabled: () => getModelState().zhWebFetch,
       fetchOrder: () => getModelState().zhFetchOrder,
     })
-    return dispose !== undefined
+    return cleanup !== undefined
   }
   if (install()) return
   let stopRetry: (() => unknown) | undefined

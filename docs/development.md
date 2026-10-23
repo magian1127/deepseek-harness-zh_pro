@@ -952,13 +952,36 @@ agent-loop 硬编码拼接，官方渲染侧永远是英文；按用户需求在
   该字段被移除**，改读 `config.searchProvider` 这个 volatile 引用。此时
   `web.searchProviderId = 'dsh-zh-web'` 只是往实例挂一个没人读的普通属性，
   接管会**静默失效**（2026-10-17 实测：0.2.1-rc.2 上 grep `lib/index.js` 已无该
-  字段）。`applyWebSearchSelection` 因此按可用性依次尝试：
-  ① `ctx.settings.update('web', { searchProvider })`——官方、持久化、volatile
-  实时生效，0.2.1+ 主通道；② 旧宿主实例字段；③ 兜底写
-  `Symbol.for('cosmokit.volatile.write')`（不持久化，仅 settings 缺席时用）。
-  清空覆盖**不能**用 `update(..., { searchProvider: undefined })`：官方
-  `cloneJsonShaped` 跳过 `undefined` 键（稀疏补丁语义），写入等于没写；必须
+  字段）。`writeSearchProviderSelection` 因此**先写运行态、再持久化**：
+  ① 旧宿主实例字段或 `Symbol.for('cosmokit.volatile.write')`（不经过 Loader，
+  在 HMR 事务内也安全，运行中安装/热重载后立即生效）；②
+  `ctx.settings.update('web', { searchProvider })` 只负责把选择写进 profile
+  patch——它内部走 `configEditor.edit → hmr.runExclusive`，而热重载的 apply
+  本身就在 HMR 事务里，嵌套调用必被拒（`HMR transactions cannot be nested`）。
+  持久化失败不能把接管标记为失败，否则运行中安装/热重载永远选不中 `dsh-zh-web`；
+  下次 apply（冷启动）会再尝试落盘。清空覆盖**不能**用
+  `update(..., { searchProvider: undefined })`：官方 `cloneJsonShaped` 跳过
+  `undefined` 键（稀疏补丁语义），写入等于没写；必须
   `settings.mutate('web', [{ op: 'unset', path: ['searchProvider'] }])`。
+  卸载恢复同样先恢复运行态，再尝试持久化，避免在 HMR 事务内留下指向已注销
+  provider 的选路。
+- **原值与恢复 disposer 的生命周期（2026-10-23 卸载实测）**：
+  - 接管前的原值必须存在 `globalThis` 品牌符号里的 WeakMap（`sharedWeakMap`，
+    key 如 `deepseek-harness-zh_pro.web-search-originals`）。模块级 WeakMap 会随
+    热重载换实例丢失，新实例会把当前值 `dsh-zh-web` 记成原值，卸载时“恢复”到自己。
+  - 记录原值时优先读 web 行的**持久化 config**（`ctx.loader.entries()` 里
+    `name === '@deepseek-ai/dsh-web'` 的 `options.config.searchProvider`），
+    运行时值只作回退——volatile 选路可能被别的路径临时重置。
+  - `installWebSearchProvider` / `installWebFetchProvider` 返回的 disposer
+    必须由 `installWebSearchRetry` / `installWebFetchRetry` 用
+    `ctx.effect(() => () => cleanup?.())` 挂到插件 fiber 上。只返回不注册时，
+    热卸载会注销 provider，但选路永远停在 `dsh-zh-web`，卸载后所有搜索报
+    `configured provider ... not registered`。
+  - 原值未知（跨进程接管过、持久化值也已是本插件）时，恢复为第一个可用的
+    非本插件 provider（search 优先 `deepseek-official`，fetch 优先 `http`）；
+    没有可用项才清空覆盖。绝不能留已注销的 id。
+  `publishLiveSelection` 必须在写入**之后**调用，诊断里的 `configured` 才是
+  实际选路；写入前调用会一直显示旧值。
 - **优先级列表 `zhSearchOrder`** 驱动复合 provider 的尝试顺序
   （`ZH_SEARCH_ORDER_DEFAULT`：`deepseek-search-api` → `zhipu-web-search-prime`
   → `ZH_FREE_MULTI_BACKEND_ID`）。占位 id `dsh-zh-free` **不是真实注册的

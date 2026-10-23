@@ -431,6 +431,171 @@ try {
     check(registeredProviders.has('dsh-zh-web'), false, '卸载时从注册表移除 provider')
   }
 
+  // ---- HMR 事务内 settings.update 被拒：运行态必须由 volatile 先接管 ----
+  // 2026-10-23 实测：运行中安装/热重载的 apply 本身在 hmr.runExclusive 里，
+  // settings.update → configEditor.edit → hmr.runExclusive 立即报
+  // "HMR transactions cannot be nested"。若只在 settings 成功时才认接管，
+  // dsh-zh-web 永远不会被选中，官方 provider 的失败也不会落到本插件的级联。
+  {
+    let configured: string | undefined = 'deepseek-official'
+    let nestedWrites = 0
+    const volatileRef = {
+      get: function () { return configured },
+      [Symbol.for('cosmokit.volatile.write')]: function (value: string | undefined) { configured = value },
+    }
+    const nestedProviders = new Map<string, unknown>()
+    const nestedWeb = {
+      config: { searchProvider: volatileRef },
+      searchProviders: nestedProviders,
+      registerSearchProvider: function (provider: { id: string }) {
+        nestedProviders.set(provider.id, provider)
+        return function () { nestedProviders.delete(provider.id) }
+      },
+    }
+    const nestedSettings = {
+      update: async function () {
+        nestedWrites += 1
+        throw new Error('HMR transactions cannot be nested')
+      },
+    }
+    const nestedCtx = {
+      fiber: { entry: { options: { id: 'dsh-zh' } } },
+      loader: { entries: function () { return [] } },
+      get: function (name: string) {
+        if (name === 'settings') return nestedSettings
+        if (name === 'web') return nestedWeb
+        return undefined
+      },
+      on: function () {},
+      effect: function (setup: () => unknown) { setup() },
+    }
+    const quiet = function (task: () => unknown) {
+      const log = console.log
+      const warn = console.warn
+      try {
+        console.log = function () {}
+        console.warn = function () {}
+        return task()
+      } finally {
+        console.log = log
+        console.warn = warn
+      }
+    }
+    const nestedSearch = await import(`./lib/web-search.js?verify=nested-${Date.now()}-${Math.random()}`)
+    const dispose = quiet(function () {
+      return nestedSearch.installWebSearchProvider(nestedCtx, {
+        isEnabled: () => true,
+        searchOrder: () => ['deepseek-search-api', 'dsh-zh-free'],
+      })
+    })
+    await new Promise(function (resolve) { setTimeout(resolve, 0) })
+    check(configured, 'dsh-zh-web', 'HMR 事务内 settings 写失败仍由 volatile 接管运行态')
+    check(nestedWrites > 0, true, '仍尝试了 settings.update 持久化')
+    const nestedState = nestedSearch.getWebSearchSelectionState()
+    check(nestedState?.channel, 'volatile', '诊断记录通道为 volatile（运行态已生效）')
+    check(nestedState?.outcome, 'ok', '持久化失败不再把接管标记为失败')
+    check(nestedSearch.getLiveWebSearchSelection()?.configured, 'dsh-zh-web', '写入后快照反映实际选路')
+    check(nestedProviders.has('dsh-zh-web'), true, '复合 provider 仍已注册')
+
+    // 卸载同样跑在 HMR 事务内：运行态必须先恢复，不能留下指向已注销 provider 的选路。
+    dispose?.()
+    await new Promise(function (resolve) { setTimeout(resolve, 0) })
+    check(configured, 'deepseek-official', '卸载时 volatile 恢复接管前的值')
+    check(nestedProviders.has('dsh-zh-web'), false, '卸载时从注册表移除 provider')
+  }
+
+  // ---- 卸载恢复：原值跨热重载实例共享；未知时回落到可用官方 provider ----
+  {
+    const makeWeb = function (initial: string) {
+      const state = { configured: initial as string | undefined }
+      const ref = {
+        get: function () { return state.configured },
+        [Symbol.for('cosmokit.volatile.write')]: function (value: string | undefined) { state.configured = value },
+      }
+      const providers = new Map<string, unknown>()
+      const web = {
+        config: { searchProvider: ref },
+        searchProviders: providers,
+        registerSearchProvider: function (provider: { id: string }) {
+          providers.set(provider.id, provider)
+          return function () { providers.delete(provider.id) }
+        },
+      }
+      return { web, state, providers }
+    }
+    const settings = { update: async function () {} }
+    const makeCtx = function (web: unknown, entries: unknown[] = []) {
+      return {
+        fiber: { entry: { options: { id: 'dsh-zh' } } },
+        loader: { entries: function () { return entries } },
+        get: function (name: string) {
+          if (name === 'settings') return settings
+          if (name === 'web') return web
+          return undefined
+        },
+        on: function () {},
+        effect: function (setup: () => unknown) { setup() },
+      }
+    }
+    const quiet = function (task: () => unknown) {
+      const log = console.log
+      const warn = console.warn
+      try {
+        console.log = function () {}
+        console.warn = function () {}
+        return task()
+      } finally {
+        console.log = log
+        console.warn = warn
+      }
+    }
+
+    // 1) 热重载后的新模块实例必须读到上一实例记录的原值，而不是把 dsh-zh-web 当原值。
+    {
+      const { web, state } = makeWeb('deepseek-search-api')
+      const ctx = makeCtx(web)
+      const first = await import(`./lib/web-search.js?verify=origin-a-${Date.now()}-${Math.random()}`)
+      const dispose = quiet(function () {
+        return first.installWebSearchProvider(ctx, {
+          isEnabled: () => true,
+          searchOrder: () => ['deepseek-search-api'],
+        })
+      })
+      const second = await import(`./lib/web-search.js?verify=origin-b-${Date.now()}-${Math.random()}`)
+      quiet(function () { second.applyWebSearchSelection(ctx, false, []) })
+      check(state.configured, 'deepseek-search-api', '新实例按上一实例记录的原值恢复（不再恢复到自己）')
+      dispose?.()
+    }
+
+    // 2) 当前已是本插件、原值只在 web 行持久化配置里：也要能恢复。
+    {
+      const { web, state } = makeWeb('dsh-zh-web')
+      const ctx = makeCtx(web, [{
+        options: { name: '@deepseek-ai/dsh-web', config: { searchProvider: 'deepseek-search-api' } },
+      }])
+      const instance = await import(`./lib/web-search.js?verify=origin-persisted-${Date.now()}-${Math.random()}`)
+      const dispose = quiet(function () {
+        return instance.installWebSearchProvider(ctx, {
+          isEnabled: () => true,
+          searchOrder: () => ['deepseek-search-api'],
+        })
+      })
+      dispose?.()
+      check(state.configured, 'deepseek-search-api', '原值丢失时从持久化配置恢复')
+    }
+
+    // 3) 原值完全未知：不能留下 dsh-zh-web，回落到可用官方 provider。
+    {
+      const { web, state, providers } = makeWeb('dsh-zh-web')
+      providers.set('dsh-zh-web', { id: 'dsh-zh-web', available: () => true, search: async () => ({ sources: [], truncated: false }) })
+      providers.set('deepseek-official', { id: 'deepseek-official', available: () => true, search: async () => ({ sources: [], truncated: false }) })
+      const ctx = makeCtx(web)
+      const instance = await import(`./lib/web-search.js?verify=origin-unknown-${Date.now()}-${Math.random()}`)
+      quiet(function () { instance.applyWebSearchSelection(ctx, false, []) })
+      check(state.configured, 'deepseek-official', '原值未知时回落到可用官方 provider')
+    }
+  }
+
   // ---- 每查询条数独立于后端开关（zhSearchPerQuery > 0 时仍装壳） ----
   {
     const scopeTools: Array<{ name: string }> = []

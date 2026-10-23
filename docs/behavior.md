@@ -412,17 +412,29 @@ DeepSeek 网页版的搜索开关，尺寸与字重对齐同行的「权限」�
 **选路写入通道（宿主代际相关，勿退回旧写法）**：DSH 0.2.1（commit `fda98dadd2`）
 起 `WebRuntime` 已**移除** `searchProviderId` 实例字段，改为 `config.searchProvider`
 这个 volatile 引用。旧写法 `web.searchProviderId = 'dsh-zh-web'` 只是往实例上挂一个
-没人读的普通属性，接管会**静默失效**。当前实现按可用性依次尝试三条通道：
+没人读的普通属性，接管会**静默失效**。当前实现**先写运行态、再持久化**：
 
-1. 官方 `ctx.settings.update('web', { searchProvider })`——持久化、volatile 实时
-   生效，DSH ≥ 0.2.1 的主通道；
-2. 旧宿主（≤ 0.2.0）的实例字段 `web.searchProviderId`；
-3. 兜底直接写 volatile 引用的 `cosmokit.volatile.write`（**不持久化**，重启即丢，
-   仅在 settings 服务缺席时使用）。
+1. 运行态通道：旧宿主（≤ 0.2.0）的实例字段 `web.searchProviderId`，或 DSH ≥ 0.2.1
+   的 volatile 引用 `cosmokit.volatile.write`。这条通道不经过 Loader，**在 HMR
+   事务内也安全**，所以热重载/运行中安装后立即生效；
+2. 持久化通道：官方 `ctx.settings.update('web', { searchProvider })`。它内部会走
+   `configEditor.edit → hmr.runExclusive`；运行中安装/热重载的 apply 本身就在
+   HMR 事务里，嵌套调用必被拒（`HMR transactions cannot be nested`）。因此它只负责
+   把选择写进 profile patch：失败时运行态仍然生效，不把整次接管记为失败，
+   下次 apply（冷启动）会再尝试落盘。
 
 清空覆盖时不能用 `update('web', { searchProvider: undefined })`：官方 settings 的
 `cloneJsonShaped` 会跳过值为 `undefined` 的键（稀疏补丁语义），写入等于没写；必须走
-`settings.mutate('web', [{ op: 'unset', path: ['searchProvider'] }])`。
+`settings.mutate('web', [{ op: 'unset', path: ['searchProvider'] }])`。卸载恢复同样
+先恢复运行态，再尝试持久化——否则在 HMR 事务内卸载会残留指向已注销 provider 的
+`dsh-zh-web`，所有搜索报 `configured provider ... not registered`。
+
+接管前的原值存在 `globalThis` 品牌符号里（跨热重载实例共享），恢复 disposer 通过
+`ctx.effect` 挂到插件 fiber 上。2026-10-23 实测过两个坑：模块级 WeakMap 会随热重载
+丢记录，新实例把 `dsh-zh-web` 自己当成原值；只把 disposer 作为 `installWebSearchProvider`
+的返回值、不注册 `ctx.effect`，卸载时 web seam 会注销 provider，但选路仍停在
+`dsh-zh-web`。原值未知时（跨进程接管过、持久化值也已是本插件）恢复为第一个可用的
+非本插件 provider（优先 `deepseek-official`；fetch 优先 `http`），绝不留下已注销的 id。
 
 组合 provider 每次搜索按**「搜索后端优先级」列表**（`zhSearchOrder`）从上到下挑选
 后端：

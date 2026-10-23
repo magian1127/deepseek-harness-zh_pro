@@ -5,6 +5,7 @@ export interface LoaderEntryLike {
   options?: {
     id?: string
     name?: string
+    config?: Record<string, unknown>
   }
   fiber?: {
     dispose?: Disposer

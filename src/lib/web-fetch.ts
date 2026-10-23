@@ -19,7 +19,7 @@
 // DNS rebinding 防护（与智谱插件的 http-fallback 同一残余边界，如实文档化）。
 import { ZH_FREE_FETCH_BACKEND_ID } from './constants.js'
 import { ZH_WEB_PROVIDER_ERROR_CODE, ZhWebError, webSearchTransport } from './web-search.js'
-import { log, warn } from './util.js'
+import { log, sharedWeakMap, warn } from './util.js'
 import type { HostContext } from './types.js'
 
 /**
@@ -418,8 +418,10 @@ export interface WebFetchInstallDeps {
   fetchOrder(): readonly string[]
 }
 
-/** 各 web seam 实例被接管前的原始 fetchProvider 值（同搜索链的 WeakMap 模式）。 */
-const originalFetchProviderIds = new WeakMap<object, string | undefined>()
+/** 各 web seam 实例被接管前的原始 fetchProvider 值（同搜索链：必须跨热重载共享）。 */
+const originalFetchProviderIds = sharedWeakMap<object, string | undefined>(
+  Symbol.for('deepseek-harness-zh_pro.web-fetch-originals'),
+)
 
 /** 读取当前生效的 fetchProvider（duck-type，兼容 volatile 引用与实例字段）。 */
 function readConfiguredFetchProvider(web: object): string | undefined {
@@ -428,6 +430,53 @@ function readConfiguredFetchProvider(web: object): string | undefined {
   if (typeof value === 'string') return value
   const legacy = (web as { fetchProviderId?: unknown }).fetchProviderId
   return typeof legacy === 'string' ? legacy : undefined
+}
+
+/** web 行持久化配置里的 fetchProvider（不是运行时 volatile 覆盖）。 */
+function persistedFetchProvider(ctx: HostContext): string | undefined {
+  try {
+    for (const entry of ctx.loader.entries()) {
+      if (entry?.options?.name !== '@deepseek-ai/dsh-web') continue
+      const value = entry.options.config?.fetchProvider
+      return typeof value === 'string' && value.length > 0 ? value : undefined
+    }
+  } catch {
+    // loader 不可用：按未知处理。
+  }
+  return undefined
+}
+
+/** 记录接管前的原值；当前值已是本插件时回退读持久化配置（同搜索链）。 */
+function rememberOriginalFetchProvider(ctx: HostContext, web: WebInstanceLike, current: string | undefined): void {
+  if (originalFetchProviderIds.has(web)) return
+  // 持久化配置是用户选择的权威来源；运行时值可能被别的路径临时重置。
+  const persisted = persistedFetchProvider(ctx)
+  if (persisted !== undefined && persisted !== ZH_WEB_FETCH_PROVIDER_ID) {
+    originalFetchProviderIds.set(web, persisted)
+    return
+  }
+  if (current !== undefined && current !== ZH_WEB_FETCH_PROVIDER_ID) {
+    originalFetchProviderIds.set(web, current)
+    return
+  }
+  // 同搜索链：记录「未知」，卸载时走清空/可用 provider 兜底。
+  originalFetchProviderIds.set(web, undefined)
+}
+
+/** 原值丢失时选一个可用的非本插件 fetch provider 兜底。 */
+function fallbackFetchProvider(web: WebInstanceLike): string | undefined {
+  const providers = web.fetchProviders
+  if (!(providers instanceof Map)) return undefined
+  const usable: string[] = []
+  for (const [id, candidate] of providers) {
+    if (id === ZH_WEB_FETCH_PROVIDER_ID) continue
+    try {
+      if (typeof candidate?.available === 'function' && candidate.available()) usable.push(id)
+    } catch {
+      // available() 抛错：当作不可用。
+    }
+  }
+  return usable.find((id) => id === 'http') ?? usable[0]
 }
 
 /** cordis 的 volatile 写协议（web-search.ts 同款共享符号）。 */
@@ -440,7 +489,9 @@ function writeVolatileFetchProvider(web: WebInstanceLike, id: string | undefined
   if (typeof write !== 'function') return false
   try {
     ;(write as (value: unknown) => void).call(ref, id)
-    log(`已通过 volatile 引用切换读取后端为 ${String(id)}（内存态，重启后恢复）`)
+    log(id === undefined
+      ? '已通过 volatile 引用清除读取后端选择（内存态）'
+      : `已通过 volatile 引用切换读取后端为 ${id}（内存态）`)
     return true
   } catch (error) {
     warn(`切换 volatile fetchProvider 失败: ${error instanceof Error ? error.message : String(error)}`)
@@ -457,6 +508,8 @@ export interface WebFetchSelectionRecord {
   outcome: 'pending' | 'ok' | 'error'
   error?: string
   before: string | null
+  /** 记录到的接管前原值（null/缺省 = 未知，卸载时走清空/回落）。 */
+  original?: string | null
 }
 const FETCH_SELECTION_STATE_KEY = Symbol.for('deepseek-harness-zh_pro.web-fetch-selection')
 
@@ -481,43 +534,81 @@ export function getWebFetchSelectionState(): WebFetchSelectionRecord | undefined
 
 function writeFetchProviderSelection(ctx: HostContext, web: WebInstanceLike, id: string): boolean {
   const before = readConfiguredFetchProvider(web) ?? null
-  const base = { at: new Date().toISOString(), target: id, before }
+  const base = { at: new Date().toISOString(), target: id, before, original: originalFetchProviderIds.get(web) ?? null }
+  const effective = (): boolean => readConfiguredFetchProvider(web) === id
+
+  // 通道 0：运行态（不经过 Loader，HMR 事务内安全）。settings.update 会走
+  // configEditor.edit → hmr.runExclusive，运行中安装/热重载的 apply 已在事务里，
+  // 嵌套调用必被拒；只靠它会让接管在热重载路径上静默失效（搜索链同款修复）。
+  const legacy = (web as { fetchProviderId?: unknown }).fetchProviderId
+  let runtimeWritten = false
+  if (legacy !== undefined || 'fetchProviderId' in (web as object)) {
+    ;(web as { fetchProviderId?: string }).fetchProviderId = id
+    runtimeWritten = true
+    writeFetchSelectionState({ ...base, channel: 'legacy-field', outcome: effective() ? 'ok' : 'error' })
+  } else {
+    runtimeWritten = writeVolatileFetchProvider(web, id)
+    if (runtimeWritten) {
+      writeFetchSelectionState({ ...base, channel: 'volatile', outcome: effective() ? 'ok' : 'error' })
+    }
+  }
+
+  // 通道 1：持久化（best-effort；失败不影响本进程的接管）。
   const settings = ctx.get('settings') as SettingsServiceLike | undefined | null
   if (settings !== undefined && settings !== null && typeof settings.update === 'function') {
-    writeFetchSelectionState({ ...base, channel: 'settings', outcome: 'pending' })
     try {
       void settings.update('web', { fetchProvider: id }).then(() => {
-        patchFetchSelectionState({ outcome: 'ok' })
+        patchFetchSelectionState({
+          channel: 'settings',
+          outcome: effective() ? 'ok' : 'error',
+          error: effective() ? undefined : '持久化成功但选路未指向目标 provider',
+        })
       }, (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error)
-        patchFetchSelectionState({ outcome: 'error', error: message.slice(0, 200) })
-        warn(`写入 web.fetchProvider 失败: ${message}`)
+        patchFetchSelectionState({
+          outcome: runtimeWritten && effective() ? 'ok' : 'error',
+          error: `持久化失败（运行态${runtimeWritten ? '已' : '未'}生效）: ${message}`.slice(0, 200),
+        })
+        warn(`持久化 web.fetchProvider 失败（运行态${runtimeWritten ? '已' : '未'}生效）: ${message}`)
       })
       return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      patchFetchSelectionState({ outcome: 'error', error: message.slice(0, 200) })
+      patchFetchSelectionState({
+        outcome: runtimeWritten && effective() ? 'ok' : 'error',
+        error: message.slice(0, 200),
+      })
       warn(`调用 settings.update 失败: ${message}`)
     }
   }
-  const legacy = (web as { fetchProviderId?: unknown }).fetchProviderId
-  if (legacy !== undefined || 'fetchProviderId' in (web as object)) {
-    ;(web as { fetchProviderId?: string }).fetchProviderId = id
-    writeFetchSelectionState({ ...base, channel: 'legacy-field', outcome: 'ok' })
-    return true
-  }
-  const viaVolatile = writeVolatileFetchProvider(web, id)
-  if (!viaVolatile) {
+
+  if (!runtimeWritten) {
     writeFetchSelectionState({ ...base, channel: 'none', outcome: 'error', error: '无可用写通道'.slice(0, 200) })
     warn('无可用写通道：web.fetchProvider 接管未生效')
-  } else {
-    writeFetchSelectionState({ ...base, channel: 'volatile', outcome: 'ok' })
   }
-  return viaVolatile
+  return runtimeWritten
 }
 
 /** 清空 fetchProvider 覆盖（mutate unset 优先；update(undefined) 会跳过 undefined 键）。 */
 function restoreFetchProviderSelection(ctx: HostContext, web: WebInstanceLike): boolean {
+  // 原值未知时先回落到可用的非本插件 provider，避免 seam 报 ambiguous 或
+  // 留下已注销的 dsh-zh-web-fetch。
+  const fallback = fallbackFetchProvider(web)
+  if (fallback !== undefined) {
+    const took = writeFetchProviderSelection(ctx, web, fallback)
+    log(`读取后端原值未知，已回落到可用后端 ${fallback}`)
+    return took
+  }
+  // 运行态先恢复：卸载/关闭可能发生在 HMR 事务内，settings.mutate 会嵌套失败，
+  // 只走 settings 会残留指向已注销 provider 的 dsh-zh-web-fetch。
+  let runtimeRestored = false
+  const legacy = (web as { fetchProviderId?: unknown }).fetchProviderId
+  if (legacy !== undefined || 'fetchProviderId' in (web as object)) {
+    ;(web as { fetchProviderId?: string }).fetchProviderId = undefined
+    runtimeRestored = true
+  } else {
+    runtimeRestored = writeVolatileFetchProvider(web, undefined)
+  }
   const settings = ctx.get('settings') as SettingsMutateLike | undefined | null
   if (settings !== undefined && settings !== null) {
     const run = function (): void {
@@ -535,17 +626,11 @@ function restoreFetchProviderSelection(ctx: HostContext, web: WebInstanceLike): 
     }
     try {
       run()
-      return true
     } catch (error) {
       warn(`清除 web.fetchProvider 失败: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
-  const legacy = (web as { fetchProviderId?: unknown }).fetchProviderId
-  if (legacy !== undefined || 'fetchProviderId' in (web as object)) {
-    ;(web as { fetchProviderId?: string }).fetchProviderId = undefined
-    return true
-  }
-  return writeVolatileFetchProvider(web, undefined)
+  return runtimeRestored
 }
 
 /**
@@ -584,10 +669,11 @@ export function applyWebFetchSelection(ctx: HostContext, active: boolean, order:
   const current = readConfiguredFetchProvider(web)
 
   if (wantActive) {
-    if (!originalFetchProviderIds.has(web)) originalFetchProviderIds.set(web, current)
+    rememberOriginalFetchProvider(ctx, web, current)
     if (current === ZH_WEB_FETCH_PROVIDER_ID) {
       writeFetchSelectionState({
         at: new Date().toISOString(), target: ZH_WEB_FETCH_PROVIDER_ID, before: current,
+        original: originalFetchProviderIds.get(web) ?? null,
         channel: 'none', outcome: 'ok', error: '已是本插件（无需写入）',
       })
       return true
@@ -595,11 +681,14 @@ export function applyWebFetchSelection(ctx: HostContext, active: boolean, order:
     return writeFetchProviderSelection(ctx, web, ZH_WEB_FETCH_PROVIDER_ID)
   }
 
-  if (!originalFetchProviderIds.has(web)) return false
   if (current !== ZH_WEB_FETCH_PROVIDER_ID) return false
   const original = originalFetchProviderIds.get(web)
-  if (original === undefined) restoreFetchProviderSelection(ctx, web)
-  else writeFetchProviderSelection(ctx, web, original)
+  if (original !== undefined && original !== ZH_WEB_FETCH_PROVIDER_ID) {
+    writeFetchProviderSelection(ctx, web, original)
+  } else {
+    // 原值未知：回落到可用官方 provider 或清空，不能留下已注销的 dsh-zh-web-fetch。
+    restoreFetchProviderSelection(ctx, web)
+  }
   return false
 }
 
@@ -717,10 +806,13 @@ export function installWebFetchProvider(ctx: HostContext, deps: WebFetchInstallD
       const webInstance = ctx.get('web') as WebInstanceLike | undefined | null
       if (webInstance !== undefined && webInstance !== null) {
         const current = readConfiguredFetchProvider(webInstance)
-        if (originalFetchProviderIds.has(webInstance) && current === ZH_WEB_FETCH_PROVIDER_ID) {
+        if (current === ZH_WEB_FETCH_PROVIDER_ID) {
           const original = originalFetchProviderIds.get(webInstance)
-          if (original === undefined) restoreFetchProviderSelection(ctx, webInstance)
-          else writeFetchProviderSelection(ctx, webInstance, original)
+          if (original !== undefined && original !== ZH_WEB_FETCH_PROVIDER_ID) {
+            writeFetchProviderSelection(ctx, webInstance, original)
+          } else {
+            restoreFetchProviderSelection(ctx, webInstance)
+          }
         }
       }
       dispose()
