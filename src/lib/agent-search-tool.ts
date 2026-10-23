@@ -69,6 +69,13 @@ export interface AgentSearchToolDeps {
    * 因为「后端由谁提供」与「结果怎么裁剪/合并」是两件事。
    */
   perQuery(): number
+  /**
+   * 会话级「智能搜索」开关（输入框下方按钮）。关闭时该会话不装壳——
+   * 作用域自身的注册不受自己的 tools.restrict() 约束，所以全局开关之外
+   * 必须在这里再判一次，否则壳会绕过用户关掉的会话开关。
+   * 缺席时按「不限会话」处理（老宿主 / 回归夹具）。
+   */
+  isAgentEnabled?(agentLike: unknown): boolean
 }
 
 export interface AgentSearchToolHandle {
@@ -508,6 +515,10 @@ export function installAgentSearchTool(ctx: HostContext, deps: AgentSearchToolDe
     // 装壳条件：后端接管开启（zhWebSearch）**或** 配了每查询条数（zhSearchPerQuery > 0）。
     // 后者独立成立：用户可能只想控制「显示多少条/怎么合并」，后端仍走部署配置。
     if (!deps.isEnabled() && deps.perQuery() <= 0) return
+    // 会话级「智能搜索」开关关闭：本壳是该 Agent 作用域**自身**的注册，不受
+    // 自己那条 tools.restrict() 约束，所以必须在这里再判一次，否则用户关掉的
+    // 会话仍会拿到 web_search 工具与说明段。
+    if (typeof deps.isAgentEnabled === 'function' && !deps.isAgentEnabled(agentLike)) return
     if (isMinimalAgent(agentLike)) return
     // 探测让位：智谱包行存在 → 智谱壳是唯一 owner（其壳有自己的条数与合并语义）。
     if (zhipuRowPresent()) return

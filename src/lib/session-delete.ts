@@ -60,6 +60,7 @@ import { trashItem, restoreItem } from './trash.js'
 import { handleDiagnosticsRoute } from './diagnostics.js'
 import { handleSearchCredentialRoute } from './search-credential.js'
 import { handlePluginSyncRoute } from './plugin-sync.js'
+import { handleSearchToggleRoute } from './session-search-toggle.js'
 import { ensureFreshScan, getServiceMonitorSnapshot, killServiceOwner, openServiceOwnerDirectory, persistEndpointToBaseline, probeTargets, rebaselineEndpoint, resolveServiceOwner, unbaselineEndpoint } from './service-monitor.js'
 import type { HostContext } from './types.js'
 
@@ -793,6 +794,7 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
         if (req.method === 'GET') {
           if (handleDiagnosticsRoute(req, res, pathname)) return
           if (handleSearchCredentialRoute(req, res, pathname, null)) return
+          if (handleSearchToggleRoute(req, res, pathname, null, url)) return
           if (await handlePluginSyncRoute(req, res, pathname, null, ctx)) return
           if (await handleServiceMonitorRoutes(req, res, pathname, {}, url)) return
           writeJson(res, 404, { ok: false, error: { code: 'not-found', message: 'unknown method' } })
@@ -817,6 +819,7 @@ export function installSessionDeleteRoute(ctx: HostContext, deps: () => DeleteDe
 
         try {
           if (handleSearchCredentialRoute(req, res, pathname, payload)) return
+          if (handleSearchToggleRoute(req, res, pathname, payload, url)) return
           if (await handlePluginSyncRoute(req, res, pathname, payload, ctx)) return
           if (await handleServiceMonitorRoutes(req, res, pathname, payload, url)) return
           if (pathname === '/dsh-zh/api/service-monitor/unbaseline') {

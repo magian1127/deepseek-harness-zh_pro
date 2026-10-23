@@ -1,4 +1,4 @@
-// 插件装配入口：按固定顺序装配八个子系统。
+// 插件装配入口：按固定顺序装配九个子系统。
 // 顺序语义：先注册设置分区；再绑定提示词 scope；再安装自动归档；
 // 再安装中文补全（locale 重写 + DOM 增强）；再安装会话删除菜单（官方
 // 菜单注入，多选非空时由它追加批量项）、会话多选与批量操作（行首空图标位
@@ -18,4 +18,7 @@ function apply(ctx) {
   installSessionBatch(ctx)
   installArchiveView(ctx)
   installServiceMonitor(ctx)
+  // 「智能搜索」会话开关按钮：输入框下方工具行的胶囊（默认选中）。
+  // 放最后：它只注册一个会话级槽位条目，与其它子系统无顺序依赖。
+  installSearchToggle(ctx)
 }

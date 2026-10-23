@@ -2205,6 +2205,214 @@ try {
       else process.env.DSH_HOME = previousHome
     }
   }
+  // ---------- 「智能搜索」会话开关（主机半边） ----------
+  // 核心契约：关闭某会话后，web_search / web_fetch 从该会话的可见工具面消失，
+  // 且官方 tool:web_search / tool:web_fetch 说明段求值为空（不再注入模型请求）。
+  // 夹具忠实复刻官方的两条机制：
+  //   1. tools.restrict({ deny }) 只在**作用域上下文**可用，遮蔽继承面；
+  //   2. 官方 tool:web_* 段的 text 是 ({ scope }) => 工具不可见 ? '' : 指引。
+  {
+    const { installSessionSearchToggle, handleSearchToggleRoute, agentSessionId, isSessionSearchEnabled } =
+      await import('./lib/session-search-toggle.js')
+
+    /** 一个最小 Agent：作用域上下文 + 官方风格的两条提示段。 */
+    function makeAgentFixture(id: string) {
+      const visible = new Set(['web_search', 'web_fetch', 'read'])
+      const restrictions: Array<{ allow?: readonly string[]; deny?: readonly string[] }> = []
+      const sections: Array<{ name: string; clear: () => boolean }> = []
+      const scopedTools = {
+        restrict(filter: { allow?: readonly string[]; deny?: readonly string[] }) {
+          restrictions.push(filter)
+          return () => {
+            const index = restrictions.indexOf(filter)
+            if (index !== -1) restrictions.splice(index, 1)
+          }
+        },
+      }
+      const scopedCtx = { get: (name: string) => (name === 'tools' ? scopedTools : undefined) }
+      const agent = { id, ctx: scopedCtx }
+      /** 该会话当前可见的工具（继承面 ∖ 全部 deny）。 */
+      const visibleNames = () => {
+        const denied = new Set<string>()
+        for (const filter of restrictions) for (const name of filter.deny ?? []) denied.add(name)
+        return [...visible].filter(name => !denied.has(name)).sort()
+      }
+      /** 官方 tool:web_* 段求值：不可见即空串（渲染器会丢掉空段）。 */
+      const promptSections = () => {
+        const names = new Set(visibleNames())
+        return {
+          webSearch: names.has('web_search') ? 'web_search guidance' : '',
+          webFetch: names.has('web_fetch') ? 'web_fetch guidance' : '',
+        }
+      }
+      sections.push({ name: 'tool:web_search', clear: () => promptSections().webSearch === '' })
+      return { agent, visibleNames, promptSections, restrictions }
+    }
+
+    const listeners = new Map<string, Array<(payload: unknown) => void>>()
+    const effects: Array<() => unknown> = []
+    const fixtures: ReturnType<typeof makeAgentFixture>[] = []
+    const hostCtx = {
+      get(name: string) {
+        if (name === 'agents') return { list: () => fixtures.map(f => f.agent) }
+        return undefined
+      },
+      on(name: string, handler: (payload: unknown) => void) {
+        const list = listeners.get(name) ?? []
+        list.push(handler)
+        listeners.set(name, list)
+        return () => {
+          const current = listeners.get(name) ?? []
+          const index = current.indexOf(handler)
+          if (index !== -1) current.splice(index, 1)
+        }
+      },
+      effect(fn: () => unknown) { effects.push(fn() as () => unknown) },
+    }
+
+    const toggle = installSessionSearchToggle(hostCtx as never, {})
+    check(toggle !== undefined, true, '智能搜索 装配返回句柄')
+    check(isSessionSearchEnabled('s-none'), true, '智能搜索 缺省为开启（默认选中）')
+
+    // 新会话按当前状态收敛：默认开启时不产生任何 restrict。
+    const a = makeAgentFixture('session-on')
+    fixtures.push(a)
+    for (const handler of listeners.get('agent/created') ?? []) handler({ agent: a.agent })
+    check(a.restrictions.length, 0, '智能搜索 默认开启时不遮蔽任何工具')
+    check(a.visibleNames().join(','), 'read,web_fetch,web_search', '智能搜索 默认开启时联网工具仍在')
+    check(a.promptSections().webSearch, 'web_search guidance', '智能搜索 默认开启时官方说明段正常注入')
+
+    // 关闭该会话：工具从可见面消失，提示段随之变空（不再注入）。
+    toggle!.setEnabled('session-on', false)
+    check(toggle!.isEnabled('session-on'), false, '智能搜索 关闭态写入会话状态')
+    check(a.restrictions.length, 2, '智能搜索 关闭时逐工具注册两条 deny')
+    check(a.visibleNames().join(','), 'read', '智能搜索 关闭后联网工具整体下线')
+    check(a.promptSections().webSearch, '', '智能搜索 关闭后 tool:web_search 说明段求值为空（不注入）')
+    check(a.promptSections().webFetch, '', '智能搜索 关闭后 tool:web_fetch 说明段求值为空（不注入）')
+    // 工具壳装壳判定：关闭的会话不得再装本插件自己的 web_search 壳。
+    check(toggle!.isAgentEnabled(a.agent), false, '智能搜索 关闭后工具壳不再为该 Agent 装壳')
+
+    // 重新开启：遮蔽面完全撤销，能力恢复。
+    toggle!.setEnabled('session-on', true)
+    check(a.restrictions.length, 0, '智能搜索 重新开启后撤销全部遮蔽')
+    check(a.visibleNames().join(','), 'read,web_fetch,web_search', '智能搜索 重新开启后联网工具恢复')
+    check(a.promptSections().webSearch, 'web_search guidance', '智能搜索 重新开启后说明段恢复注入')
+    check(toggle!.isAgentEnabled(a.agent), true, '智能搜索 重新开启后工具壳可装壳')
+
+    // 会话级隔离：另一个会话不受影响。
+    const b = makeAgentFixture('session-other')
+    fixtures.push(b)
+    toggle!.setEnabled('session-on', false)
+    for (const handler of listeners.get('agent/created') ?? []) handler({ agent: b.agent })
+    check(b.restrictions.length, 0, '智能搜索 关闭 A 会话不遮蔽 B 会话')
+    check(b.visibleNames().filter(n => n !== 'read').length, 2, '智能搜索 B 会话联网工具仍在')
+    check(toggle!.isAgentEnabled(b.agent), true, '智能搜索 B 会话工具壳仍可装壳')
+
+    // 后创建的会话继承当前状态（按钮在会话创建前就关掉的情形）。
+    const c = makeAgentFixture('session-late-closed')
+    fixtures.push(c)
+    toggle!.setEnabled('session-late-closed', false)
+    for (const handler of listeners.get('agent/created') ?? []) handler({ agent: c.agent })
+    check(c.restrictions.length, 2, '智能搜索 预关的会话在 agent/created 时补齐遮蔽')
+    check(c.visibleNames().join(','), 'read', '智能搜索 预关的会话联网工具下线')
+    toggle!.setEnabled('session-late-closed', true)
+
+    // 工具不在继承面时安静跳过（preset 没有 tool-web）：不得抛错。
+    const noWeb = makeAgentFixture('session-no-web')
+    fixtures.push(noWeb)
+    toggle!.setEnabled('session-no-web', false)
+    for (const handler of listeners.get('agent/created') ?? []) handler({ agent: noWeb.agent })
+    check(noWeb.restrictions.length, 2, '智能搜索 工具缺失时仍按会话收敛（不抛错）')
+    toggle!.setEnabled('session-no-web', true)
+
+    // agent/disposed 必须释放该会话的遮蔽（否则同名会话重建会漏遮蔽）。
+    const d = makeAgentFixture('session-dispose')
+    fixtures.push(d)
+    toggle!.setEnabled('session-dispose', false)
+    for (const handler of listeners.get('agent/created') ?? []) handler({ agent: d.agent })
+    check(d.restrictions.length, 2, '智能搜索 关闭会话已遮蔽')
+    for (const handler of listeners.get('agent/disposed') ?? []) handler({ agent: d.agent })
+    check(d.restrictions.length, 0, '智能搜索 agent/disposed 释放该会话的遮蔽')
+
+    // 会话 id 读法与 HTTP 路由。
+    check(agentSessionId({ id: 'abc' }), 'abc', '智能搜索 从 Agent.id 读会话 id')
+    check(agentSessionId({ id: '', session: { id: 'nested' } }), 'nested', '智能搜索 回退读 session.id')
+    check(agentSessionId({}), undefined, '智能搜索 无会话 id 时返回 undefined')
+
+    const makeRes = () => {
+      const state = { status: 0, body: '' }
+      return {
+        state,
+        writeHead(status: number) { state.status = status },
+        end(body?: string) { state.body = body ?? '' },
+      }
+    }
+    const getReq = { method: 'GET' }
+    const postReq = { method: 'POST' }
+    // GET 缺省会话 → 默认开启。
+    const r1 = makeRes()
+    check(handleSearchToggleRoute(getReq, r1 as never, '/dsh-zh/api/search-toggle', null, new URL('http://x/dsh-zh/api/search-toggle')), true, '智能搜索 GET 路由已处理')
+    check(JSON.parse(r1.state.body).value.enabled, true, '智能搜索 GET 无 session 时回默认开启')
+    // POST 关闭 → GET 读到关闭态。
+    const r2 = makeRes()
+    handleSearchToggleRoute(postReq, r2 as never, '/dsh-zh/api/search-toggle', { session: 'http-1', enabled: false }, new URL('http://x/dsh-zh/api/search-toggle'))
+    check(JSON.parse(r2.state.body).value.enabled, false, '智能搜索 POST 返回写入后的值')
+    const r3 = makeRes()
+    handleSearchToggleRoute(getReq, r3 as never, '/dsh-zh/api/search-toggle', null, new URL('http://x/dsh-zh/api/search-toggle?session=http-1'))
+    check(JSON.parse(r3.state.body).value.enabled, false, '智能搜索 GET 按会话读回关闭态')
+    // 非法会话 id 一律拒绝写入。
+    const r4 = makeRes()
+    handleSearchToggleRoute(postReq, r4 as never, '/dsh-zh/api/search-toggle', { session: '../etc', enabled: false }, new URL('http://x/dsh-zh/api/search-toggle'))
+    check(r4.state.status, 400, '智能搜索 POST 拒绝非法会话 id')
+    // 非本路径不被吞掉（交回分发器）。
+    const r5 = makeRes()
+    check(handleSearchToggleRoute(getReq, r5 as never, '/dsh-zh/api/other', null, new URL('http://x/dsh-zh/api/other')), false, '智能搜索 只处理自己的路径')
+
+    // ---- 功能总开关（设置页「智能搜索按钮」）：关闭 = 主机完全不干预 ----
+    // 关键语义：用户可能在关掉按钮前已经关过某些会话，那些 restrict 仍挂在活着的
+    // Agent 上。若只在客户端隐藏按钮，主机仍继续遮蔽——表现为「按钮没了、但这个
+    // 会话确实用不了搜索」，且用户没有入口恢复。因此关闭时必须主动撤销全部遮蔽。
+    const feat = makeAgentFixture('session-feature')
+    fixtures.push(feat)
+    toggle!.setEnabled('session-feature', false)
+    for (const handler of listeners.get('agent/created') ?? []) handler({ agent: feat.agent })
+    check(feat.restrictions.length, 2, '智能搜索 功能开关前该会话处于遮蔽态')
+    check(toggle!.isFeatureEnabled(), true, '智能搜索 功能开关默认开启')
+    toggle!.setFeatureEnabled(false)
+    check(toggle!.isFeatureEnabled(), false, '智能搜索 关闭功能开关')
+    check(feat.restrictions.length, 0, '智能搜索 关闭功能开关撤销全部会话遮蔽')
+    check(feat.visibleNames().join(','), 'read,web_fetch,web_search', '智能搜索 关闭功能开关后联网工具恢复可见')
+    check(feat.promptSections().webSearch, 'web_search guidance', '智能搜索 关闭功能开关后说明段恢复注入')
+    check(toggle!.isAgentEnabled(feat.agent), true, '智能搜索 关闭功能开关后工具壳可装壳')
+    // 关闭期间新会话也完全不干预；且此时的会话级写入一律被忽略
+    //（按钮不存在，写进来的值没有界面来源）。
+    toggle!.setEnabled('session-feature', false)
+    check(toggle!.isEnabled('session-feature'), true, '智能搜索 功能开关关闭期间忽略会话级写入')
+    const feat2 = makeAgentFixture('session-feature-2')
+    fixtures.push(feat2)
+    for (const handler of listeners.get('agent/created') ?? []) handler({ agent: feat2.agent })
+    check(feat2.restrictions.length, 0, '智能搜索 功能开关关闭期间新会话不被遮蔽')
+    // 重新开启：会话表已被清空 → 回到默认开启，不再遮蔽。
+    toggle!.setFeatureEnabled(true)
+    check(toggle!.isFeatureEnabled(), true, '智能搜索 可重新开启功能开关')
+    check(feat.restrictions.length, 0, '智能搜索 重新开启功能开关后无残留遮蔽')
+    check(toggle!.isEnabled('session-feature'), true, '智能搜索 关闭功能开关时清空会话表（重开后回到默认）')
+    // 路由：POST { feature } 写入总开关，GET 回读 feature 字段。
+    toggle!.setFeatureEnabled(false)
+    const rFeat = makeRes()
+    handleSearchToggleRoute(getReq, rFeat as never, '/dsh-zh/api/search-toggle', null, new URL('http://x/dsh-zh/api/search-toggle'))
+    check(JSON.parse(rFeat.state.body).value.feature, false, '智能搜索 GET 回读功能总开关')
+    const rFeat2 = makeRes()
+    handleSearchToggleRoute(postReq, rFeat2 as never, '/dsh-zh/api/search-toggle', { feature: true }, new URL('http://x/dsh-zh/api/search-toggle'))
+    check(JSON.parse(rFeat2.state.body).value.feature, true, '智能搜索 POST { feature } 写入总开关')
+    check(toggle!.isFeatureEnabled(), true, '智能搜索 POST { feature } 生效')
+
+    // 卸载释放：全部遮蔽解除，句柄失效后路由不再接管。
+    for (let i = effects.length - 1; i >= 0; i -= 1) effects[i]()
+    check(a.restrictions.length, 0, '智能搜索 卸载释放已遮蔽的会话')
+    const r6 = makeRes()
+    check(handleSearchToggleRoute(getReq, r6 as never, '/dsh-zh/api/search-toggle', null, new URL('http://x/dsh-zh/api/search-toggle')), false, '智能搜索 卸载后路由让回分发器')
+  }
   console.log(`OK: CLI/主机全部 ${checks} 项校验通过`)
 } finally {
   if (originalHome === undefined) delete process.env.DSH_HOME

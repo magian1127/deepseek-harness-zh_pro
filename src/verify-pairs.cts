@@ -349,6 +349,17 @@ let credSnapshotOverride: any = null
 // 插件同步快照覆盖（同上：该 store 的更新走异步 fetch，同步脚本里无法自然驱动）。
 // 区分依据是搜索凭据快照带 configured 字段、插件同步快照带 entries 字段。
 let syncSnapshotOverride: any = null
+// 「智能搜索」按钮的 POST 记录：点击切换时组件会调用主机路由，这里同步记账
+// （mock fetch 立即 resolve，不引入异步等待）。
+const searchToggleCalls: Array<{ session?: string; enabled?: boolean }> = []
+globalThis.fetch = function (url: string, init?: any) {
+  if (typeof url === 'string' && url.indexOf('/dsh-zh/api/search-toggle') !== -1) {
+    let body: any = {}
+    try { body = JSON.parse(init?.body ?? '{}') } catch { body = {} }
+    searchToggleCalls.push({ session: body.session, enabled: body.enabled })
+  }
+  return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve({ ok: true, value: {} }) } }) as any
+}
 const pluginExports = captured.factory(function (name) {
   // 本 bundle 唯一允许的跨包引用是 react（设置页组件用）；其余跨包 require 视为回归。
   if (name === 'react') {
@@ -446,16 +457,35 @@ const ctx = {
     return seat
   },
     slots: {
+      // 与真实契约一致：inject 返回 dispose（本项目既有代码
+      // `disposers.push(slots.inject(...))` 就依赖这一点）。返回 undefined 会让
+      // 依赖它的挂载/卸载（如「智能搜索」开关的重挂载）在桩下静默失效。
       inject: function (_name, setup) {
       const dispose = setup()
       if (typeof dispose === 'function') ctx._effects.push(dispose)
+      return function () {
+        if (typeof dispose === 'function') dispose()
+      }
     },
-    register: function (_config, render) {
+    // 槽位条目的渲染函数按槽位名分表保存：本插件同时注册设置分区
+    // （settings.section）与输入框胶囊（conversation.input.left），
+    // 单变量会让后注册的覆盖前者的 settingsRender。
+    register: function (config, render) {
+      const name = config !== null && config !== undefined ? config.name : undefined
+      if (name === 'conversation.input.left') {
+        ctx._composerEntries.push({ id: config.id, order: config.order, render: render, inject: config.inject, label: config.label })
+        return function () {
+          const index = ctx._composerEntries.findIndex(function (entry) { return entry.render === render })
+          if (index !== -1) ctx._composerEntries.splice(index, 1)
+        }
+      }
       settingsRender = render
       return function () { settingsRender = null }
     },
   },
   _effects: [],
+  // 输入框下方工具行的槽位条目（conversation.input.left）：智能搜索胶囊在此登记。
+  _composerEntries: [],
   // 可选服务表：服务监控 tab 注册测试注入 sidebarRightTabs mock；真实代码用
   // ctx.get 读取，mock 在此表命中时优先返回。
     _services: {},
@@ -629,6 +659,15 @@ window.innerWidth = 1280
 window.getComputedStyle = function () { return { textOverflow: 'clip', lineHeight: '24px', fontSize: '14px' } }
 window.addEventListener = function () {}
 window.removeEventListener = function () {}
+// 刻意**不**提供 document.head：本桩只覆盖「词典 + DOM 文本层」这条面，
+// 样式注入子系统（archive-view / session-menu / session-batch / auto-archive /
+// service-monitor / search-toggle 六处都会往 head append <style>，且各自带
+// querySelector / querySelectorAll / MutationObserver.observe(head, …)）从未在此
+// 桩下跑过。补一个 head 会把六条路径同时激活，实测表现为挂起或
+// `Ineffective mark-compacts near heap limit`（2026-10-23 踩过，崩溃点远在新
+// 断言之前，极易误判）。所有样式模块都有 `head === undefined` 早退分支，
+// 保持 undefined 就是它们的正常「无 DOM」路径。
+// 按钮的 CSS 内容改由 exports.searchToggle.css 直接断言，不需要走注入。
 globalThis.document = {
   readyState: 'complete',
   documentElement: {},
@@ -1779,6 +1818,11 @@ const THEME_TOKENS = new Set([
   '--dsw-menu-backdrop-filter',
   '--dsw-shadow-lv3',
   '--dsw-specific-menu',
+  // 几何与聚焦环：在 ui-theme/src/styles/base.css 中定义（--dsw-radius-sm: 8px；
+  // --dsw-focus-ring-color 参与官方 focus-visible 环）。智能搜索按钮复刻权限
+  // 触发器时用到，使用前已核对定义存在。
+  '--dsw-radius-sm',
+  '--dsw-focus-ring-color',
 ])
 const usedTokens = new Set()
 const tokenRe = /var\((--dsw-[a-z0-9-]+)/gi
@@ -1789,6 +1833,89 @@ check(phantomTokens.join(', '), '', 'client bundle 只使用已核对存在的�
 // 深色模式下必须成对出现的表面：弹窗底色（bg-layer-*）与文字（label-*）都必须是
 // 主题令牌，不能是裸色值——裸 #fff 会在深色主题下与浅色文字撞车。
 check(/background:var\(--dsw-alias-bg-layer-2/.test(src), true, '确认框底色走主题令牌而非裸色值')
+
+// 「智能搜索」会话开关按钮：注册在 conversation.input.left（输入框下方工具行），
+// 默认选中，点击后写本地缓存并 POST 主机。
+// mock 的 useState 不回写、useEffect 不执行，因此这里只验证「渲染 + 点击分支」
+// 这两段同步可观察的行为；副作用时序（挂载同步、失败回滚）由主机侧用例覆盖。
+{
+  check(ctx._composerEntries.length, 1, '智能搜索 会话槽位注册一个条目')
+  const entry = ctx._composerEntries[0]
+  check(entry.id, 'dsh-zh-search-toggle', '智能搜索 槽位条目 id 稳定')
+  check(entry.order, 60, '智能搜索 排在 project-mcp(50) 之后')
+  check(typeof entry.inject, 'function', '智能搜索 经 inject 取会话 id（会话级槽位）')
+  // 会话级槽位由 SlotCore 把 SessionId 交给 inject，返回值并入 props。
+  check(entry.inject('session-a').sessionId, 'session-a', '智能搜索 inject 透传会话 id')
+  // 默认选中：缓存为空时按开启渲染。
+  const onTree = entry.render({ sessionId: 'session-a' })
+  const onButton = findElement(onTree, function (node) { return typeof node.type === 'string' && node.type === 'button' })
+  check(onButton !== null, true, '智能搜索 渲染按钮')
+  check(onButton.props['aria-pressed'], true, '智能搜索 默认选中')
+  check(onButton.props['data-dsh-zh-search-toggle'], 'on', '智能搜索 默认标记 on')
+  check(onButton.props.title.indexOf('已开启') >= 0, true, '智能搜索 中文界面用中文提示')
+  // 关/开必须用**不同**的颜色令牌：浅色主题下 --dsw-alias-brand-primary 等于
+  // --dsw-static-neutral-bluish-1000 = rgb(15,17,21)，与 label-primary 同值，
+  // 用它做「开启态」会出现「点了颜色没变」（2026-10-23 实测）。真品牌蓝是
+  // --dsw-alias-state-business-primary。
+  check(onButton.props.style.color.indexOf('--dsw-alias-state-business-primary') !== -1, true, '智能搜索 选中时文字为品牌蓝（state-business-primary）')
+  check(onButton.props.style.color.indexOf('--dsw-alias-brand-primary)') === -1, true, '智能搜索 选中态不使用 brand-primary（浅色主题下与主文字同色）')
+  // 静态外观与悬浮反馈必须来自注入的 CSS，不能用内联 style：
+  // 内联写不出 :hover，会出现「鼠标移上来没有任何效果」（2026-10-23 实测）。
+  check(onButton.props.className, 'dsh-zh-search-toggle', '智能搜索 按钮挂上样式类名')
+  check(onButton.props.style.height, undefined, '智能搜索 尺寸不写内联 style（改由 CSS 承载）')
+
+  // 注入的样式表必须真正复刻权限触发器的悬浮/聚焦/禁用三态。
+  const toggleCss = pluginExports.searchToggle.css
+  check(typeof toggleCss, 'string', '智能搜索 导出样式表常量')
+  check(toggleCss.includes(':hover:not(:disabled)'), true, '智能搜索 有 hover 反馈（对齐权限触发器）')
+  check(toggleCss.includes('--dsw-alias-interactive-bg-hover'), true, '智能搜索 hover 用官方交互底色令牌')
+  check(toggleCss.includes(':focus-visible'), true, '智能搜索 有键盘聚焦环')
+  check(toggleCss.includes(':disabled'), true, '智能搜索 有禁用态样式')
+  check(toggleCss.includes('--dsw-radius-sm'), true, '智能搜索 圆角用官方令牌（对齐权限触发器）')
+  check(toggleCss.includes('height: 28px'), true, '智能搜索 CSS 高度对齐权限触发器')
+  check(toggleCss.includes('font-size: 13px'), true, '智能搜索 CSS 字号对齐权限触发器')
+  check(toggleCss.includes('font-weight: 500'), true, '智能搜索 CSS 字重对齐权限触发器')
+  check(pluginExports.searchToggle.className, 'dsh-zh-search-toggle', '智能搜索 类名稳定')
+
+  // 点击取消 → POST enabled=false，并写本地缓存。
+  onButton.props.onClick({ preventDefault: function () {} })
+  const offCall = searchToggleCalls[searchToggleCalls.length - 1]
+  check(offCall !== undefined && offCall.enabled, false, '智能搜索 点击后同步关闭态给主机')
+  check(offCall.session, 'session-a', '智能搜索 关闭态按会话 id 提交')
+  // 缓存生效：同一会话重新渲染即为未选中，且颜色回主文字色。
+  const offTree = entry.render({ sessionId: 'session-a' })
+  const offButton = findElement(offTree, function (node) { return typeof node.type === 'string' && node.type === 'button' })
+  check(offButton.props['aria-pressed'], false, '智能搜索 关闭后渲染为未选中')
+  check(offButton.props['data-dsh-zh-search-toggle'], 'off', '智能搜索 关闭后标记 off')
+  // 关闭态对齐相邻「权限」触发器的文字色（PermissionSelect.module.css: label-secondary），
+  // 且必须与开启态的蓝色不同——两者同色正是「点了没变化」的根因。
+  check(offButton.props.style.color.indexOf('--dsw-alias-label-secondary') !== -1, true, '智能搜索 关闭态文字色为 label-secondary（与权限按钮一致）')
+  check(offButton.props.style.color !== onButton.props.style.color, true, '智能搜索 开启态与关闭态颜色必须不同')
+  // 会话级而非全局：另一会话仍默认开启。
+  const otherButton = findElement(entry.render({ sessionId: 'session-b' }), function (node) { return typeof node.type === 'string' && node.type === 'button' })
+  check(otherButton.props['aria-pressed'], true, '智能搜索 另一会话仍默认开启')
+
+  // 首页输入框（无会话 id）：按默认选中渲染且禁用切换。
+  const heroButton = findElement(entry.render({ sessionId: undefined }), function (node) { return typeof node.type === 'string' && node.type === 'button' })
+  check(heroButton.props['aria-pressed'], true, '智能搜索 无会话时仍显示默认选中')
+  check(heroButton.props.disabled, true, '智能搜索 无会话时禁用切换')
+
+  // ---- 设置页开关 searchToggleEnabled（默认开）：关闭 = 按钮完全不渲染、相关装配卸载 ----
+  check(pluginExports.settingsStore.getSnapshot().searchToggleEnabled, true, '智能搜索 设置项默认开启')
+  // 设置行文案来自 dsh-zh-settings 命名空间（中英双份），这是「设置页有该行」的
+  // 稳定判据——直接查渲染树容易受收缩卡片默认收起/嵌套深度影响。
+  check(locale.lookup('dsh-zh-settings', 'searchToggleEnabled'), '智能搜索按钮', '智能搜索 设置行标题文案（中文）')
+  check(locale.lookup('dsh-zh-settings', 'searchToggleEnabledDesc').indexOf('默认开') > 0, true, '智能搜索 设置行说明标注默认开启')
+
+  // 关闭：订阅触发 unmount → 槽位条目被撤销（按钮随之从界面消失）。
+  pluginExports.settingsStore.set('searchToggleEnabled', false)
+  check(ctx._composerEntries.length, 0, '智能搜索 关闭设置项后槽位条目被撤销（按钮不渲染）')
+
+  // 重新开启：重新注册回到一个条目。
+  pluginExports.settingsStore.set('searchToggleEnabled', true)
+  check(ctx._composerEntries.length, 1, '智能搜索 重新开启后槽位条目恢复')
+  check(pluginExports.settingsStore.getSnapshot().searchToggleEnabled, true, '智能搜索 设置项可重新开启')
+}
 
 // 卸载前：archiveViewEnabled 开关在上面的测试里关闭→开启过一次（归档词典
 // 注册→注销→重新注册），因此卸载时归档词典 disposer 累计调用 2 次，

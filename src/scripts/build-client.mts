@@ -35,6 +35,7 @@ const BODY_ORDER = [
   'logic/archive-view.ts',
     'logic/service-monitor.ts',
     'logic/service-monitor-tab.ts',
+    'logic/search-toggle.ts',
     'logic/register.ts',
   'logic/dom-enhance.ts',
   'logic/apply.ts',
@@ -93,6 +94,12 @@ const wrapperEnd = `    exports.inject = ['locale', 'slots', 'sidebarRightTabs']
     exports.sessionBatch = {
       pass: runBatchPassForTest,
       selectionSize: batchSelectionSize,
+    };
+    exports.searchToggle = {
+      css: SEARCH_TOGGLE_CSS,
+      className: SEARCH_TOGGLE_CLASS,
+      read: searchToggleRead,
+      post: searchTogglePost,
     };
     exports.sessionDeleteRows = {
       pass: runDeletedRowPassForTest,

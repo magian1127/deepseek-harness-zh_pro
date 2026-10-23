@@ -5,7 +5,7 @@
 **语言 / Language:** [中文](README.md) · [English](README.en.md)
 
 <p align="center">
-    <img alt="Version 0.10.3" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.10.3-5965d8">
+    <img alt="Version 0.11.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.11.0-5965d8">
   <img alt="Interface Chinese" src="https://img.shields.io/badge/%E7%95%8C%E9%9D%A2-%E4%B8%AD%E6%96%87-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -18,7 +18,7 @@ off by default.
 
 ## Features
 
-The rows below follow **DSH Settings → Enhancements** from top to bottom:
+The rows below follow **DSH Settings → Enhancements** from top to bottom ("Smart search" is the button under the composer, not a settings row):
 
 | Feature | Default | Description |
 | --- | --- | --- |
@@ -30,6 +30,7 @@ The rows below follow **DSH Settings → Enhancements** from top to bottom:
 | Keyless web reader | On | Takes over the conversational web_fetch backend according to the "Fetch backend priority" list, defaulting to DeepSeek cloud reader → Zhipu webReader → keyless ring → local fetch, reorderable with ▲/▼ in settings; not installed / unavailable / failed backends fall through, and only a total failure reports an error. The keyless ring is modeled on the Hermes agent's keyless extraction ring and walks Exa MCP → Parallel MCP → Keenable public endpoints (Firecrawl was excluded after a 2026-10-19 live test returned HTTP 403 for anonymous scraping); fetching sends the URL to the selected backend's cloud service, and the body is wrapped in an "external web content (untrusted)" boundary marker. Safety gate: public http(s) only, URLs with embedded credentials and local/private addresses are refused |
 | Results per query | 0 (no takeover) | The official `web_search` hardcodes its merge cap at 8 sources and interleaves multiple queries round-robin; the "Results per search" field on the Web search settings page only controls how many results a single query asks the API for and cannot change that cap. Setting this to N (1–50) groups results by query — query one N sources, then query two N sources — drops cross-query duplicate links, and renders the model-facing text as `Sources for "<query>"` sections; 0 leaves the official behavior in place. The effective count is also capped by "Results per search", so both numbers must be raised together |
 | Prompt injection | Off | Injects editable text into subsequent requests; the default text asks for Chinese reasoning and replies, and the default target is the initial system prompt |
+| Smart search button (`searchToggleEnabled`) | On | Whether the "Smart search" button appears in the composer tool row. **Turning it off hides the button entirely and keeps its code from loading or running** (the Host also lifts every per-session mask); changes apply immediately. When on, the button remembers its state per session: blue label when selected (sized and weighted to match the adjacent permission trigger), grey when off — and an off session stops receiving the `web_search`/`web_fetch` tools and the official `tool:web_search`/`tool:web_fetch` guidance; click again to restore. It ANDs with the two global switches above |
 | Auto-expand latest thinking | On | Expands the newest streaming thinking block and collapses the previous block that the plugin auto-expanded; after a turn closes under the DSH v0.1.2 compact view it stays hidden with the official process fold (see the behavior contract) |
 | Default expanded lines | 20 lines, latest N | Limits the initial visible region to 0–200 lines; 0 disables the limit, and the direction can be changed to earliest N |
 | Expand mode | Button mode | Button mode reveals lines in batches; scroll mode uses a fixed-height scrolling viewport |

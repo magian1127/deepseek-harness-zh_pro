@@ -53,6 +53,10 @@ import { installSessionDeleteRoute } from './session-delete.js'
 import { installWebSearchProvider } from './web-search.js'
 import { installWebFetchProvider } from './web-fetch.js'
 import { installAgentSearchTool, type AgentSearchToolHandle } from './agent-search-tool.js'
+import {
+  installSessionSearchToggle,
+  type SessionSearchToggleHandle,
+} from './session-search-toggle.js'
 import { argvProfile, localProfileDir, log, manifestPath, warn } from './util.js'
 import type { HostContext, PackageSnapshot } from './types.js'
 
@@ -73,6 +77,9 @@ let migrating = false
 // 「web_search 工具壳」收敛句柄：apply 装配，供 reconcile（智谱热装卸）与
 // installWebSearchRetry（web 服务晚就绪）触发重新评估。
 let agentSearchToolHandle: AgentSearchToolHandle | undefined
+// 「智能搜索」会话级开关句柄：工具壳装壳判定读它（关闭的会话不装壳），
+// 开关变化时经 hooks.onChange 触发壳的重新评估。
+let searchToggleHandle: SessionSearchToggleHandle | undefined
 
 /** 本插件被移除：清掉 profile patch 里的挂载行（DSH 会热卸载），并移除所有自身 Loader 条目。 */
 async function selfCleanup(ctx: HostContext) {
@@ -220,6 +227,14 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
     }
   } catch { /* 诊断绝不阻断装配。 */ }
   void migrateFromHotRow(ctx)
+  // 「智能搜索」会话开关（输入框下方按钮，默认开）：必须先于工具壳装配，
+  // 壳的装壳判定要读它；关闭的会话由它在 agent.ctx 上 restrict 掉
+  // web_search / web_fetch，官方 tool:web_* 说明段随之求值为空、不再注入。
+  if (ownsPromptRegistration(ctx)) {
+    searchToggleHandle = installSessionSearchToggle(ctx, {
+      onChange: () => agentSearchToolHandle?.refresh(),
+    })
+  }
   // 「web_search 工具壳」：agent 作用域补壳（探测让位），与中文优先提示
   // 装配同门槛避免双实例重复注册；须先于 installChinesePrompt 装配（其
   // volatile 变更经 onModelStateChanged 回调收敛壳状态）。
@@ -228,6 +243,8 @@ export function apply(ctx: HostContext, config: Record<string, unknown> = {}): v
       isEnabled: () => getModelState().zhWebSearch,
       useZh: () => getModelState().zhPrompt,
       perQuery: () => getModelState().zhSearchPerQuery,
+      isAgentEnabled: (agentLike) =>
+        searchToggleHandle === undefined || searchToggleHandle.isAgentEnabled(agentLike),
     }) ?? undefined
   }
   if (ownsPromptRegistration(ctx)) installChinesePrompt(ctx, config, {

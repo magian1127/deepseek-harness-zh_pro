@@ -147,6 +147,9 @@ runtime-context 正文（contexts）改写 + 注入消息的 agent/pre-step 行�
   provider → 凭据 ref 走服务端白名单，响应只回脱敏提示，明文只落凭据文件）、
   `src/lib/plugin-sync.ts`（`GET|POST /dsh-zh/api/plugin-sync`：设置页「插件同步」卡片的差异计算与执行编排，
   见下文专节）、
+  `src/lib/session-search-toggle.ts`（「智能搜索」会话级开关：会话状态表 +
+  按 Agent 的 `tools.restrict({ deny })` 遮蔽 + `GET|POST /dsh-zh/api/search-toggle`，
+  见下文专节）、
   `src/lib/credentials.ts`（凭据三层解析 + 凭据文件读写）；CLI 实现拆在 `src/bin/cli/`，`src/bin/dsh-zh.mts`
 是转发导出并保留入口守卫的聚合入口。编译后对应的 `.js`/`.mjs` 文件供 DSH 和 npm 消费。
 
@@ -874,6 +877,69 @@ agent-loop 硬编码拼接，官方渲染侧永远是英文；按用户需求在
 日志每步 +1 条快照事件）。tmux-context 快照同理且为 per-turn 重注入，不翻。
 
 修改本模块后同样要求 lib/context-locale.js 在运行进程里生效（见上文热重载说明）。
+
+### 智能搜索会话开关（session-search-toggle + search-toggle）
+
+`src/lib/session-search-toggle.ts`（主机）与 `src/lib/client/logic/search-toggle.ts`
+（浏览器）实现输入框下方那个按会话生效的联网能力开关。
+
+- **一个 `restrict` 同时关掉工具与提示词（核心机制，勿改成注册空段）**：
+  官方 `tool-web` 注册的两条说明段，其 `text` 是
+  `({ scope }) => ctx.tools.get('web_search', scope) === undefined ? '' : '<指引>'`
+  ——**按该作用域的工具可见性求值**，而 `renderPrompt` 会把求值为空的段丢掉
+  （`system-prompt/src/index.ts` 的 `sections.filter(text => text.length > 0)`）。
+  因此 `agent.ctx.tools.restrict({ deny: ['web_search','web_fetch'] })` 一处遮蔽，
+  工具从模型工具表消失、说明段同时变空。**不要**再注册一份同名空段去覆盖官方段：
+  `systemPrompt` 同层重名会抛错，且开关切回开启时无法干净撤销。
+- **遮蔽面 = 继承面，不含作用域自身注册**：`ToolRuntime.view(scope)` 只对
+  inherited（global 层与祖先作用域层，即 preset 的 tool-web 行）应用 restrictions，
+  本作用域 own 注册不受自己 filter 约束。所以本插件自己的 `web_search` 壳必须在
+  装壳阶段就按会话状态跳过——`AgentSearchToolDeps.isAgentEnabled?` 就是为此新增的
+  判定，`index.ts` 把它接到 `searchToggleHandle.isAgentEnabled`。
+- **逐工具 `restrict` 而不是一次 deny 两个名字**：`restrict()` 遇到**未继承**的
+  名字会抛 `unknown global tool`（会话所在 preset 没装 tool-web，或只启用其中一个
+  工具），逐个注册让缺失项安静跳过、存在项照常遮蔽。
+- **状态归属：localStorage 是界面权威，主机是镜像**。客户端组件渲染时直接读缓存
+  （`searchToggleRead`），`useState` 只存「本次挂载内的手动覆盖」，避免依赖惰性
+  初始化函数（回归桩的 `useState` 不回写，惰性初始化不会被执行）。挂载时 POST
+  一次把缓存态灌进主机镜像——**主机进程重启后镜像为空，按默认开启处理**，这是
+  已知且接受的行为。
+- **逆序释放**：每个会话一组 disposer，`agent/disposed`、开关切换、Fiber 卸载三处
+  都要撤销（否则同名会话重建会漏遮蔽）。
+- **路由挂在既有 `/dsh-zh/api` 分发器上**（`session-delete.ts` 的 GET/POST 两处
+  各一行调用 `handleSearchToggleRoute`），**不要**另注册 `kind:'prefix'` 路由：
+  两个同路径 prefix 路由会互相抢占，行为不确定。句柄未装配时该函数返回 `false`
+  把路径让回分发器，绝不伪造成功响应。
+- **配色令牌（踩过的坑）**：开启态必须用 `--dsw-alias-state-business-primary`，
+  关闭态用 `--dsw-alias-label-secondary`（与 `PermissionSelect.module.css` 的
+  触发器文字色一致）。**禁用 `--dsw-alias-brand-primary` 作开启态**：浅色主题下它
+  解析为 `--dsw-static-neutral-bluish-1000` = `rgb(15,17,21)`，与
+  `--dsw-alias-label-primary` 同值，开关前后饱和一致、肉眼无变化。改动配色时用
+  `design-platform.css` 逐级展开静态色确认两态**取值不同**，不要凭令牌名猜测。
+  `verify-pairs` 已按「开启态 ≠ 关闭态」与「开启态不用 brand-primary」两个方向钉住。
+- **悬浮/聚焦反馈必须用注入的 CSS，不能用内联 style**：内联写不出 `:hover`，只写
+  内联会出现「鼠标移上去完全没有反应」（2026-10-23 实测）。当前实现把静态外观、
+  `:hover:not(:disabled)`（`--dsw-alias-interactive-bg-hover`）、`:focus-visible`
+  （`0 0 0 2px var(--dsw-focus-ring-color, …state-business-primary)`）与
+  `:disabled` 全部放进 `SEARCH_TOGGLE_CSS`，经 `document.head` 注入
+  `<style data-plugin-css="dsh-zh/search-toggle.css">`（装配时注入、Fiber 卸载时移除，
+  与 `service-monitor.ts` 同款）。内联只保留随状态变化的 `color` 与 `opacity`。
+- **尺寸对齐邻居**：height 28 / fontSize 13 / lineHeight 20 / fontWeight 500 /
+  padding `0 4px 0 8px` / `border: none` / `background: transparent` /
+  `border-radius: var(--dsw-radius-sm)`，与同行的权限与模型触发器一致；随手写 24px
+  会在一行 control 里显得矮一截。
+- **两级开关，注意总开关要反向撤销主机状态**：会话级开关（按钮）只影响单个会话；
+  设置页 `searchToggleEnabled` 是功能总开关。关闭总开关时客户端 `unmount()` 槽位条目
+  并移除样式（组件永不渲染），同时 POST `{ feature: false }` 让主机
+  `setFeatureEnabled(false)` **撤销全部 restrict 并清空会话表**。不能只在客户端隐藏
+  按钮：用户此前关过的会话，其 `tools.restrict` 仍挂在活着的 Agent 上，会留下
+  「按钮没了但搜索用不了、且无入口恢复」的死角。关闭期间 `setEnabled` 直接返回（不写表），
+  避免下次开启时冒出用户没设过的状态。
+- **回归桩不要补 `document.head`**：`verify-pairs.cts` 刻意让 `document.head` 保持
+  `undefined`。补上它会把六个模块的样式注入路径（六处 `head.appendChild` + `assets`
+  的 `querySelector`/`querySelectorAll`/`MutationObserver.observe(head)`）同时激活，
+  而这些路径从未在该桩下跑过，实测直接 OOM 或挂起，且崩溃点远在新断言之前、极易
+  误判。按钮的 CSS 内容改由 `exports.searchToggle.css` 直接断言即可。
 
 ### 网络搜索（web-search + agent-search-tool）
 

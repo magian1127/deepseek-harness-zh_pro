@@ -680,6 +680,12 @@ const ZhSettingsSection = function (props) {
           if (next === true) searchCredentialStore.load()
         },
         t('searchGroup'), t('searchGroupDesc'), null, [
+        // 「智能搜索」按钮总开关（默认开）：关闭后输入框下方按钮完全不渲染，
+        // 相关装配（槽位注册 + 样式注入）由 apply.ts 的订阅即时卸载。
+        row('searchToggleEnabled', t('searchToggleEnabled'), t('searchToggleEnabledDesc'),
+          toggle(snapshot.searchToggleEnabled !== false, function () {
+            settingsStore.set('searchToggleEnabled', !(snapshot.searchToggleEnabled !== false))
+          }, false, t('searchToggleEnabled'))),
         row('zhWebSearch', t('zhWebSearch'), t('zhWebSearchDesc'),
           toggle(searchToggleOn, function () {
             if (boundPromptScope !== null && promptReady === true) {
