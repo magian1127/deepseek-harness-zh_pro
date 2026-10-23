@@ -18,7 +18,8 @@ off by default.
 
 ## Features
 
-The rows below follow **DSH Settings → Enhancements** from top to bottom ("Smart search" is the button under the composer, not a settings row):
+The rows below follow **DSH Settings → Enhancements** from top to bottom ("Smart search" is the button under the composer, not a settings row).
+A sticky action bar at the bottom of the page holds every change as a draft: press **Save** to apply and persist everything at once (host fields go out as one atomic commit, which removes most of the per-keystroke stutter), or **Revert** to drop the drafts.
 
 | Feature | Default | Description |
 | --- | --- | --- |

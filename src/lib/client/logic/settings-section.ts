@@ -78,6 +78,29 @@ const ZH_FREE_MULTI_BACKEND_ID = 'dsh-zh-free'
 const FETCH_ORDER_DEFAULT = ['deepseek-fetch-api', 'zhipu-web-reader', 'dsh-zh-free-fetch', 'http']
 const ZH_FREE_FETCH_BACKEND_ID = 'dsh-zh-free-fetch'
 
+// 提示词文本框：显示值只在本组件内部维护，失焦才把最终文本交给设置草稿。
+// 父组件是上千行的设置页，逐键 setState 会整页重渲染——长文本编辑的卡顿
+// 主要来自这里，而不是写入本身。点「保存」前会先触发失焦，草稿不会漏。
+const DraftTextarea = function (props) {
+  const draftState = React.useState(null)
+  const draft = draftState[0]
+  const setDraft = draftState[1]
+  const shown = draft !== null ? draft : props.value
+  return React.createElement('textarea', {
+    value: shown,
+    disabled: props.disabled,
+    rows: 5,
+    'aria-label': props.label,
+    placeholder: props.placeholder,
+    style: props.style,
+    onChange: function (event) { setDraft(event.target.value) },
+    onBlur: function (event) {
+      setDraft(null)
+      props.onCommit(event.target.value)
+    },
+  })
+}
+
 const ZhSettingsSection = function (props) {
   const t = props.t
   const snapshot = React.useSyncExternalStore(settingsStore.subscribe, settingsStore.getSnapshot)
@@ -95,25 +118,119 @@ const ZhSettingsSection = function (props) {
     && promptSnapshot.status === 'ready'
     && promptSnapshot.value !== null
     && typeof promptSnapshot.value === 'object'
-  const zhPromptOn = promptReady && promptSnapshot.value.zhPrompt === true
-  const promptBaseText = (promptReady
-    && typeof promptSnapshot.value.zhPromptText === 'string')
+  // ---- 设置草稿层：改动先落本地，点底部「保存」才提交，「还原」丢弃 ----
+  // 逐项立即写入是卡顿来源：主机字段（configForms）每写一次就是一次网络提交 +
+  // 设置文档广播 + 整页重渲染（提示词文本框防抖后每停顿一次就写一次）。改成
+  // 「保存」时用一次 mutate 原子提交全部主机字段、一次 setMany 写全部界面设置。
+  // 折叠态、API Key、插件同步属于操作/瞬时状态，仍即时生效。
+  const pendingState = React.useState({ local: {}, host: {} })
+  const pending = pendingState[0]
+  const setPending = pendingState[1]
+  const saveStatusState = React.useState('idle')
+  const saveStatus = saveStatusState[0] // 'idle' | 'saving' | 'failed'
+  const setSaveStatus = saveStatusState[1]
+  const sameValue = function (a, b) {
+    if (a === b) return true
+    if (Array.isArray(a) && Array.isArray(b)) {
+      if (a.length !== b.length) return false
+      // 监控项是对象数组，逐项 === 不成立，按序列化比较（数据量很小）。
+      return JSON.stringify(a) === JSON.stringify(b)
+    }
+    return false
+  }
+  // 写草稿：值回到已保存值时就删掉该键，dirty 计数才可信。
+  const setPendingField = function (kind, key, value, savedValue) {
+    setPending(function (prev) {
+      const bucket = Object.assign({}, prev[kind])
+      if (savedValue !== undefined && sameValue(value, savedValue)) delete bucket[key]
+      else bucket[key] = value
+      return kind === 'local'
+        ? { local: bucket, host: prev.host }
+        : { local: prev.local, host: bucket }
+    })
+  }
+  const setPendingLocal = function (key, value, savedValue) { setPendingField('local', key, value, savedValue) }
+  const setPendingHost = function (field, value, savedValue) { setPendingField('host', field, value, savedValue) }
+  // 视图：草稿优先于已保存值（界面设置与主机字段各一套）。
+  const view = Object.assign({}, snapshot, pending.local)
+  const hostView = promptReady ? Object.assign({}, promptSnapshot.value, pending.host) : {}
+  const pendingCount = Object.keys(pending.local).length + Object.keys(pending.host).length
+  const savePending = async function () {
+    if (pendingCount === 0 || saveStatus === 'saving') return
+    const localPatch = pending.local
+    const hostFields = Object.keys(pending.host)
+    setSaveStatus('saving')
+    if (hostFields.length > 0) {
+      if (boundPromptScope === null || promptReady !== true || typeof boundPromptScope.mutate !== 'function') {
+        setSaveStatus('failed')
+        return
+      }
+      const ops = hostFields.map(function (field) {
+        return { op: 'set', path: [field], value: pending.host[field] }
+      })
+      let accepted = false
+      try {
+        accepted = await boundPromptScope.mutate(ops)
+      } catch {
+        accepted = false
+      }
+      if (accepted !== true) {
+        setSaveStatus('failed')
+        return
+      }
+    }
+    if (Object.keys(localPatch).length > 0) settingsStore.setMany(localPatch)
+    // 只移除「已提交且未再改动」的字段：主机写入是异步的，等待期间用户可能又
+    // 改了别的设置，整包清空会把这部分改动一起丢掉。
+    setPending(function (prev) {
+      const nextLocal = Object.assign({}, prev.local)
+      for (const key of Object.keys(localPatch)) {
+        if (sameValue(nextLocal[key], localPatch[key])) delete nextLocal[key]
+      }
+      const nextHost = Object.assign({}, prev.host)
+      for (const field of hostFields) {
+        if (sameValue(nextHost[field], pending.host[field])) delete nextHost[field]
+      }
+      return { local: nextLocal, host: nextHost }
+    })
+    setSaveStatus('idle')
+  }
+  const revertPending = function () {
+    setPending({ local: {}, host: {} })
+    setSaveStatus('idle')
+    setPromptOrderDraft(null)
+  }
+  // 已保存值（草稿判断的基准，必须是主机已接受的值，不能取草稿视图）。
+  const promptTextSaved = (promptReady && typeof promptSnapshot.value.zhPromptText === 'string')
     ? promptSnapshot.value.zhPromptText
+    : DEFAULT_PROMPT_TEXT
+  const promptOrderSaved = (promptReady
+    && typeof promptSnapshot.value.zhPromptOrder === 'number'
+    && Number.isFinite(promptSnapshot.value.zhPromptOrder))
+    ? Math.round(promptSnapshot.value.zhPromptOrder)
+    : DEFAULT_PROMPT_ORDER
+  const zhPromptOn = promptReady && hostView.zhPrompt === true
+  const promptBaseText = (promptReady && typeof hostView.zhPromptText === 'string')
+    ? hostView.zhPromptText
     : DEFAULT_PROMPT_TEXT
   // 注入目标（下拉框）：'user' 与旧值 'context' 都视为首用户提示词，
   // 其余（含缺省）视为初始系统提示；与主机半边归一化规则一致。
   const promptTargetValue = (promptReady
+    && (hostView.zhPromptTarget === 'user' || hostView.zhPromptTarget === 'context'))
+    ? 'user'
+    : 'system'
+  const promptTargetSaved = (promptReady
     && (promptSnapshot.value.zhPromptTarget === 'user' || promptSnapshot.value.zhPromptTarget === 'context'))
     ? 'user'
     : 'system'
   // 排序位置（仅初始系统提示目标可见）：与官方 SECTION_ORDERS 同一坐标系，
   // 主机侧默认 100 = persona 之后、官方政策与工具说明之前。
   const promptOrderBase = (promptReady
-    && typeof promptSnapshot.value.zhPromptOrder === 'number'
-    && Number.isFinite(promptSnapshot.value.zhPromptOrder))
-    ? Math.round(promptSnapshot.value.zhPromptOrder)
+    && typeof hostView.zhPromptOrder === 'number'
+    && Number.isFinite(hostView.zhPromptOrder))
+    ? Math.round(hostView.zhPromptOrder)
     : DEFAULT_PROMPT_ORDER
-  // 本地草稿优先于主机值：输入过程中不回弹，失焦/回车才提交并钳制到范围。
+  // 本地草稿优先于草稿值：输入过程中不回弹，失焦/回车才写进设置草稿。
   const promptOrderDraftState = React.useState(null)
   const promptOrderDraft = promptOrderDraftState[0]
   const setPromptOrderDraft = promptOrderDraftState[1]
@@ -124,16 +241,10 @@ const ZhSettingsSection = function (props) {
     const parsed = Number.parseInt(String(raw).trim(), 10)
     if (!Number.isFinite(parsed)) return
     const next = parsed < PROMPT_ORDER_MIN ? PROMPT_ORDER_MIN : (parsed > PROMPT_ORDER_MAX ? PROMPT_ORDER_MAX : parsed)
-    if (next === promptOrderBase) return
-    void boundPromptScope.set('zhPromptOrder', next)
+    setPendingHost('zhPromptOrder', next, promptOrderSaved)
   }
-  // 本地草稿优先于主机值：编辑期间即时回显，防抖后写回主机 settings。
-  const promptDraftState = React.useState(null)
-  const promptDraft = promptDraftState[0]
-  const setPromptDraft = promptDraftState[1]
-  const shownPromptText = promptDraft !== null ? promptDraft : promptBaseText
   // ---- 「服务监控」折叠分组状态：折叠态持久化到 localStorage，草稿与错误是本地态 ----
-  const svcOpenState = React.useState(snapshot.serviceMonitorSettingsOpen === true)
+  const svcOpenState = React.useState(view.serviceMonitorSettingsOpen === true)
   const svcOpen = svcOpenState[0]
   const setSvcOpen = svcOpenState[1]
   const svcDraftState = React.useState({ name: '', addr: '' })
@@ -163,7 +274,7 @@ const ZhSettingsSection = function (props) {
   }, [credBinding.savedAt])
   // ---- 「插件同步」卡片：差异计划与逐条结果全部来自主机；展开态与其余三卡一致，
   //      持久化在 settingsStore（而非组件 useState），以便折叠态可测且刷新后保留。 ----
-  const syncOpen = snapshot.pluginSyncSettingsOpen === true
+  const syncOpen = view.pluginSyncSettingsOpen === true
   const syncBinding = React.useSyncExternalStore(pluginSyncStore.subscribe, pluginSyncStore.getSnapshot)
   const syncBusy = syncBinding.running === true
   const syncRouteMissing = syncBinding.routeMissing === true
@@ -221,19 +332,22 @@ const ZhSettingsSection = function (props) {
       ? 'var(--dsw-alias-state-error-primary, #d93026)'
       : 'var(--dsw-alias-label-tertiary, #666)',
   }
-  const searchToggleOn = promptReady && promptSnapshot.value.zhWebSearch !== false
+  const searchToggleOn = promptReady && hostView.zhWebSearch !== false
   // 每查询返回条数：0 = 不接管（主机侧归一化规则同这里，范围 0–50）。
-  const searchPerQueryValue = (promptReady && typeof promptSnapshot.value.zhSearchPerQuery === 'number')
-    ? promptSnapshot.value.zhSearchPerQuery
+  const searchPerQueryValue = (promptReady && typeof hostView.zhSearchPerQuery === 'number')
+    ? hostView.zhSearchPerQuery
     : 0
-  // 后端优先级列表的本地视图：主机值是权威，但主机未就绪时用默认顺序垫底，
-  // 避免面板空一截。写入走 boundPromptScope.set('zhSearchOrder', 新数组)。
-  const searchOrderFromHost = (promptReady && Array.isArray(promptSnapshot.value.zhSearchOrder))
-    ? promptSnapshot.value.zhSearchOrder.filter(function (id) { return typeof id === 'string' })
+  // 后端优先级列表的本地视图：草稿优先，主机未就绪时用默认顺序垫底，
+  // 避免面板空一截。写入进设置草稿，点「保存」时随其余主机字段一次提交。
+  const searchOrderFromHost = (promptReady && Array.isArray(hostView.zhSearchOrder))
+    ? hostView.zhSearchOrder.filter(function (id) { return typeof id === 'string' })
     : []
   const searchOrder = searchOrderFromHost.length > 0 ? searchOrderFromHost : SEARCH_ORDER_DEFAULT.slice()
   const searchOrderWritable = boundPromptScope !== null && promptReady === true
   const blocked = searchOrderWritable !== true
+  const searchOrderSaved = (promptReady && Array.isArray(promptSnapshot.value.zhSearchOrder))
+    ? promptSnapshot.value.zhSearchOrder.filter(function (id) { return typeof id === 'string' })
+    : []
   /**
    * 后端展示名。客户端拿不到 provider 注册表（主机私有字段），因此这里不做
    * 「是否已安装」的判断——标错比不标更误导；真实可用性由主机在执行时判定
@@ -246,7 +360,7 @@ const ZhSettingsSection = function (props) {
     if (backendId === 'deepseek-official') return tt('searchOrderBackendMessages')
     return tt('searchOrderBackendUnknown') + ' · ' + backendId
   }
-  /** 移动一项（±1）：只重排、不增删，写回主机即触发重新接管。 */
+  /** 移动一项（±1）：只重排、不增删，保存后写回主机即触发重新接管。 */
   const moveSearchOrder = function (index, delta) {
     if (!searchOrderWritable) return
     const next = searchOrder.slice()
@@ -254,19 +368,22 @@ const ZhSettingsSection = function (props) {
     if (target < 0 || target >= next.length) return
     const moved = next.splice(index, 1)[0]
     next.splice(target, 0, moved)
-    void boundPromptScope.set('zhSearchOrder', next)
+    setPendingHost('zhSearchOrder', next, searchOrderSaved)
   }
   /** 恢复默认顺序。 */
   const restoreSearchOrder = function () {
     if (!searchOrderWritable) return
-    void boundPromptScope.set('zhSearchOrder', SEARCH_ORDER_DEFAULT.slice())
+    setPendingHost('zhSearchOrder', SEARCH_ORDER_DEFAULT.slice(), searchOrderSaved)
   }
   // ---- 网页读取（web_fetch 后端）：与搜索链同构的状态与动作 ----
-  const fetchToggleOn = promptReady && promptSnapshot.value.zhWebFetch !== false
-  const fetchOrderFromHost = (promptReady && Array.isArray(promptSnapshot.value.zhFetchOrder))
-    ? promptSnapshot.value.zhFetchOrder.filter(function (id) { return typeof id === 'string' })
+  const fetchToggleOn = promptReady && hostView.zhWebFetch !== false
+  const fetchOrderFromHost = (promptReady && Array.isArray(hostView.zhFetchOrder))
+    ? hostView.zhFetchOrder.filter(function (id) { return typeof id === 'string' })
     : []
   const fetchOrder = fetchOrderFromHost.length > 0 ? fetchOrderFromHost : FETCH_ORDER_DEFAULT.slice()
+  const fetchOrderSaved = (promptReady && Array.isArray(promptSnapshot.value.zhFetchOrder))
+    ? promptSnapshot.value.zhFetchOrder.filter(function (id) { return typeof id === 'string' })
+    : []
   const fetchOrderLabel = function (backendId, tt) {
     if (backendId === 'deepseek-fetch-api') return tt('fetchOrderBackendDeepseekApi')
     if (backendId === 'zhipu-web-reader') return tt('fetchOrderBackendZhipu')
@@ -281,11 +398,11 @@ const ZhSettingsSection = function (props) {
     if (target < 0 || target >= next.length) return
     const moved = next.splice(index, 1)[0]
     next.splice(target, 0, moved)
-    void boundPromptScope.set('zhFetchOrder', next)
+    setPendingHost('zhFetchOrder', next, fetchOrderSaved)
   }
   const restoreFetchOrder = function () {
     if (!searchOrderWritable) return
-    void boundPromptScope.set('zhFetchOrder', FETCH_ORDER_DEFAULT.slice())
+    setPendingHost('zhFetchOrder', FETCH_ORDER_DEFAULT.slice(), fetchOrderSaved)
   }
   const submitSearchCredential = function () {
     const key = credKeyDraft.trim()
@@ -293,7 +410,7 @@ const ZhSettingsSection = function (props) {
     searchCredentialStore.save(key)
   }
   const toggleSvcOpen = function () {
-    const next = !(snapshot.serviceMonitorSettingsOpen === true)
+    const next = !(view.serviceMonitorSettingsOpen === true)
     settingsStore.set('serviceMonitorSettingsOpen', next)
     setSvcOpen(next)
   }
@@ -302,16 +419,16 @@ const ZhSettingsSection = function (props) {
     // 仅接受本机回环地址：主机探活只支持环回字面量（非环回项恒报离线）。
     if (parsed === null || !isLoopbackServiceHost(parsed.host)) { setSvcError(true); return }
     setSvcError(false)
-    const next = snapshot.serviceMonitorTargets.concat([
+    const next = view.serviceMonitorTargets.concat([
       { name: svcDraft.name.trim().slice(0, 60), host: parsed.host, port: parsed.port },
     ])
-    settingsStore.set('serviceMonitorTargets', next)
+    setPendingLocal('serviceMonitorTargets', next, snapshot.serviceMonitorTargets)
     setSvcDraft({ name: '', addr: '' })
   }
   const removeServiceTarget = function (index) {
-    const next = snapshot.serviceMonitorTargets.slice()
+    const next = view.serviceMonitorTargets.slice()
     next.splice(index, 1)
-    settingsStore.set('serviceMonitorTargets', next)
+    setPendingLocal('serviceMonitorTargets', next, snapshot.serviceMonitorTargets)
     const drafts = Object.assign({}, svcEditDrafts)
     delete drafts[String(index)]
     setSvcEditDrafts(drafts)
@@ -322,7 +439,7 @@ const ZhSettingsSection = function (props) {
   const commitServiceTarget = function (index) {
     const draft = svcEditDrafts[String(index)]
     if (draft === undefined) return
-    const stored = snapshot.serviceMonitorTargets[index]
+    const stored = view.serviceMonitorTargets[index]
     if (stored === null || typeof stored !== 'object') return
     const draftName = typeof draft.name === 'string' ? draft.name : stored.name
     const draftAddr = typeof draft.addr === 'string'
@@ -333,9 +450,9 @@ const ZhSettingsSection = function (props) {
     // 仅当地址被改动时要求环回：存量非环回条目改名不受影响（主机将其回报为离线）。
     if ((parsed.host !== stored.host || parsed.port !== stored.port)
       && !isLoopbackServiceHost(parsed.host)) { setSvcEditErrorIndex(index); return }
-    const next = snapshot.serviceMonitorTargets.slice()
+    const next = view.serviceMonitorTargets.slice()
     next.splice(index, 1, { name: draftName.trim().slice(0, 60), host: parsed.host, port: parsed.port })
-    settingsStore.set('serviceMonitorTargets', next)
+    setPendingLocal('serviceMonitorTargets', next, snapshot.serviceMonitorTargets)
     const drafts = Object.assign({}, svcEditDrafts)
     delete drafts[String(index)]
     setSvcEditDrafts(drafts)
@@ -482,7 +599,95 @@ const ZhSettingsSection = function (props) {
             })))),
       open === true ? React.createElement.apply(React, ['div', { style: svcCardBodyStyle }].concat(bodyChildren)) : null)
   }
-  return React.createElement('div', { style: zhSectionStyle },
+  // ---- 置底操作栏：所有设置改动先攒在本地草稿，这里才提交 ----
+  // 定位用两级方案：
+  // 1) 挂载后测量官方滚动容器（`.options`，`overflow-y: auto`）的视口矩形，
+  //    把底栏固定到面板底部的同一位置（position: fixed + left/width/bottom）。
+  // 2) 测量完成前用 position: sticky 撑住（也是 GUI 里 mock 环境的降级形态）。
+  // 只用 sticky 不够：它的粘附范围受包含块限制，底栏一旦留在内容容器内
+  // （内容容器同时是最后一个子元素），包含块底边就等于底栏自身底边，会随内容
+  // 滚走并在下方露出可点的设置内容。所以组件根用 display:contents，内容与
+  // 底栏是并列的直接子元素；固定后还要给内容容器留出底栏高度的下边距，
+  // 否则最后一张卡片会被遮住。背景用面板底色（panel 的 bg-layer-2）。
+  const draftBarRef = React.useRef(null)
+  const draftBarBoxState = React.useState(null)
+  const draftBarBox = draftBarBoxState[0]
+  const setDraftBarBox = draftBarBoxState[1]
+  React.useEffect(function () {
+    if (typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') return
+    const node = draftBarRef.current
+    if (node === null || node === undefined || node.parentElement === null) return
+    let scroller = node.parentElement
+    while (scroller !== null) {
+      let overflowY = ''
+      try { overflowY = window.getComputedStyle(scroller).overflowY } catch { overflowY = '' }
+      if (overflowY === 'auto' || overflowY === 'scroll') break
+      scroller = scroller.parentElement
+    }
+    const target = scroller !== null ? scroller : node.parentElement
+    const measure = function () {
+      try {
+        const rect = target.getBoundingClientRect()
+        const pad = parseFloat(window.getComputedStyle(target).paddingLeft || '0') || 0
+        setDraftBarBox({
+          left: rect.left + pad,
+          width: Math.max(0, rect.width - pad * 2),
+          bottom: Math.max(0, window.innerHeight - rect.bottom),
+        })
+      } catch { /* 测量失败时保持 sticky 降级 */ }
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return function () { window.removeEventListener('resize', measure) }
+  }, [])
+  const draftBarStyle = Object.assign({
+    zIndex: 6,
+    display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10,
+    marginTop: 16, padding: '10px 0',
+    background: 'var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-base, transparent))',
+    borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127, 127, 127, 0.28))',
+  }, draftBarBox === null
+    ? { position: 'sticky', bottom: 0 }
+    : { position: 'fixed', left: draftBarBox.left, width: draftBarBox.width, bottom: draftBarBox.bottom })
+  const draftNoteStyle = {
+    marginRight: 'auto', fontSize: 12, lineHeight: '18px',
+    color: saveStatus === 'failed'
+      ? 'var(--dsw-alias-state-error-primary, #d93026)'
+      : 'var(--dsw-alias-label-secondary, #666)',
+  }
+  let draftNote = t('draftIdle')
+  if (saveStatus === 'failed') draftNote = t('draftSaveFailed')
+  else if (pendingCount > 0) draftNote = t('draftUnsaved').replace('{n}', String(pendingCount))
+  const draftBarDisabled = pendingCount === 0 || saveStatus === 'saving'
+  const draftBar = React.createElement('div', { key: 'draftBar', ref: draftBarRef, style: draftBarStyle },
+    React.createElement('span', { style: draftNoteStyle, role: 'status' }, draftNote),
+    React.createElement('button', {
+      type: 'button',
+      'data-dsh-zh-draft': 'revert',
+      onClick: function () { revertPending() },
+      disabled: draftBarDisabled,
+      style: draftBarDisabled
+        ? Object.assign({}, svcGhostButtonStyle, { opacity: 0.45, cursor: 'not-allowed' })
+        : svcGhostButtonStyle,
+    }, t('draftRevert')),
+    React.createElement('button', {
+      type: 'button',
+      'data-dsh-zh-draft': 'save',
+      onClick: function () { void savePending() },
+      disabled: draftBarDisabled,
+      style: draftBarDisabled
+        ? Object.assign({}, svcAddButtonStyle, { opacity: 0.45, cursor: 'not-allowed' })
+        : svcAddButtonStyle,
+    }, saveStatus === 'saving' ? t('draftSaving') : t('draftSave')))
+  // 根用 display:contents：内容容器与底栏并列成为官方滚动容器 `.options`
+  // 的直接子元素（原因见 draftBarStyle 注释）。内容容器的布局样式原样保留；
+  // 底栏改为 fixed 后补一段下边距，避免最后一张卡片被操作栏遮住。
+  return React.createElement('div', { style: { display: 'contents' } },
+    React.createElement('div', {
+      style: draftBarBox === null
+        ? zhSectionStyle
+        : Object.assign({}, zhSectionStyle, { paddingBottom: 64 }),
+    },
     React.createElement('h3', { style: zhTitleStyle }, t('nav')),
     React.createElement('p', { style: zhIntroStyle }, t('sectionIntro')),
     React.createElement('div', { style: zhRowsStyle },
@@ -491,23 +696,23 @@ const ZhSettingsSection = function (props) {
           // 只作用于新会话；configForms 未就绪时显示为禁用。网络搜索开关在下方
           // 「网络搜索」收缩卡片里（与 API Key 同卡）。
         row('zhComplete', t('zhComplete'), t('zhCompleteDesc'),
-          toggle(snapshot.zhComplete, function () { settingsStore.set('zhComplete', !snapshot.zhComplete) }, false, t('zhComplete'))),
+          toggle(view.zhComplete, function () { setPendingLocal('zhComplete', !view.zhComplete, snapshot.zhComplete) }, false, t('zhComplete'))),
         row('zhAgentPrompt', t('zhAgentPrompt'), t('zhAgentPromptDesc'),
-          toggle(promptReady && promptSnapshot.value.zhAgentPrompt === true, function () {
+          toggle(promptReady && hostView.zhAgentPrompt === true, function () {
             if (boundPromptScope !== null && promptReady === true) {
-              void boundPromptScope.set('zhAgentPrompt', !(promptReady && promptSnapshot.value.zhAgentPrompt === true))
+              setPendingHost('zhAgentPrompt', !(promptReady && hostView.zhAgentPrompt === true), promptSnapshot.value.zhAgentPrompt === true)
             }
           }, boundPromptScope === null, t('zhAgentPrompt'))),
         row('zhToolDesc', t('zhToolDesc'), t('zhToolDescDesc'),
-          toggle(promptReady && promptSnapshot.value.zhToolDesc === true, function () {
+          toggle(promptReady && hostView.zhToolDesc === true, function () {
             if (boundPromptScope !== null && promptReady === true) {
-              void boundPromptScope.set('zhToolDesc', !(promptReady && promptSnapshot.value.zhToolDesc === true))
+              setPendingHost('zhToolDesc', !(promptReady && hostView.zhToolDesc === true), promptSnapshot.value.zhToolDesc === true)
             }
           }, boundPromptScope === null, t('zhToolDesc'))),
         row('zhContextInject', t('zhContextInject'), t('zhContextInjectDesc'),
-          toggle(promptReady && promptSnapshot.value.zhContextInject === true, function () {
+          toggle(promptReady && hostView.zhContextInject === true, function () {
             if (boundPromptScope !== null && promptReady === true) {
-              void boundPromptScope.set('zhContextInject', !(promptReady && promptSnapshot.value.zhContextInject === true))
+              setPendingHost('zhContextInject', !(promptReady && hostView.zhContextInject === true), promptSnapshot.value.zhContextInject === true)
             }
           }, boundPromptScope === null, t('zhContextInject'))),
         // 网络搜索开关已移入下方「网络搜索」收缩卡片（与 API Key 同卡）。
@@ -528,18 +733,18 @@ const ZhSettingsSection = function (props) {
             toggle(zhPromptOn, function () {
               if (boundPromptScope === null) return
               if (promptReady === false) {
-                // 设置通道未就绪：点击时主动重试，恢复后直接打开开关
+                // 设置通道未就绪：点击时主动重试，恢复后把开关记进草稿
                 if (typeof boundPromptScope.load === 'function') {
                   void boundPromptScope.load().then(function () {
                     const snap = boundPromptScope.getSnapshot()
                     if (snap !== null && snap !== undefined && snap.status === 'ready') {
-                      void boundPromptScope.set('zhPrompt', true)
+                      setPendingHost('zhPrompt', true, false)
                     }
                   })
                 }
                 return
               }
-              void boundPromptScope.set('zhPrompt', !zhPromptOn)
+              setPendingHost('zhPrompt', !zhPromptOn, promptSnapshot.value.zhPrompt === true)
             }, boundPromptScope === null, t('zhPrompt')))),
         React.createElement('div', {
           style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px' },
@@ -560,7 +765,7 @@ const ZhSettingsSection = function (props) {
             },
             onChange: function (event) {
               if (boundPromptScope !== null && promptReady === true) {
-                void boundPromptScope.set('zhPromptTarget', event.target.value)
+                setPendingHost('zhPromptTarget', event.target.value, promptTargetSaved)
               }
             },
           },
@@ -604,11 +809,10 @@ const ZhSettingsSection = function (props) {
             }))
           : null,
         React.createElement('div', { style: zhRowTitleStyle }, t('promptTextLabel')),
-        React.createElement('textarea', {
-          value: shownPromptText,
+        React.createElement(DraftTextarea, {
+          value: promptBaseText,
           disabled: promptReady === false,
-          rows: 5,
-          'aria-label': t('promptTextLabel'),
+          label: t('promptTextLabel'),
           placeholder: t('promptTextPlaceholder'),
           style: {
             width: '100%', boxSizing: 'border-box', resize: 'vertical',
@@ -619,19 +823,8 @@ const ZhSettingsSection = function (props) {
             fontFamily: 'inherit', fontSize: 13, lineHeight: '20px',
             opacity: promptReady === false ? 0.55 : 1,
           },
-          onChange: function (event) {
-            const value = event.target.value
-            setPromptDraft(value)
-            if (boundPromptScope !== null && promptReady === true) {
-              schedulePromptTextWrite(boundPromptScope, value)
-            }
-          },
-          onBlur: function (event) {
-            if (promptTextTimer !== null) { clearTimeout(promptTextTimer); promptTextTimer = null }
-            if (boundPromptScope !== null && promptReady === true) {
-              void boundPromptScope.set('zhPromptText', event.target.value)
-            }
-            setPromptDraft(null)
+          onCommit: function (value) {
+            if (boundPromptScope !== null && promptReady === true) setPendingHost('zhPromptText', value, promptTextSaved)
           },
         })),
       // ---- 三张收缩卡片：与官方插件页同款纵向列表（gap 12px），与上方
@@ -641,25 +834,25 @@ const ZhSettingsSection = function (props) {
         style: { display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' },
       },
       // ---- 「对话样式相关」收缩卡片：思考展开与统计显示 ----
-      collapseCard('styleGroup', snapshot.styleSettingsOpen === true,
-        function () { settingsStore.set('styleSettingsOpen', !(snapshot.styleSettingsOpen === true)) },
+      collapseCard('styleGroup', view.styleSettingsOpen === true,
+        function () { settingsStore.set('styleSettingsOpen', !(view.styleSettingsOpen === true)) },
         t('styleGroup'), t('styleGroupDesc'), null, [
         row('thinkingAuto', t('thinkingAuto'), t('thinkingAutoDesc'),
-          toggle(snapshot.thinkingAuto, function () { settingsStore.set('thinkingAuto', !snapshot.thinkingAuto) }, false, t('thinkingAuto')),
+          toggle(view.thinkingAuto, function () { setPendingLocal('thinkingAuto', !view.thinkingAuto, snapshot.thinkingAuto) }, false, t('thinkingAuto')),
           true),
         row('thinkMaxLines', t('thinkMaxLines'), t('thinkMaxLinesDesc'),
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
             React.createElement('input', {
-              type: 'number', min: 0, max: 200, step: 1, value: snapshot.thinkMaxLines, style: inputStyle,
+              type: 'number', min: 0, max: 200, step: 1, value: view.thinkMaxLines, style: inputStyle,
               'aria-label': t('thinkMaxLines'),
               onChange: function (event) {
                 const n = parseInt(event.target.value, 10)
-                if (!isNaN(n)) settingsStore.set('thinkMaxLines', Math.max(0, Math.min(200, Math.round(n))))
+                if (!isNaN(n)) setPendingLocal('thinkMaxLines', Math.max(0, Math.min(200, Math.round(n))), snapshot.thinkMaxLines)
               },
             }),
             React.createElement('span', { style: zhDescStyle }, t('thinkMaxLinesUnit')),
             React.createElement('select', {
-              value: snapshot.thinkMaxLinesFrom === 'earliest' ? 'earliest' : 'latest',
+              value: view.thinkMaxLinesFrom === 'earliest' ? 'earliest' : 'latest',
               'aria-label': t('thinkMaxLinesFrom'),
               style: {
                 flex: 'none', padding: '4px 8px', borderRadius: 8,
@@ -669,7 +862,7 @@ const ZhSettingsSection = function (props) {
                 fontSize: 13, lineHeight: '20px',
               },
               onChange: function (event) {
-                settingsStore.set('thinkMaxLinesFrom', event.target.value === 'earliest' ? 'earliest' : 'latest')
+                setPendingLocal('thinkMaxLinesFrom', event.target.value === 'earliest' ? 'earliest' : 'latest', snapshot.thinkMaxLinesFrom)
               },
             },
               React.createElement('option', { value: 'latest' }, t('thinkMaxLinesFromLatest')),
@@ -677,7 +870,7 @@ const ZhSettingsSection = function (props) {
           true),
         row('thinkMode', t('thinkMode'), t('thinkModeDesc'),
           React.createElement('select', {
-            value: snapshot.thinkMode === 'scroll' ? 'scroll' : 'button',
+            value: view.thinkMode === 'scroll' ? 'scroll' : 'button',
             'aria-label': t('thinkMode'),
             style: {
               flex: 'none', padding: '4px 8px', borderRadius: 8,
@@ -687,22 +880,22 @@ const ZhSettingsSection = function (props) {
               fontSize: 13, lineHeight: '20px',
             },
             onChange: function (event) {
-              settingsStore.set('thinkMode', event.target.value === 'scroll' ? 'scroll' : 'button')
+              setPendingLocal('thinkMode', event.target.value === 'scroll' ? 'scroll' : 'button', snapshot.thinkMode)
             },
           },
             React.createElement('option', { value: 'button' }, t('thinkModeButton')),
             React.createElement('option', { value: 'scroll' }, t('thinkModeScroll')))),
       ]),
       // ---- 「对话列表相关」收缩卡片：归档 / 删除 / 多选 ----
-      collapseCard('listGroup', snapshot.listSettingsOpen === true,
-        function () { settingsStore.set('listSettingsOpen', !(snapshot.listSettingsOpen === true)) },
+      collapseCard('listGroup', view.listSettingsOpen === true,
+        function () { settingsStore.set('listSettingsOpen', !(view.listSettingsOpen === true)) },
         t('listGroup'), t('listGroupDesc'), null, [
         row('autoArchive', t('autoArchive'), t('autoArchiveDesc'),
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
             React.createElement('input', {
               type: 'number', min: 0, max: 365, step: 1,
-              value: (promptReady && typeof promptSnapshot.value.zhAutoArchiveDays === 'number')
-                ? promptSnapshot.value.zhAutoArchiveDays
+              value: (promptReady && typeof hostView.zhAutoArchiveDays === 'number')
+                ? hostView.zhAutoArchiveDays
                 : 7,
               style: inputStyle,
               'aria-label': t('autoArchive'),
@@ -710,30 +903,31 @@ const ZhSettingsSection = function (props) {
               onChange: function (event) {
                 const n = parseInt(event.target.value, 10)
                 if (boundPromptScope !== null && promptReady === true && !isNaN(n)) {
-                  void boundPromptScope.set('zhAutoArchiveDays', Math.max(0, Math.min(365, Math.round(n))))
+                  setPendingHost('zhAutoArchiveDays', Math.max(0, Math.min(365, Math.round(n))),
+                    typeof promptSnapshot.value.zhAutoArchiveDays === 'number' ? promptSnapshot.value.zhAutoArchiveDays : undefined)
                 }
               },
             }),
             React.createElement('span', { style: zhDescStyle }, t('autoArchiveUnit'))),
           true),
         row('archiveView', t('archiveView'), t('archiveViewDesc'),
-          toggle(snapshot.archiveViewEnabled, function () {
-            settingsStore.set('archiveViewEnabled', !snapshot.archiveViewEnabled)
+          toggle(view.archiveViewEnabled, function () {
+            setPendingLocal('archiveViewEnabled', !view.archiveViewEnabled, snapshot.archiveViewEnabled)
           }, false, t('archiveView'))),
         row('deleteSession', t('deleteSession'), t('deleteSessionDesc'),
-          toggle(snapshot.deleteSessionEnabled, function () {
-            settingsStore.set('deleteSessionEnabled', !snapshot.deleteSessionEnabled)
+          toggle(view.deleteSessionEnabled, function () {
+            setPendingLocal('deleteSessionEnabled', !view.deleteSessionEnabled, snapshot.deleteSessionEnabled)
           }, false, t('deleteSession'))),
         row('batchOps', t('batchOps'), t('batchOpsDesc'),
-          toggle(snapshot.batchOpsEnabled, function () {
-            settingsStore.set('batchOpsEnabled', !snapshot.batchOpsEnabled)
+          toggle(view.batchOpsEnabled, function () {
+            setPendingLocal('batchOpsEnabled', !view.batchOpsEnabled, snapshot.batchOpsEnabled)
           }, false, t('batchOps'))),
       ]),
       // ---- 「网络搜索」收缩卡片：多引擎开关 + Tavily API Key（开关原为平铺行，
       // 按用户要求与 Key 同卡）。展开时顺带刷新凭据状态。 ----
-      collapseCard('searchGroup', snapshot.searchSettingsOpen === true,
+      collapseCard('searchGroup', view.searchSettingsOpen === true,
         function () {
-          const next = !(snapshot.searchSettingsOpen === true)
+          const next = !(view.searchSettingsOpen === true)
           settingsStore.set('searchSettingsOpen', next)
           if (next === true) searchCredentialStore.load()
         },
@@ -741,13 +935,13 @@ const ZhSettingsSection = function (props) {
         // 「智能搜索」按钮总开关（默认开）：关闭后输入框下方按钮完全不渲染，
         // 相关装配（槽位注册 + 样式注入）由 apply.ts 的订阅即时卸载。
         row('searchToggleEnabled', t('searchToggleEnabled'), t('searchToggleEnabledDesc'),
-          toggle(snapshot.searchToggleEnabled !== false, function () {
-            settingsStore.set('searchToggleEnabled', !(snapshot.searchToggleEnabled !== false))
+          toggle(view.searchToggleEnabled !== false, function () {
+            setPendingLocal('searchToggleEnabled', !(view.searchToggleEnabled !== false), snapshot.searchToggleEnabled !== false)
           }, false, t('searchToggleEnabled'))),
         row('zhWebSearch', t('zhWebSearch'), t('zhWebSearchDesc'),
           toggle(searchToggleOn, function () {
             if (boundPromptScope !== null && promptReady === true) {
-              void boundPromptScope.set('zhWebSearch', !searchToggleOn)
+              setPendingHost('zhWebSearch', !searchToggleOn, promptSnapshot.value.zhWebSearch !== false)
             }
           }, boundPromptScope === null, t('zhWebSearch'))),
         // 每查询返回条数：0 = 不接管（官方 8 条 + 轮询合并），>0 = 装壳并按查询分组。
@@ -762,7 +956,8 @@ const ZhSettingsSection = function (props) {
               onChange: function (event) {
                 const n = parseInt(event.target.value, 10)
                 if (boundPromptScope !== null && promptReady === true && !isNaN(n)) {
-                  void boundPromptScope.set('zhSearchPerQuery', Math.max(0, Math.min(50, Math.round(n))))
+                  setPendingHost('zhSearchPerQuery', Math.max(0, Math.min(50, Math.round(n))),
+                    typeof promptSnapshot.value.zhSearchPerQuery === 'number' ? promptSnapshot.value.zhSearchPerQuery : 0)
                 }
               },
             }),
@@ -829,7 +1024,7 @@ const ZhSettingsSection = function (props) {
         row('zhWebFetch', t('zhWebFetch'), t('zhWebFetchDesc'),
           toggle(fetchToggleOn, function () {
             if (boundPromptScope !== null && promptReady === true) {
-              void boundPromptScope.set('zhWebFetch', !fetchToggleOn)
+              setPendingHost('zhWebFetch', !fetchToggleOn, promptSnapshot.value.zhWebFetch !== false)
             }
           }, boundPromptScope === null, t('zhWebFetch'))),
         React.createElement('div', {
@@ -1038,8 +1233,8 @@ const ZhSettingsSection = function (props) {
             React.createElement('span', { style: svcCardHeadTextStyle },
               React.createElement('span', { style: svcCardNameStyle }, t('serviceMonitor')),
               React.createElement('span', { style: svcCardDescStyle }, t('serviceMonitorCardDesc'))),
-            snapshot.serviceMonitorTargets.length > 0
-              ? React.createElement('span', { style: svcCardBadgeStyle }, String(snapshot.serviceMonitorTargets.length))
+            view.serviceMonitorTargets.length > 0
+              ? React.createElement('span', { style: svcCardBadgeStyle }, String(view.serviceMonitorTargets.length))
               : null,
             React.createElement('span', { style: svcChevronStyle(svcOpen === true), 'aria-hidden': 'true' },
               React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none' },
@@ -1049,31 +1244,31 @@ const ZhSettingsSection = function (props) {
                 })))),
           svcOpen === true && React.createElement('div', { style: svcCardBodyStyle },
             row('serviceMonitor', t('serviceMonitor'), t('serviceMonitorDesc'),
-              toggle(snapshot.serviceMonitorEnabled, function () {
-                settingsStore.set('serviceMonitorEnabled', !snapshot.serviceMonitorEnabled)
+              toggle(view.serviceMonitorEnabled, function () {
+                setPendingLocal('serviceMonitorEnabled', !view.serviceMonitorEnabled, snapshot.serviceMonitorEnabled)
               }, false, t('serviceMonitor')),
               true),
               // 双形态子开关：仅在总开关开启时生效（总关 = 全部隐藏、零开销）。
             row('serviceMonitorPanel', t('serviceMonitorPanel'), t('serviceMonitorPanelDesc'),
-              toggle(snapshot.serviceMonitorPanelEnabled, function () {
-                settingsStore.set('serviceMonitorPanelEnabled', !snapshot.serviceMonitorPanelEnabled)
+              toggle(view.serviceMonitorPanelEnabled, function () {
+                setPendingLocal('serviceMonitorPanelEnabled', !view.serviceMonitorPanelEnabled, snapshot.serviceMonitorPanelEnabled)
               }, false, t('serviceMonitorPanel')),
               true),
             row('serviceMonitorTab', t('serviceMonitorTab'), t('serviceMonitorTabDesc'),
-              toggle(snapshot.serviceMonitorTabEnabled, function () {
-                settingsStore.set('serviceMonitorTabEnabled', !snapshot.serviceMonitorTabEnabled)
+              toggle(view.serviceMonitorTabEnabled, function () {
+                setPendingLocal('serviceMonitorTabEnabled', !view.serviceMonitorTabEnabled, snapshot.serviceMonitorTabEnabled)
               }, false, t('serviceMonitorTab')),
               true),
             row('serviceMonitorInterval', t('serviceMonitorInterval'), t('serviceMonitorIntervalDesc'),
               React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
                 React.createElement('input', {
                   type: 'number', min: 2, max: 300, step: 1,
-                  value: snapshot.serviceMonitorIntervalSec,
+                  value: view.serviceMonitorIntervalSec,
                   style: inputStyle,
                   'aria-label': t('serviceMonitorInterval'),
                   onChange: function (event) {
                     const n = parseInt(event.target.value, 10)
-                    if (!isNaN(n)) settingsStore.set('serviceMonitorIntervalSec', Math.max(2, Math.min(300, Math.round(n))))
+                    if (!isNaN(n)) setPendingLocal('serviceMonitorIntervalSec', Math.max(2, Math.min(300, Math.round(n))), snapshot.serviceMonitorIntervalSec)
                   },
                 }),
                 React.createElement('span', { style: zhDescStyle }, t('serviceMonitorIntervalUnit')))),
@@ -1118,7 +1313,7 @@ const ZhSettingsSection = function (props) {
               svcError === true && React.createElement('div', {
                 style: { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary, #d93026)' },
                 }, t('serviceTargetInvalid'))),
-                snapshot.serviceMonitorTargets.map(function (item, index) {
+                view.serviceMonitorTargets.map(function (item, index) {
                   // 行内编辑：名字/地址都是文本框，回车或失焦提交（地址非法
                   // 保留草稿并标红该行，不写入）；列宽与上方添加行一致。
                   const draft = svcEditDrafts[String(index)]
@@ -1183,5 +1378,5 @@ const ZhSettingsSection = function (props) {
               svcEditErrorIndex !== null && React.createElement('div', {
                 style: { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary, #d93026)' },
               }, t('serviceTargetInvalid')),
-    )))))
+    ))))), draftBar)
 }

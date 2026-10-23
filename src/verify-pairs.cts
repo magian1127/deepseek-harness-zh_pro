@@ -360,6 +360,10 @@ globalThis.fetch = function (url: string, init?: any) {
   }
   return Promise.resolve({ ok: true, status: 200, json: function () { return Promise.resolve({ ok: true, value: {} }) } }) as any
 }
+// 设置页 hook 状态：按组件函数对象分别保存 useState 快照（见 mock React）。
+const hookStacks = new WeakMap<object, unknown[]>()
+let hookOwner: object | null = null
+let hookIndex = 0
 const pluginExports = captured.factory(function (name) {
   // 本 bundle 唯一允许的跨包引用是 react（设置页组件用）；其余跨包 require 视为回归。
   if (name === 'react') {
@@ -376,7 +380,25 @@ const pluginExports = captured.factory(function (name) {
         }
         return snapshot
       },
-      useState: function (initial) { return [initial, function () {}] },
+      // 设置页的草稿层（pending / saveStatus / 输入框本地态）依赖 useState 真正
+      // 保存值：没有 state 就测不了「改动先暂存、点保存才写入」的新契约。
+      // 按组件函数对象各存一份 hook 数组，重新渲染时保留 state（模拟真实 hook）。
+      useState: function (initial: unknown) {
+        const owner = hookOwner
+        if (owner === null) return [initial, function () {}]
+        let list = hookStacks.get(owner)
+        if (list === undefined) {
+          list = []
+          hookStacks.set(owner, list)
+        }
+        const index = hookIndex
+        hookIndex += 1
+        if (!(index in list)) list[index] = initial
+        const set = function (next: unknown) {
+          list[index] = typeof next === 'function' ? (next as (prev: unknown) => unknown)(list[index]) : next
+        }
+        return [list[index], set]
+      },
       // 设置页「网络搜索」卡在挂载时用 useEffect 拉取凭据状态；mock 不跑副作用，
       // 只保证调用不抛（真实行为由 verify-cli 的主机侧用例覆盖）。
       useEffect: function () {},
@@ -384,7 +406,18 @@ const pluginExports = captured.factory(function (name) {
       createElement: function (type, props) {
         const children = Array.prototype.slice.call(arguments, 2)
         const nextProps = Object.assign({}, props, { children: children })
-        if (typeof type === 'function') return type(nextProps)
+        if (typeof type === 'function') {
+          const prevOwner = hookOwner
+          const prevIndex = hookIndex
+          hookOwner = type as object
+          hookIndex = 0
+          try {
+            return (type as (p: unknown) => unknown)(nextProps)
+          } finally {
+            hookOwner = prevOwner
+            hookIndex = prevIndex
+          }
+        }
         return { type: type, props: nextProps }
       },
     }
@@ -771,6 +804,86 @@ const toolDescToggle = findElement(settingsTree, function (node) {
 check(toolDescToggle !== null && toolDescToggle.props.disabled === true, true, '设置服务缺失时禁用工具说明开关')
 check(locale.lookup('dsh-zh-settings', 'zhAgentPrompt'), '代理角色提示中文化', '代理角色提示 中文文案')
 check(locale.lookup('dsh-zh-settings', 'zhToolDesc'), '工具说明中文化', '工具说明 中文文案')
+
+// ---- 设置草稿契约：UI 改动只进本地草稿，点底部「保存」才写入 ----
+// 设置页所有设置项（界面设置 + 主机字段）改为草稿优先：逐项即时写入会触发
+// 主机文档广播与整页重渲染，是用户反馈的卡顿来源。
+const clickSettingToggle = function (label: string) {
+  const node = findElement(settingsRender(), function (n: any) {
+    return n.type === 'button' && n.props && n.props['aria-label'] === label
+  })
+  if (node === null) return false
+  node.props.onClick({ preventDefault: function () {} })
+  return true
+}
+const draftBarNode = function (kind: string) {
+  return findElement(settingsRender(), function (n: any) {
+    return n.type === 'button' && n.props && n.props['data-dsh-zh-draft'] === kind
+  })
+}
+const commitDrafts = function () {
+  const node = draftBarNode('save')
+  if (node === null || node.props.disabled === true) return false
+  node.props.onClick({ preventDefault: function () {} })
+  return true
+}
+// 通过设置页下拉框改一项并落盘：每次都重新渲染取节点，模拟真实交互
+// （旧节点闭包里的「已保存值」会过期，真实 React 每轮渲染都会换新闭包）。
+const setSettingSelect = function (label: string, value: string) {
+  const node = findElement(settingsRender(), function (n: any) {
+    return n.type === 'select' && n.props && n.props['aria-label'] === label
+  })
+  if (node === null) return false
+  node.props.onChange({ target: { value: value } })
+  return commitDrafts()
+}
+const revertDrafts = function () {
+  const node = draftBarNode('revert')
+  if (node === null) return false
+  node.props.onClick({ preventDefault: function () {} })
+  return true
+}
+{
+  const store = pluginExports.settingsStore
+  const before = store.getSnapshot().thinkingAuto
+  check(clickSettingToggle('自动展开最新思考'), true, '草稿契约：设置开关可点击')
+  check(store.getSnapshot().thinkingAuto, before, '点开关只进草稿、不立即写入 localStorage')
+  const note = findElement(settingsRender(), function (n: any) { return n.props && n.props.role === 'status' })
+  check(note !== null && String(note.props.children).indexOf('未保存') !== -1, true, '底栏显示未保存改动数')
+  const saveNode = draftBarNode('save')
+  check(saveNode !== null && saveNode.props.disabled === false, true, '有草稿时「保存」可用')
+  check(commitDrafts(), true, '底栏「保存」可点击')
+  check(store.getSnapshot().thinkingAuto, !before, '点保存后一次写入并生效')
+  check(clickSettingToggle('自动展开最新思考'), true, '再次点击开关（改回）')
+  check(store.getSnapshot().thinkingAuto, !before, '未保存时 store 保持上次保存值')
+  check(revertDrafts(), true, '底栏「还原」可点击')
+  check(store.getSnapshot().thinkingAuto, !before, '还原丢弃草稿、store 不变')
+  check(draftBarNode('save') !== null && draftBarNode('save')!.props.disabled === true, true, '无草稿时「保存」禁用')
+  // 收尾恢复原值并落盘，避免影响后续用例。
+  check(clickSettingToggle('自动展开最新思考'), true, '收尾点击开关')
+  check(commitDrafts(), true, '收尾保存')
+  check(store.getSnapshot().thinkingAuto, before, '收尾恢复原值')
+}
+
+// 置底实现的结构契约：根必须是 display:contents，底栏必须是滚动容器
+// （官方 `.options`）的直接子元素。sticky 的粘附范围受包含块限制——底栏一旦
+// 回到内容容器内部，包含块底边就等于它自己的底边，底栏会随内容滚走、下方
+// 露出可点的设置内容（真实的 GUI 回归症状）。
+{
+  const root = settingsRender()
+  check(root !== null && root.props && root.props.style && root.props.style.display, 'contents',
+    '设置页根为 display:contents（内容容器与底栏并列）')
+  const children = root !== null && root.props && Array.isArray(root.props.children) ? root.props.children : []
+  const bar = children.length > 0 ? children[children.length - 1] : null
+  check(bar !== null && bar.props && bar.props.style && bar.props.style.position, 'sticky',
+    '底栏是滚动容器的直接子元素且 sticky 贴底')
+  check(bar !== null && bar.props.style && bar.props.style.bottom, 0, '底栏 sticky 的 bottom 偏移为 0')
+  check(bar !== null && bar.props.style && typeof bar.props.style.background === 'string'
+    && bar.props.style.background.indexOf('--dsw-alias-bg-layer-2') !== -1, true,
+    '底栏背景走面板底色（不透明，遮住滚动内容）')
+}
+
+
 
 // 「排序位置」（zhPromptOrder）：仅「初始系统提示」目标可见，默认 100。
 // 设置服务缺失时目标按 system 处理，因此这一行仍会渲染（禁用态）。
@@ -1240,7 +1353,7 @@ const earliestSelect = findElement(settingsRender(), function (node) {
   return node.type === 'select' && node.props && node.props['aria-label'] === '折叠显示方向'
 })
 check(earliestSelect !== null || true, true, '默认展开行数 折叠方向下拉框存在')
-if (earliestSelect !== null) earliestSelect.props.onChange({ target: { value: 'earliest' } })
+setSettingSelect('折叠显示方向', 'earliest')
 const earlyBody = makeFakeEl()
 const earlyHeader = makeFakeEl()
 earlyHeader.setAttribute('data-disclosure-row', '')
@@ -1275,9 +1388,9 @@ const modeSelect = findElement(settingsRender(), function (node) {
   return node.type === 'select' && node.props && node.props['aria-label'] === '展开模式'
 })
 check(modeSelect !== null || true, true, '展开模式 设置下拉框存在')
-if (modeSelect !== null) modeSelect.props.onChange({ target: { value: 'scroll' } })
+setSettingSelect('展开模式', 'scroll')
 // 方向切回 latest（最早方向测试已切 earliest），滚动模式 latest 行为从底部开始。
-if (earliestSelect !== null) earliestSelect.props.onChange({ target: { value: 'latest' } })
+setSettingSelect('折叠显示方向', 'latest')
 const scrollBody = makeFakeEl()
 const scrollHeader = makeFakeEl()
 scrollHeader.setAttribute('data-disclosure-row', '')
@@ -1318,7 +1431,7 @@ if (typeof scrollBody._handlers.scroll === 'function') scrollBody._handlers.scro
 fakeObserverCbs[0].cb(undefined)
 check(scrollBody.scrollTop, 2160, '展开模式 latest 滚回底部后恢复跟随')
 // 切 earliest 方向：滚动条定位到顶部。
-if (earliestSelect !== null) earliestSelect.props.onChange({ target: { value: 'earliest' } })
+setSettingSelect('折叠显示方向', 'earliest')
 fakeObserverCbs[0].cb(undefined)
 check(scrollBody.scrollTop, 0, '展开模式 earliest 初始在顶部')
 // earliest 流式增长：保持顶部（不跟随）。
@@ -1331,8 +1444,8 @@ if (typeof scrollBody._handlers.scroll === 'function') scrollBody._handlers.scro
 fakeObserverCbs[0].cb(undefined)
 check(scrollBody.scrollTop, 500, '展开模式 earliest 保持用户滚动位置')
 // 切回 latest 方向 + 按钮模式：展开按钮恢复，滚动条样式清理。
-if (earliestSelect !== null) earliestSelect.props.onChange({ target: { value: 'latest' } })
-if (modeSelect !== null) modeSelect.props.onChange({ target: { value: 'button' } })
+setSettingSelect('折叠显示方向', 'latest')
+setSettingSelect('展开模式', 'button')
 fakeObserverCbs[0].cb(undefined)
 check(scrollBody.__dshZhControl !== undefined, true, '展开模式 切回按钮模式后展开按钮恢复')
 check(scrollBody.style.overflowY, '', '展开模式 按钮模式无滚动条样式残留')
@@ -1400,12 +1513,12 @@ check(anonBody.__dshZhControl !== undefined, true, '嵌套表头包裹层 显示
 injectedThinkRoots = []
 // 滚动模式：正文限定高度并自带滚动条（用户报告失效的那一项）。
 injectedThinkRoots = [newRoot]
-if (modeSelect !== null) modeSelect.props.onChange({ target: { value: 'scroll' } })
+setSettingSelect('展开模式', 'scroll')
 fakeObserverCbs[0].cb(undefined)
 check(shownOf(newBody), 20, '新版 DisclosureRow 结构 滚动模式折叠为设置行数')
 check(newBody.style.maxHeight, '480px', '新版 DisclosureRow 结构 滚动模式高度为 20 行')
 check(newBody.style.overflowY, 'auto', '新版 DisclosureRow 结构 滚动模式正文自带滚动条')
-if (modeSelect !== null) modeSelect.props.onChange({ target: { value: 'button' } })
+setSettingSelect('展开模式', 'button')
 fakeObserverCbs[0].cb(undefined)
 injectedThinkRoots = []
 
@@ -1847,6 +1960,7 @@ UPSTREAM['settings.models'].deleteDescriptionWithCredential = ORIGINAL_UPSTREAM
 // packages/client/ui-theme/src/styles/*.css（或 client 源码 setProperty）里
 // 确认存在，再加进本清单——这正是防止再次写错令牌名的成本最低的关卡。
 const THEME_TOKENS = new Set([
+  '--dsw-alias-bg-base',
   '--dsw-alias-bg-layer-1',
   '--dsw-alias-bg-layer-2',
   '--dsw-alias-bg-layer-3',

@@ -69,8 +69,16 @@ const settingsStore = {
     }
   },
   set: function (field, value) {
+    settingsStore.setMany({ [field]: value })
+  },
+  // 批量写入：设置页「保存」一次提交所有草稿改动，只写一次 localStorage、
+  // 只通知一次订阅者（逐键 set 会让每个监听者跑 N 次，正是逐项立即生效的卡顿来源）。
+  setMany: function (patch) {
+    const values = patch !== null && typeof patch === 'object' ? patch : {}
+    const keys = Object.keys(values)
+    if (keys.length === 0) return
     const next = Object.assign({}, settingsSnapshot)
-    next[field] = value
+    for (const key of keys) next[key] = values[key]
     settingsSnapshot = next
     try {
       if (typeof localStorage !== 'undefined') localStorage.setItem(SETTINGS_KEY, JSON.stringify(settingsSnapshot))

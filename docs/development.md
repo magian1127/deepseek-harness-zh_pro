@@ -170,6 +170,30 @@ client-modules 会缓存某个包名是否为有效客户端包。结构错误�
 未配置禁用清除、错误码 → 文案映射、状态行三种态）。该套 mock React 必须提供 bundle 用到的
 全部 hook（`useEffect` 缺失会让设置页渲染直接抛错），新增 hook 用法时要同步补齐。
 
+**设置草稿层（2026-10 起，解决逐项写入卡顿）**：设置页所有设置项不再即时写入
+（`settingsStore.set` / `scope.set`）。改动先落进组件内 `pending = { local, host }`
+草稿，底部置底操作栏的「保存」才一次性提交：主机字段用 `configForms.mutate(ops)`
+原子提交（一次 revision fence、一次文档广播），界面设置用 `settingsStore.setMany(patch)`
+一次写盘且只通知一次订阅者，「还原」清空草稿。逐项 `set` 每次都是一次网络提交 +
+设置文档广播 + 整页重渲染，是用户反馈「动一下卡一下」的根因；折叠态（卡片展开）、
+API Key 录入与插件同步属于操作/瞬时状态，仍即时生效。提示词文本框用子组件
+`DraftTextarea` 持有显示值、失焦才写草稿：父组件是上千行的设置页，逐键 `setState`
+会整页重渲染，长文本编辑的卡顿主要来自这里；点「保存」前必然先触发失焦，草稿不会漏。
+新增可写设置时必须走草稿（`setPendingLocal` / `setPendingHost`）并补 `verify-pairs`
+的草稿契约断言（改动不立即写 store、保存后一次生效、还原丢弃、无草稿时按钮禁用），
+否则会退回逐项即时写入。`verify-pairs` 的 mock React 因此实现了按组件函数分栈的
+`useState`（原先返回 no-op setter，草稿层无法测试）。
+
+**置底结构契约（2026-10-23 实测回归）**：官方设置页把分区渲染进滚动容器
+`.options`（`overflow-y: auto; padding: 0 24px 24px`），slot 包裹层是
+`display: contents`。组件根因此也必须 `display: contents`，让「内容容器」和
+「操作栏」并列为 `.options` 的**直接子元素**。把操作栏放进内容容器（它同时是最后一个
+子元素）会让 sticky 的包含块底边等于操作栏自身底边——`bottom: 0` 无处可偏移，
+操作栏随内容滚走、下方露出仍可点击的设置内容。操作栏背景用面板底色
+`--dsw-alias-bg-layer-2`（`.options` 自身透明），否则滚动内容会透出。
+`verify-pairs` 有结构断言守护（根 `display: contents`、操作栏是最后一个直接子元素、
+`position: sticky` / `bottom: 0`、背景令牌）。
+
 **错误码 → 文案的硬契约（2026-09-23 修复）**：只有主机 `SEARCH_CREDENTIAL_VALIDATION_CODES`
 里的码才归因为「Key 不合法」；`not-found` 表示主机路由尚未载入（旧主机 + 新客户端，或本
 版本新增路由后未重启 `dsh web`），必须提示重启而不是「Key 不合法」；其余一律走通用失败

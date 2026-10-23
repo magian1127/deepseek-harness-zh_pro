@@ -62,12 +62,3 @@ const zhPromptStore = {
     for (const listener of zhPromptListeners.slice()) listener()
   },
 }
-// 注入文本的防抖写入（编辑时 600ms 静默后才写主机 settings）。
-let promptTextTimer = null
-const schedulePromptTextWrite = function (scope, value) {
-  if (promptTextTimer !== null) clearTimeout(promptTextTimer)
-  promptTextTimer = setTimeout(function () {
-    promptTextTimer = null
-    void scope.set('zhPromptText', value)
-  }, 600)
-}

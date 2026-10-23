@@ -19,7 +19,12 @@
 ## 设置页顺序、默认值与存储
 
 下表是设置页从上到下的唯一顺序。三张分组卡均复刻官方插件卡样式、默认收起，
-并在 localStorage 中分别记忆展开状态。
+并在 localStorage 中分别记忆展开状态。表格最下方是**置底操作栏**（`保存` / `还原`）：
+所有设置改动先进入本地草稿——不改运行时、不写盘、不触发任何订阅者；点「保存」才
+一次性提交（主机字段用一次 `configForms.mutate` 原子提交，界面设置用一次
+`settingsStore.setMany` 写入），「还原」丢弃全部未保存改动。折叠卡片的展开状态、
+API Key 录入/清除、插件同步动作属于操作或瞬时状态，不受草稿影响，仍即时生效；
+离开本设置分区（组件卸载）会丢弃未保存的草稿。
 
 | 界面位置 | 设置与字段 | 默认值 | 存储 | 生效范围或边界 |
 | --- | --- | --- | --- | --- |
@@ -27,11 +32,11 @@
 | 平铺 | 代理角色提示中文化 `zhAgentPrompt` | 关 | `settings.yaml` | 新会话首次模型请求时锁定 |
 | 平铺 | 工具说明中文化 `zhToolDesc` | 关 | `settings.yaml` | 新会话首次模型请求时锁定 |
 | 平铺 | 上下文注入中文化 `zhContextInject` | 关 | `settings.yaml` | 新会话首次模型请求时锁定；替换注入会话历史的官方英文文本 |
-| 平铺 | 网络搜索 `zhWebSearch` | 开 | `settings.yaml` | 实时生效；详见「网络搜索」章 |
-| 网络搜索 | 搜索后端优先级 `zhSearchOrder` | `deepseek-search-api` → `zhipu-web-search-prime` → `dsh-zh-free` | `settings.yaml` | 实时生效；▲/▼ 调整，空列表 = 不接管 |
-| 网络搜索 | 每查询返回条数 `zhSearchPerQuery` | 0 | `settings.yaml` | 实时生效；0 = 不接管（官方 8 条 + 轮询），1–50 = 分组保留 N 条 |
-| 平铺 | 免 Key 网页读取 `zhWebFetch` | 开 | `settings.yaml` | 实时生效；详见「网页读取」章 |
-| 网页读取 | 读取后端优先级 `zhFetchOrder` | `deepseek-fetch-api` → `zhipu-web-reader` → `dsh-zh-free-fetch` → `http` | `settings.yaml` | 实时生效；▲/▼ 调整，空列表 = 不接管 |
+| 平铺 | 网络搜索 `zhWebSearch` | 开 | `settings.yaml` | 点「保存」后生效；详见「网络搜索」章 |
+| 网络搜索 | 搜索后端优先级 `zhSearchOrder` | `deepseek-search-api` → `zhipu-web-search-prime` → `dsh-zh-free` | `settings.yaml` | 点「保存」后生效；▲/▼ 调整，空列表 = 不接管 |
+| 网络搜索 | 每查询返回条数 `zhSearchPerQuery` | 0 | `settings.yaml` | 点「保存」后生效；0 = 不接管（官方 8 条 + 轮询），1–50 = 分组保留 N 条 |
+| 平铺 | 免 Key 网页读取 `zhWebFetch` | 开 | `settings.yaml` | 点「保存」后生效；详见「网页读取」章 |
+| 网页读取 | 读取后端优先级 `zhFetchOrder` | `deepseek-fetch-api` → `zhipu-web-reader` → `dsh-zh-free-fetch` → `http` | `settings.yaml` | 点「保存」后生效；▲/▼ 调整，空列表 = 不接管 |
 | 平铺 | 提示词注入 `zhPrompt` / `zhPromptText` / `zhPromptTarget` / `zhPromptOrder` | 关；文本为“思考过程和回复始终使用中文输出”；目标为 `system`；排序位置 100 | `settings.yaml` | 后续模型请求；目标可改为 `user`；排序位置仅在 `system` 目标下可见（1–9999） |
 | 对话样式相关 | 自动展开最新思考 `thinkingAuto` | 开 | localStorage | 中文/英文界面 |
 | 对话样式相关 | 默认展开行数与方向 `thinkMaxLines` / `thinkMaxLinesFrom` | 20；`latest` | localStorage | 0–200；方向可选 `latest` / `earliest` |
@@ -49,6 +54,10 @@
 localStorage 键为 `deepseek-harness-zh_pro:enhancements`；主机配置持久化在行 id `dsh-zh` 的
 profile 行 config（DSH 0.1.7 起）。`configForms` 不可用时，四个模型请求中文化开关及自动归档字段不可写；
 localStorage 中的界面增强仍可使用。
+
+保存的提交顺序：先等主机字段的 `mutate` 被接受，再写入界面设置并清空草稿；主机拒绝或
+传输失败时草稿原样保留、底栏提示「保存失败」，可再次点「保存」重试。改动回到已保存值时
+该字段自动退出草稿，未保存计数随之减少。
 
 ## 中文补全
 

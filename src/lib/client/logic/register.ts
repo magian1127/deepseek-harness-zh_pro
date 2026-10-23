@@ -23,20 +23,13 @@ function registerSettingsSection(ctx) {
   }
 }
 
-// 装配：清理提示词防抖定时器 + 绑定「中文优先提示」开关到主机插件行
-// config（DSH 0.1.7 起经 configForms 按入口 id 取 ConfigForm，快照/订阅/
-// set 面与旧 settingsScope 同构；默认关闭）。用可选注入而不是
-// exports.inject：configForms 缺失时仅该开关不可用，中文补全等核心功能
-// 不受影响。
+// 装配：绑定「中文优先提示」开关到主机插件行 config（DSH 0.1.7 起经
+// configForms 按入口 id 取 ConfigForm，快照/订阅/set 面与旧 settingsScope
+// 同构；默认关闭）。用可选注入而不是 exports.inject：configForms 缺失时仅该
+// 开关不可用，中文补全等核心功能不受影响。
+// 写入不再是逐键即时：设置页把所有改动攒在草稿里，点「保存」时用一次
+// mutate 原子提交（见 settings-section.ts 的草稿层）。
 function bindPromptScope(ctx) {
-  ctx.effect(function () {
-    return function () {
-      if (promptTextTimer !== null) {
-        clearTimeout(promptTextTimer)
-        promptTextTimer = null
-      }
-    }
-  }, 'dsh-zh: prompt text debounce')
   if (typeof ctx.inject === 'function') {
     ctx.inject(['configForms'], function (configCtx) {
       const configForms = configCtx === null ? null : configCtx.get('configForms')
