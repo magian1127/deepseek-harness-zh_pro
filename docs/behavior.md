@@ -23,8 +23,13 @@
 所有设置改动先进入本地草稿——不改运行时、不写盘、不触发任何订阅者；点「保存」才
 一次性提交（主机字段用一次 `configForms.mutate` 原子提交，界面设置用一次
 `settingsStore.setMany` 写入），「还原」丢弃全部未保存改动。折叠卡片的展开状态、
-API Key 录入/清除、插件同步动作属于操作或瞬时状态，不受草稿影响，仍即时生效；
-离开本设置分区（组件卸载）会丢弃未保存的草稿。
+API Key 录入/清除、插件同步动作属于操作或瞬时状态，不受草稿影响，仍即时生效。
+
+草稿保存在**插件模块级 store**（不是设置分区的组件状态），因此**离开并重新进入
+本设置分区、或对话进行中分区被宿主重挂载，草稿都仍在**——只有刷新页面、点「保存」
+或点「还原」才清空。早期实现把草稿放在组件 `useState` 里，对话流式输出触发分区
+重挂载时草稿会瞬间消失（表现为「对话中改任何设置都立刻跳回去」），该形态已废弃，
+由 `verify-pairs.cjs` 的「分区重新挂载后草稿仍在」用例守护。
 
 | 界面位置 | 设置与字段 | 默认值 | 存储 | 生效范围或边界 |
 | --- | --- | --- | --- | --- |
@@ -37,7 +42,7 @@ API Key 录入/清除、插件同步动作属于操作或瞬时状态，不受�
 | 网络搜索 | 每查询返回条数 `zhSearchPerQuery` | 0 | `settings.yaml` | 点「保存」后生效；0 = 不接管（官方 8 条 + 轮询），1–50 = 分组保留 N 条 |
 | 平铺 | 免 Key 网页读取 `zhWebFetch` | 开 | `settings.yaml` | 点「保存」后生效；详见「网页读取」章 |
 | 网页读取 | 读取后端优先级 `zhFetchOrder` | `deepseek-fetch-api` → `zhipu-web-reader` → `dsh-zh-free-fetch` → `http` | `settings.yaml` | 点「保存」后生效；▲/▼ 调整，空列表 = 不接管 |
-| 平铺 | 提示词注入 `zhPrompt` / `zhPromptText` / `zhPromptTarget` / `zhPromptOrder` | 关；文本为“思考过程和回复始终使用中文输出”；目标为 `system`；排序位置 100 | `settings.yaml` | 后续模型请求；目标可改为 `user`；排序位置仅在 `system` 目标下可见（1–9999） |
+| 平铺 | 提示词注入 `zhPrompt` / `zhPromptText` / `zhPromptTarget` / `zhPromptOrder` | 关；文本为默认句 “始终用中文进行推理，并用中文输出你的思考过程。”；目标为 `system`；排序位置 100 | `settings.yaml` | 后续模型请求；目标可改为 `user`；排序位置仅在 `system` 目标下可见（-9999–9999，默认 100 = persona 之后） |
 | 对话样式相关 | 自动展开最新思考 `thinkingAuto` | 开 | localStorage | 中文/英文界面 |
 | 对话样式相关 | 默认展开行数与方向 `thinkMaxLines` / `thinkMaxLinesFrom` | 20；`latest` | localStorage | 0–200；方向可选 `latest` / `earliest` |
 | 对话样式相关 | 展开模式 `thinkMode` | `button` | localStorage | 可选 `button` / `scroll` |
@@ -329,27 +334,36 @@ DSH 注入会话的官方英文上下文在 `agent/pre-step` 阶段、进入会�
 > 不是词典缺条目。
 
 **已知限制与代价**：运行时上下文的头部行（`Current runtime context. This snapshot
-supersedes …` 及其清空变体）由 `joinContextSections` 硬编码拼接，官方渲染侧永远是英文；本开关
-按行级规则翻译它，代价是快照投影的 retained 比较每步失配、DSH 每步注入一条替换
-快照（surface 替换语义，模型输入不膨胀，但会话日志每步多一条快照事件）。
-**0.2.1 起快照正文也在 `agent/pre-step` 对最终快照消息按段重译**：上游
-`agent-loop` 每次请求前用 `systemPrompt.refreshContext` 按 provider 原文重建
-`assembly.contexts` 再渲染快照，assemble 后对 contexts 的改写会被这一步覆盖
-（0.1.7 时代的「assemble 改写 contexts」路径已静默失效，属升版回归；该路径保留为
-0.1.x 兼容）。快照按 `\n\n` 分块匹配，因此 `team:identity` 这类多行 context 不会被
-拆散；未命中的块原样保留。tmux
-终端上下文快照同理且有 per-turn 重注入代价，不在覆盖范围；`<available_skills>`
-目录条目（skill 名称与描述）、`<skill_content>` 正文、指令文件（AGENTS.md 等）
-正文、压缩摘要正文、标题生成等辅助调用的内部指令均为作者/用户/程序内容，
-按设计不翻译。
+supersedes …` 及其清空变体）由 `joinContextSections` 硬编码拼接，官方渲染侧永远是英文。
+本开关在**快照投影层**翻译它（连同正文与 `source.sections`），因此中文快照一次成型、
+没有「每步多一条替换快照」的代价：翻译后的正文同时作为
+`RuntimeContextProjection` 的比较基准，快照内容不变就不会追加新消息。
+
+**0.2.1 起快照正文在哪里翻译（重要更正）**：上游 `agent-loop` 在 `step()` 里遇到
+`decision.messages` 中 `source.kind === 'runtime-context'` 的消息时，**只把它当作
+「本步需要快照」的信号**，真正写入历史的是
+`systemPrompt.refreshContext(assembly, …)` 按注册 provider 原文重建 contexts、再由
+`RuntimeContextProjection.project()` 渲染出的**另一条新消息**。因此在
+`agent/pre-step` 里改写旧消息的正文永远不会进入会话历史——这正是旧版本「头部译了、
+正文仍英文」的根因（早期文档曾记成 pre-step 已覆盖，与运行版
+源码不符）。现在快照改在投影层翻译，`source.sections` 的逐段归属文本一并更换，
+GUI 上下文卡片与模型输入保持一致。
+
+同理，**比本插件更外层注册的注入**（典型是 `@deepseek-ai/dsh-time-context`：它
+以 `prepend: true` 注册，且在自身 `next()` 返回**之后**才追加消息，preset 又在
+agent 创建时才挂载）不会出现在本插件 `next()` 的返回值里。这类漏网注入由
+`Session.append` 接缝兜住，保证落盘历史与模型输入一致。tmux 终端上下文快照
+同样走该接缝；`<available_skills>` 目录条目（skill 名称与描述）、
+`<skill_content>` 正文、指令文件（AGENTS.md 等）正文、压缩摘要正文、标题生成等
+辅助调用的内部指令均为作者/用户/程序内容，按设计不翻译。
 
 **生效语义**：与前两个开关共用会话语言锁定（regime）——会话首次请求时按当前开关
 状态锁定，老会话永远保持英文，锁定后翻转开关不影响该会话；regime 表为进程内存，
 进程重启后重建（重启前已锁定的中文会话继续按官方行为携带历史中的中文注入，新注入
-回到当时的开关状态）。实现方式：pre-step 监听以 `prepend: true` 注册在监听链头部
-（先执行，`next()` 返回的 decision 已包含核心注入器的消息，翻译后返回；快照消息走
-`localizeSnapshotBody` 整段重译，其余注入走行级模板替换）+ 共享
-assemble 管线改写 contexts 正文（0.1.x 兼容路径）；任何改写失败只告警一次并沿用原文，不阻断模型请求。
+回到当时的开关状态）。实现为三条互补路径：**快照投影包装**（渲染即中文，0.2.1 起的
+主路径）+ **`Session.append` 接缝**（兜住链序之外的注入）+ **pre-step `prepend: true`
+行级替换**（覆盖链内官方注入），另有共享 assemble 管线改写 contexts 作为 0.1.x
+兼容路径。任何改写失败只告警一次并沿用原文，不阻断模型请求。
 
 ## 智能搜索开关
 
@@ -665,10 +679,13 @@ execute 走官方 web seam，因此自动获得上述后端级联与智谱联动
 
 - `system`：在 `systemPrompt.assemble` 返回后，把文本作为 `dsh-zh:language` section
   写入最终 system prompt，不产生可见上下文消息。落点由「排序位置」（`zhPromptOrder`，
-  1–9999，默认 100）决定，与 DSH 官方 `SECTION_ORDERS` 同一坐标系：默认排在
+  -9999–9999，默认 **-1001**）决定，与 DSH 官方 `SECTION_ORDERS` 同一坐标系（数值越小
+  越靠前）：默认 `-1001` 排在 `harness:identity`（order -1000，即「你是由 DeepSeek Harness
+  驱动的 AI 代理。」）之前，也就是整段 system prompt 的**最前面**；改成 `100` 则落到
   `deployment:persona-prefix`（order 0，即「你是一个由 … 模型驱动的编码代理。」）之后、
-  官方政策与工具说明区之前。设置页只在 `system` 目标下显示该输入框；输入在失焦或回车时
-  提交，非整数回弹为当前值，超出范围的数字钳到 1 或 9999。落点按「第一个 order 更大的
+  官方政策与工具说明区之前；`-1`～`-1000` 落在 identity 与 persona 之间（等于 -1000 时按
+  「之后」处理）。设置页只在 `system` 目标下显示该输入框；输入在失焦或回车时
+  提交，非整数回弹为当前值，超出范围的数字钳到 -9999 或 9999。落点按「第一个 order 更大的
   系统自带段之前」计算，未收录的第三方新增段不参与定位。
 - `user`：不修改 system sections，在 `agent/pre-step` 插入一条来源为
   `deepseek-harness-zh_pro`、form 为 `notice` 的 `user/message`；聊天记录可展开查看全文。

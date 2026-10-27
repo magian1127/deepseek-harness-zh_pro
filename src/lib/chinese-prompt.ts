@@ -136,7 +136,30 @@ function resolveInsertIndex(sections: readonly unknown[], targetOrder: number, s
 // zhPrompt 与 zhWebSearch 另被 agent-search-tool.js 消费（壳描述语言 / 壳开关）；
 // zhSearchOrder 与 zhSearchPerQuery 则驱动后端接管与工具壳条数。
 // zhWebFetch 与 zhFetchOrder 驱动「网页读取」（web-fetch.ts）的后端接管。
-const modelState = { ready: false, zhPrompt: false, zhAgentPrompt: false, zhToolDesc: false, zhContextInject: false, zhWebSearch: true, zhSearchOrder: [...ZH_SEARCH_ORDER_DEFAULT], zhSearchPerQuery: 0, zhWebFetch: true, zhFetchOrder: [...ZH_FETCH_ORDER_DEFAULT] }
+// promptInjection：提示词注入的**当前生效状态**（enabled/text/target/order），
+// 由 installChinesePrompt 挂上，供 /dsh-zh/api/diagnostics 观测。
+const modelState: {
+  ready: boolean
+  zhPrompt: boolean
+  zhAgentPrompt: boolean
+  zhToolDesc: boolean
+  zhContextInject: boolean
+  zhWebSearch: boolean
+  zhSearchOrder: string[]
+  zhSearchPerQuery: number
+  zhWebFetch: boolean
+  zhFetchOrder: string[]
+  promptInjection?: { enabled: boolean; text: string; target: string; order: number }
+  /** 提示词配置同步计数（apply / volatile / 组装前主动同步），供诊断排查。 */
+  promptSync?: {
+    applyCount: number
+    volatileCount: number
+    assembleCount?: number
+    lastAt: string
+    lastText: string | null
+    lastSource?: 'apply' | 'volatile' | 'assemble'
+  }
+} = { ready: false, zhPrompt: false, zhAgentPrompt: false, zhToolDesc: false, zhContextInject: false, zhWebSearch: true, zhSearchOrder: [...ZH_SEARCH_ORDER_DEFAULT], zhSearchPerQuery: 0, zhWebFetch: true, zhFetchOrder: [...ZH_FETCH_ORDER_DEFAULT] }
 
 /**
  * 读取「模型请求中文化」的共享开关状态（只读）。该状态随本插件 Config 的
@@ -170,10 +193,13 @@ function normalizePerQuery(value: unknown): number {
   return n > ZH_SEARCH_PER_QUERY_MAX ? ZH_SEARCH_PER_QUERY_MAX : n
 }
 
-/** 排序位置归一化：非数字/非有限回退默认值，四舍五入后钳到 1–9999。 */
+/** 排序位置归一化：非数字/非有限回退默认值，四舍五入后钳到 -9999–9999。 */
 function normalizePromptOrder(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return ZH_PROMPT_ORDER_DEFAULT
-  const n = Math.round(value)
+  // 允许负数后，(-0.5, 0] 区间的四舍五入会得到 -0：落点等价于 0，但写进
+  // settings 会落成 "-0"，统一归成 0 保持整洁。
+  const rounded = Math.round(value)
+  const n = rounded === 0 ? 0 : rounded
   if (n < ZH_PROMPT_ORDER_MIN) return ZH_PROMPT_ORDER_MIN
   return n > ZH_PROMPT_ORDER_MAX ? ZH_PROMPT_ORDER_MAX : n
 }
@@ -200,7 +226,7 @@ export function createZhConfigSchema(z: any): unknown {
     zhPromptText: mark(z.string().default(ZH_PROMPT_TEXT)),
     zhPromptTarget: mark(z.string().default(ZH_PROMPT_TARGET_SYSTEM)),
     // 初始系统提示目标下的段落排序位置（与官方 SECTION_ORDERS 同坐标系，
-    // 1–9999，默认 100 = persona 之后、官方政策/工具说明之前）。
+    // -9999–9999，默认 100 = persona 之后、官方政策与工具说明之前）。
     zhPromptOrder: mark(z.number().default(ZH_PROMPT_ORDER_DEFAULT)),
     zhAutoArchiveDays: mark(z.number().default(ZH_AUTO_ARCHIVE_DAYS_DEFAULT)),
     zhAgentPrompt: mark(z.boolean().default(false)),
@@ -235,6 +261,11 @@ function dereferenceZhConfig(config: Record<string, unknown> | undefined): Recor
 export function installChinesePrompt(ctx: HostContext, config: Record<string, unknown>, hooks: { onModelStateChanged?: () => void } = {}): void {
   try {
     const state = { enabled: false, text: ZH_PROMPT_TEXT, target: ZH_PROMPT_TARGET_SYSTEM, order: ZH_PROMPT_ORDER_DEFAULT }
+    // 把「当前生效的提示词状态」挂到共享 modelState 上：诊断接口
+    // （/dsh-zh/api/diagnostics 的 promptInjection）据此回答「进程里真正生效的
+    // 是哪一版文本」。排查「设置改了但新会话仍是旧值」时，这是唯一能区分
+    // 「插件没收到新配置」与「插件收到了但 assembly 没带上」的证据。
+    modelState.promptInjection = state
     // systemPrompt 服务：段落的「排序位置」反查（getSectionOrder）与 assemble
     // 包装都用它；旧宿主可能没有（届时回退到内置 order 表）。
     const systemPrompt = ctx.get('systemPrompt')
@@ -248,6 +279,17 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
     // 后端选择（provider 未就绪时其注册会自行接管，no-op 安全）；后续
     // volatile 变更仅在实际变化时联动，并通知工具壳装配方收敛。
     const syncFromSnapshot = function (snapshot: Record<string, unknown>, initial: boolean) {
+      // 同步计数：诊断据此区分「apply 时读到的值」与「volatile 事件推动的值」。
+      // 排查「改了设置新会话却是旧值」时，若 volatile 次数不增，说明宿主没把
+      // 新配置推给本插件——这正是 2026-10-27 实测到的情形（volatileCount 恒 0），
+      // 因此组装前改为主动现读配置，事件只作加速路径。
+      modelState.promptSync = {
+        applyCount: (modelState.promptSync?.applyCount ?? 0) + (initial ? 1 : 0),
+        volatileCount: (modelState.promptSync?.volatileCount ?? 0) + (initial ? 0 : 1),
+        lastAt: new Date().toISOString(),
+        lastText: typeof snapshot.zhPromptText === 'string' ? snapshot.zhPromptText : null,
+        lastSource: initial ? 'apply' : 'volatile',
+      }
       const prevWebSearch = modelState.zhWebSearch
       const prevPrompt = modelState.zhPrompt
       const prevOrder = modelState.zhSearchOrder.join('>')
@@ -286,11 +328,41 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
         }
       }
     }
-    syncFromSnapshot(dereferenceZhConfig(config), true)
-    // 实时配置：宿主把 volatile 变更以引用提交进 config 并派发
-    // loader/volatile-update（仅本 fiber）；重建快照收敛状态与表面。
+    // 读取「当前配置」的唯一入口：volatile 变更时**不能**依赖 apply 时传入的
+    // 闭包参数 `config`——宿主可能把 entry.options.config 整体换成新对象，
+    // 闭包里的引用就永远停在旧值。优先从 Loader entry 现读，再回退到闭包参数。
+    const selfEntryId = ctx.fiber?.entry?.options?.id
+    const currentConfig = function (): Record<string, unknown> {
+      try {
+        if (selfEntryId !== undefined && ctx.loader !== undefined && typeof ctx.loader.entries === 'function') {
+          for (const row of ctx.loader.entries()) {
+            if (row !== null && row !== undefined && row.options?.id === selfEntryId
+              && row.options.config !== null && typeof row.options.config === 'object') {
+              return row.options.config
+            }
+          }
+        }
+      } catch { /* 读取失败时回退到闭包参数 */ }
+      return config
+    }
+    /** 组装前主动同步：读当前配置并刷新 state / modelState。 */
+    const refreshFromLiveConfig = function (): void {
+      try {
+        syncFromSnapshot(dereferenceZhConfig(currentConfig()), false)
+        modelState.promptSync = {
+          ...(modelState.promptSync ?? { applyCount: 0, volatileCount: 0, lastAt: '', lastText: null }),
+          assembleCount: (modelState.promptSync?.assembleCount ?? 0) + 1,
+          lastAt: new Date().toISOString(),
+          lastText: state.text,
+          lastSource: 'assemble',
+        }
+      } catch { /* 读取失败沿用上次状态 */ }
+    }
+    syncFromSnapshot(dereferenceZhConfig(currentConfig()), true)
+    // 实时配置：宿主把 volatile 变更提交进 entry config 并派发
+    // loader/volatile-update（仅本 fiber）；现读 entry 的 config 再收敛状态。
     ctx.on('loader/volatile-update', function () {
-      syncFromSnapshot(dereferenceZhConfig(config), false)
+      syncFromSnapshot(dereferenceZhConfig(currentConfig()), false)
     })
 
     // 注入上下文消息：只在模型真正开始新一步前插入，并复用 agent-instructions
@@ -339,7 +411,8 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
     // 把提示同步进已组装的 system prompt sections。仅「初始系统提示」目标
     // 生效，落点由「排序位置」（zhPromptOrder，默认 100）决定：与官方
     // SECTION_ORDERS 同一坐标系，默认排在 deployment:persona-prefix（order 0，
-    // 「你是一个由 … 模型驱动的编码代理。」）之后、官方政策与工具说明区之前。
+    // 「你是一个由 … 模型驱动的编码代理。」）之后、官方政策与工具说明区之前；
+    // 填负数可前移，-1001 及更小越过 harness:identity（-1000）排到最前。
     // 目标切走、开关关闭或文本为空时移除同名 section。
     // 该方法在 assemble 之后执行，因此 complete persona 无法把它丢弃。
     //
@@ -381,6 +454,11 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
     }
     const syncAssemblySection = function (assembly) {
       if (assembly === null || typeof assembly !== 'object' || !Array.isArray(assembly.sections)) return
+      // 每次组装前先按**当前**配置重同步一次。不能只靠 loader/volatile-update：
+      // 实测该事件在设置页保存后并不会送达本插件（诊断 volatileCount 恒为 0），
+      // 只依赖它就会让 state 永远停在 apply 时的值——用户改的设置要等下次
+      // 重启/重载才生效，表现就是「新会话注入的总是上一版」。
+      refreshFromLiveConfig()
       // 每次同步都先摘掉旧段、再按当前排序位置重新插入：用户改了位置、或
       // 其它改写器调整过段落顺序时，原地替换索引会留下错位。
       const existing = assembly.sections.findIndex(function (section) { return section?.name === ZH_PROMPT_SECTION_NAME })

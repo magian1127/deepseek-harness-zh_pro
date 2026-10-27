@@ -5,7 +5,7 @@
 **语言 / Language:** [中文](README.md) · [English](README.en.md)
 
 <p align="center">
-    <img alt="Version 0.11.0" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.11.0-5965d8">
+    <img alt="Version 0.11.1" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.11.1-5965d8">
   <img alt="Interface Chinese" src="https://img.shields.io/badge/%E7%95%8C%E9%9D%A2-%E4%B8%AD%E6%96%87-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -18,36 +18,75 @@ off by default.
 
 ## Features
 
-The rows below follow **DSH Settings → Enhancements** from top to bottom ("Smart search" is the button under the composer, not a settings row).
-A sticky action bar at the bottom of the page holds every change as a draft: press **Save** to apply and persist everything at once (host fields go out as one atomic commit, which removes most of the per-keystroke stutter), or **Revert** to drop the drafts.
+The tables below follow the real top-to-bottom order of **DSH Settings → Enhancements**, and keep the
+in-page order inside each group. A sticky action bar holds every change as a draft: press **Save** to
+apply and persist everything at once (host fields go out as one atomic commit, which removes most of
+the per-keystroke stutter), or **Revert** to drop the drafts.
+
+**Chinese completion and model-request localization**
 
 | Feature | Default | Description |
 | --- | --- | --- |
-| Chinese completion | On | Chinese UI only: fixes confirmed leftover English and normalizes tokens, API keys, model IDs, durations, and count formats |
-| Agent-role prompt localization | Off | Localizes the four built-in roles and confirmed system sections; locked on a new session's first request and never retrofitted into old sessions |
-| Tool-description localization | Off | Localizes confirmed built-in DSH tool descriptions and guidance; tool names, parameter names, and third-party tools remain unchanged; new sessions only |
-| Injected-context localization | Off | Replaces DSH-injected official context (workspace instruction frames, skill catalog frames, runtime context including its header line, approval/mode switch notices, dynamic-plugin notices, scheduled reminders, compaction checkpoint preambles) with Chinese before it enters session history; GUI and model requests stay consistent, new sessions only; translating the snapshot header makes DSH inject one replacement snapshot per step (slight session-log growth) |
-| Web search | On | Takes over the conversational web_search backend according to the "Search backend priority" list, defaulting to DeepSeek Search API → Zhipu → keyless multi-engine, reorderable with ▲/▼ in settings (move DeepSeek Search API to the bottom once it starts billing). A backend that is not installed, unavailable, or fails falls through to the next one, only a total failure reports an error, and a user cancellation never retries. The keyless multi-engine backend covers DuckDuckGo (best-effort), Yandex (legacy `/search/site/`), Bing (cn.bing.com RSS first, then www and the HTML endpoint) and Wikipedia; with `TAVILY_API_KEY` in credentials, Tavily goes first. The "Web search" settings card lets you add or clear the Tavily API key directly (effective immediately, no restart) |
-| Keyless web reader | On | Takes over the conversational web_fetch backend according to the "Fetch backend priority" list, defaulting to DeepSeek cloud reader → Zhipu webReader → keyless ring → local fetch, reorderable with ▲/▼ in settings; not installed / unavailable / failed backends fall through, and only a total failure reports an error. The keyless ring is modeled on the Hermes agent's keyless extraction ring and walks Exa MCP → Parallel MCP → Keenable public endpoints (Firecrawl was excluded after a 2026-10-19 live test returned HTTP 403 for anonymous scraping); fetching sends the URL to the selected backend's cloud service, and the body is wrapped in an "external web content (untrusted)" boundary marker. Safety gate: public http(s) only, URLs with embedded credentials and local/private addresses are refused |
-| Results per query | 0 (no takeover) | The official `web_search` hardcodes its merge cap at 8 sources and interleaves multiple queries round-robin; the "Results per search" field on the Web search settings page only controls how many results a single query asks the API for and cannot change that cap. Setting this to N (1–50) groups results by query — query one N sources, then query two N sources — drops cross-query duplicate links, and renders the model-facing text as `Sources for "<query>"` sections; 0 leaves the official behavior in place. The effective count is also capped by "Results per search", so both numbers must be raised together |
-| Prompt injection | Off | Injects editable text into subsequent requests; the default text asks for Chinese reasoning and replies, and the default target is the initial system prompt (or the first user prompt). For the system-prompt target an "Order" field (1–9999, default 100) places the section — by default right after the persona and before official policies and tool instructions |
-| Smart search button (`searchToggleEnabled`) | On | Whether the "Smart search" button appears in the composer tool row. **Turning it off hides the button entirely and keeps its code from loading or running** (the Host also lifts every per-session mask); changes apply immediately. When on, the button remembers its state per session: blue label when selected (sized and weighted to match the adjacent permission trigger), grey when off — and an off session stops receiving the `web_search`/`web_fetch` tools and the official `tool:web_search`/`tool:web_fetch` guidance; click again to restore. It ANDs with the two global switches above |
-| Auto-expand latest thinking | On | Expands the newest streaming thinking block and collapses the previous block that the plugin auto-expanded; after a turn closes under the DSH v0.1.2 compact view it stays hidden with the official process fold (see the behavior contract) |
-| Default expanded lines | 20 lines, latest N | Limits the initial visible region to 0–200 lines; 0 disables the limit, and the direction can be changed to earliest N |
-| Expand mode | Button mode | Button mode reveals lines in batches; scroll mode uses a fixed-height scrolling viewport |
-| Auto-archive old sessions | 7 days | Archives inactive sessions when the New Session view opens; range 0–365, with 0 disabling it |
-| Archived-session view | On | Adds a workspace archive view (its button sits after the select-all button) whose rows can be restored, renamed, forked, or deleted, and can be multi-selected for batch unarchive or batch deletion |
-| Session delete button | On | Shows “Delete session” in row menus — on ordinary session rows and on archived rows of the official “Show archived” view alike; the log moves to the OS recycle bin and no list restore slot is retained; deleted sessions never appear in the archive view, nor in the official list under the “All conversations (show archived)” / “Only archived” views, nor in search results (most typically the one that drops into the “Ungrouped” bucket) |
-| Session multi-select | On | Lets idle rows be selected for batch deletion or archiving; running, pending-interaction, and unread-completion rows are not selectable. Archived-session rows in the archive view are selectable too; the batch entries follow the selection's archive make-up — all unarchived gives “Archive selected”, all archived gives “Unarchive selected”, and a mixed selection gives only “Delete selected” (archiving and unarchiving each hold for just half of it). A select-all button on each workspace row checks every selectable session of that workspace at once (click again to clear) |
-| Service monitor | Off | Dual form: keeps the original panel between the session list and Settings in the left sidebar, and adds a "Service monitor" tab in the right sidebar (entry on the guide page); shows local listening services started during the conversation; hover resolves the process on demand and click reveals its location; **the left panel shows at most 10 rows per screen** — scroll with the wheel (no scrollbar shown) or use the arrow below the list to page down, which flips to "back to top" at the end; the tab's "Baseline ports" section lets you bring a baseline port back into monitoring with a click; right-pane entries have three action buttons after the uptime — Exclude (move back to baseline, no confirmation), Always watch (add to custom watch entries in Settings, confirmation required), Kill process (try to terminate with normal privileges, confirmation required); the left panel has no buttons |
-| Refresh interval | 10 seconds | Range 2–300 seconds; polling pauses while the page is hidden |
-| Custom watch entries | Empty | Entries can be added or edited and remain visible as online/offline; maximum 100 |
-| Plugin sync | Direction follows the current environment | Uses the **other** profile as the reference and copies its installed plugins into the current profile with one click: running in the web app means desktop → web, running in the desktop app means web → desktop (the `source` request field can override this). For the same package only the **highest version** is kept — if this profile is already at or above the reference it is left alone and never downgraded; additive only, nothing already installed is removed; the reference profile is read-only; runs through the official DSH plugin manager (the same channel as the desktop app sidebar "Plugins" page) with its peer checks and rollback |
+| Chinese completion | On | Chinese UI only: fixes confirmed leftover English and normalizes terminology, count, and duration formats |
+| Agent-role prompt localization | Off | Swaps the built-in roles' system prompts for Chinese; locked on a new session's first request, never retrofitted |
+| Tool-description localization | Off | Localizes official tool descriptions; tool names, parameters, and third-party tools stay unchanged; new sessions only |
+| Injected-context localization | Off | Turns DSH-injected official context into Chinese, consistent in the GUI and the model request; new sessions only. Covers the runtime-context snapshot (header and body), time readings, workspace-instruction frames, the skill catalog frame, and approval/plan-mode notices |
+| Prompt injection | Off | Injects the "Injected text" into subsequent requests. The default text is "始终用中文进行推理，并用中文输出你的思考过程。" — always reason in Chinese and write the thinking process in Chinese. |
 
-Chat display, Session list, Service monitor, and Plugin sync use the same collapsible plugin-card
-style. They start collapsed and remember their open state independently. See the
+**Chat display** (collapsible group)
+
+| Feature | Default | Description |
+| --- | --- | --- |
+| Auto-expand latest thinking | On | Expands the newest streaming thinking block and collapses the one the plugin expanded before |
+| Default expanded lines | 20 lines, latest N | Shows only N lines before folding, to keep long thinking smooth; range 0–200, 0 for no limit, direction can start from the earliest lines |
+| Expand mode | Button mode | Button mode reveals lines in batches; scroll mode uses a fixed-height scrolling viewport |
+
+**Session list** (collapsible group)
+
+| Feature | Default | Description |
+| --- | --- | --- |
+| Auto-archive old sessions | 7 days | Archives sessions idle longer than N days when the New Session view opens (hidden only, logs kept); range 0–365, 0 disables it |
+| Archived-session view | On | Adds an archive entry on each workspace row: archived sessions show inside the official list's own group, and the row menu can rename, fork, unarchive, or delete |
+| Session delete button | On | Adds "Delete session" to session menus for both live and archived rows; the log goes to the OS recycle bin with no list restore slot |
+| Session multi-select | On | Idle rows can be selected for batch delete or archive; running, pending-interaction, and unread-completion rows are not selectable. Batch entries follow the selection, and each workspace row also offers select-all |
+
+**Web search** (collapsible group; search rows first, reader rows after)
+
+| Feature | Default | Description |
+| --- | --- | --- |
+| Smart search button | On | Shows "Smart search" under the composer; turning it off hides the button and keeps its code from loading. When on, it remembers its state per session, and an off session stops receiving web tools and guidance |
+| Enable multi-engine search | On | Takes over the `web_search` backend using the priority list below; off keeps the backend the deployment configured |
+| Results per query | 0 (no takeover) | 0 keeps the official behavior (8 sources, round-robin merge); N groups results per query and drops cross-query duplicates. The effective count is also capped by the official "Results per search" |
+| Search backend priority | DeepSeek Search API → Zhipu → keyless multi-engine | Reorder with ▲/▼. Backends are tried in order: not installed, unavailable, or failed falls through, only a total failure reports an error, and a user cancellation never retries. Keyless multi-engine covers DuckDuckGo, Yandex, Bing, and Wikipedia, with Tavily first when `TAVILY_API_KEY` is set |
+| Tavily API key | Empty | Enter or clear the key here; saved and effective immediately, no restart |
+
+Reader rows (same card, right after the search rows):
+
+| Feature | Default | Description |
+| --- | --- | --- |
+| Enable keyless web reader | On | Takes over the `web_fetch` backend using the priority list below; off keeps the backend the deployment configured |
+| Fetch backend priority | DeepSeek cloud reader → Zhipu webReader → keyless ring → local fetch | Reorder with ▲/▼, same fall-through rules as search. The keyless ring tries Exa → Parallel → Keenable public endpoints; fetching sends the URL to the selected vendor's cloud service and wraps the body in an "external web content (untrusted)" marker. Safety gate: public http(s) only, credentials in the URL and local/private addresses are refused |
+
+**Plugin sync** (collapsible group)
+
+| Feature | Default | Description |
+| --- | --- | --- |
+| Plugin sync | Direction follows the current environment | Copies installed plugins from the other profile: desktop → web when running the web app, web → desktop in the desktop app. Only the highest version of a package is kept, never downgraded, additive only; runs through the official plugin manager with peer checks and rollback |
+
+**Service monitor** (own card, off by default)
+
+| Feature | Default | Description |
+| --- | --- | --- |
+| Service monitor | Off | Shows local listening services started during the conversation; hover resolves the process and click reveals its location; the left panel shows at most 10 rows per screen and pages when there are more |
+| Workspace panel | On | Keeps the monitor panel between the session list and Settings |
+| Sidebar monitor tab | On | Adds a "Service monitor" tab in the right sidebar (entry on the guide page), with per-entry actions to exclude, always watch, or kill the process |
+| Refresh interval | 10 seconds | Range 2–300 seconds; polling pauses while the page is hidden |
+| Custom watch entries | Empty | Add, rename, or edit entries that stay visible as online/offline and resolve their process on hover; maximum 100 |
+
+Chat display, Session list, Web search, and Plugin sync are collapsible groups that start collapsed and
+remember their open state independently; the Service monitor card folds too. See the
 [behavior contract](https://github.com/magian1127/deepseek-harness-zh_pro/blob/main/docs/behavior.md)
-for full interaction, data, and safety boundaries.
+for full interaction, data, and safety boundaries (Chinese).
 
 ## Requirements
 

@@ -19,7 +19,9 @@ export const ZH_AUTO_ARCHIVE_DAYS_DEFAULT = 7
 // 注入到初始系统提示时的 section 名；切换目标或关闭时会从 assembly 清理
 // 同名 section，避免双份残留。
 export const ZH_PROMPT_SECTION_NAME = 'dsh-zh:language'
-export const ZH_PROMPT_TEXT = '思考过程和回复始终使用中文输出'
+// 默认注入文本：一句话要求模型用中文推理并输出思考过程。文本对模型的效果与
+// 界面语言无关。
+export const ZH_PROMPT_TEXT = '始终用中文进行推理，并用中文输出你的思考过程。'
 // 注入目标：'system' = 初始系统提示（sections，默认）；'user' = 首用户
 // 提示词（agent/pre-step 插入 user/message 上下文消息）。旧值 'context'
 // （早期未实现的「初始上下文」设计）读取时归一化为 'user'。
@@ -28,11 +30,13 @@ export const ZH_PROMPT_TARGET_USER = 'user'
 export const ZH_PROMPT_TARGET_LEGACY = 'context'
 // 「排序位置」（仅初始系统提示目标）：注入段在 system prompt 里的落点，
 // 与 DSH 官方 SECTION_ORDERS 同一坐标系（数值越小越靠前）。默认 100 ——
-// 紧跟在 deployment:persona-prefix（order 0，即「你是一个由 … 模型驱动的
-// 编码代理。」）之后、官方政策与工具说明区之前。取值钳在 1–9999。
+// 紧跟 deployment:persona-prefix（order 0，即「你是一个由 … 模型驱动的
+// 编码代理。」）之后、官方政策与工具说明区之前。取值钳在 -9999–9999：
+// 允许负数，用户可自行把注入段排到更前（例如 -500 落在 harness:identity
+// （-1000）之后、persona 之前；-1001 及更小排到整段最前）。
 export const ZH_PROMPT_ORDER_KEY = 'zhPromptOrder'
 export const ZH_PROMPT_ORDER_DEFAULT = 100
-export const ZH_PROMPT_ORDER_MIN = 1
+export const ZH_PROMPT_ORDER_MIN = -9999
 export const ZH_PROMPT_ORDER_MAX = 9999
 
 // ============ 模型请求中文化（settings 命名空间字段名） ============

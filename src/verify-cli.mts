@@ -214,10 +214,14 @@ try {
   ].join('\n'))
   // 模拟宿主物化 volatile 引用：apply 直接收 config（字段带 .get()），实时
   // 变更改状态对象后派发 loader/volatile-update。
-  const configState: Record<string, unknown> = { zhPrompt: true, zhPromptText: '始终使用中文', zhPromptTarget: 'system', zhPromptOrder: 100 }
+  // 初始 configState 不含 zhPromptOrder：首轮 assemble 必须走默认值（100），
+  // 这正是要验证「默认落在 persona 之后」的路径。但**键本身要存在**（宿主会
+  // 物化 schema 的每个字段），值为 undefined 时归一化回退默认值。
+  const configState: Record<string, unknown> = { zhPrompt: true, zhPromptText: '始终使用中文', zhPromptTarget: 'system' }
   const configRef: Record<string, unknown> = {}
   for (const key of Object.keys(configState))
     configRef[key] = { get: function () { return configState[key] } }
+  configRef.zhPromptOrder = { get: function () { return configState.zhPromptOrder } }
   const originalAssemble = async function () {
     // 真实 assembly 总带 variables（renderPrompt 的插值依据）。chinese-prompt
     // 的 {{…}} 防护要读它判断「文本里有没有解析不了的占位符」，因此 stub 必须
@@ -275,7 +279,7 @@ try {
   let assembly = await systemPrompt.assemble({})
   check(assembly.sections.map(function (section) { return section.name }),
     ['harness:identity', 'deployment:persona-prefix', 'dsh-zh:language', 'tool:read', 'ui:deliverable-file-references', 'deployment:persona-suffix'],
-    'system 目标写入最终提示，默认排序位置（100）落在 persona 之后、官方工具说明之前')
+    'system 目标写入最终提示，未配置排序位置时按默认 100 落在 persona 之后、官方工具说明之前')
   // ---- 排序位置（zhPromptOrder）：与官方 SECTION_ORDERS 同一坐标系 ----
   // sections 已按官方 order 升序，注入段插在「第一个 order 更大的官方段」之前。
   {
@@ -289,10 +293,17 @@ try {
       return next.sections.map(function (section: { name: string }) { return section.name })
     }
     const BEFORE_TOOLS = ['harness:identity', 'deployment:persona-prefix', 'dsh-zh:language', 'tool:read', 'ui:deliverable-file-references', 'deployment:persona-suffix']
-    check((await namesAt(undefined)).join('>'), BEFORE_TOOLS.join('>'), '缺省排序位置按默认 100 处理')
+    const BEFORE_PERSONA = ['harness:identity', 'dsh-zh:language', 'deployment:persona-prefix', 'tool:read', 'ui:deliverable-file-references', 'deployment:persona-suffix']
+    const BEFORE_IDENTITY = ['dsh-zh:language', 'harness:identity', 'deployment:persona-prefix', 'tool:read', 'ui:deliverable-file-references', 'deployment:persona-suffix']
+    check((await namesAt(undefined)).join('>'), BEFORE_TOOLS.join('>'), '缺省排序位置按默认 100 处理（persona 之后）')
     check((await namesAt(100)).join('>'), BEFORE_TOOLS.join('>'), '100 落在 persona 之后、tool:read(1100) 之前')
-    check((await namesAt(1)).join('>'), BEFORE_TOOLS.join('>'), '1 仍排在 persona（order 0）之后')
-    check((await namesAt(0)).join('>'), BEFORE_TOOLS.join('>'), '小于下界的值钳到 1（persona 之后）')
+    check((await namesAt(0)).join('>'), BEFORE_TOOLS.join('>'), '0 等于 persona（order 0）时排在该段之后')
+    // 负数下界：允许把注入段排到官方 persona 之前（甚至 identity 之前）。
+    check((await namesAt(-1)).join('>'), BEFORE_PERSONA.join('>'), '-1 落在 persona（order 0）之前、identity 之后')
+    check((await namesAt(-500)).join('>'), BEFORE_PERSONA.join('>'), '-500 落在 identity 之后、persona 之前')
+    check((await namesAt(-1000)).join('>'), BEFORE_PERSONA.join('>'), '-1000 等于 identity 的 order，按「之后」处理（仍在 persona 之前）')
+    check((await namesAt(-1001)).join('>'), BEFORE_IDENTITY.join('>'), '-1001 越过 identity（-1000），排到 system prompt 最前')
+    check((await namesAt(-20000)).join('>'), BEFORE_IDENTITY.join('>'), '低于下界的值钳到 -9999（system prompt 最前）')
     check((await namesAt(1100)).join('>'),
       ['harness:identity', 'deployment:persona-prefix', 'tool:read', 'dsh-zh:language', 'ui:deliverable-file-references', 'deployment:persona-suffix'].join('>'),
       '等于官方段 order 时排在该段之后')
@@ -305,9 +316,12 @@ try {
     check((await namesAt(20000)).join('>'),
       ['harness:identity', 'deployment:persona-prefix', 'tool:read', 'ui:deliverable-file-references', 'dsh-zh:language', 'deployment:persona-suffix'].join('>'),
       '超过上界的值钳到 9999（persona 收尾句之前）')
-    check((await namesAt('不是数字')).join('>'), BEFORE_TOOLS.join('>'), '非数字排序位置回退默认值')
+    check((await namesAt('不是数字')).join('>'), BEFORE_TOOLS.join('>'), '非数字排序位置回退默认值（100，persona 之后）')
+    // 负数输入的四舍五入边界：-0.4 应归成 0（不写出 "-0"），落点等同 0。
+    check((await namesAt(-0.4)).join('>'), BEFORE_TOOLS.join('>'), '(-0.5, 0] 区间的负数四舍五入归 0，落点同 0（persona 之后）')
+    check((await namesAt(-500.6)).join('>'), BEFORE_PERSONA.join('>'), '负小数按四舍五入取值（-500.6 → -501，仍在 persona 之前）')
     // 重复同步不会留双份：改位置后同名段始终只有一个。
-    const stable = await namesAt(100)
+    const stable = await namesAt(-1001)
     check(stable.filter(function (name) { return name === 'dsh-zh:language' }).length, 1, '反复同步后注入段只有一份')
     delete configState.zhPromptOrder
     configState.zhPromptTarget = savedTarget
@@ -1585,6 +1599,141 @@ try {
           check(enDecision.messages.length, 8, '老会话消息不被翻译（含 fake 注入，全部原样）')
           const rejectDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'reject', reason: 'blocked' } })
         check(rejectDecision.kind, 'reject', 'reject decision 原样返回')
+        // ---- 0.2.1 快照投影接缝 + append 接缝（2026-10-27 实测回归）----
+        // 背景：agent-loop 在 step() 里丢弃 pre-step 的 runtime-context 消息，
+        // 真正 append 的是 RuntimeContextProjection.project() 的返回值；且
+        // time-context 以 prepend 注册、晚于本插件挂载，排在链外层，pre-step
+        // 拿不到它的消息。以下三组锁住这两条新接缝。
+        {
+          // (a) 投影包装：传入英文 current/sections，产出中文，且**比较语义仍成立**
+          //     （同一份英文输入第二次 project 必须判为「无需更新」——若包装只翻
+          //     产出不翻比较基准，这里会返回消息，导致每步追加一条快照）。
+          const projCalls: { current: unknown; sections: unknown }[] = []
+          const fakeProjection = {
+            retained: null as null | { text: string },
+            project(current, sections) {
+              projCalls.push({ current, sections })
+              const prev = this.retained
+              this.retained = { text: current }
+              if (prev !== null && prev.text === current) return undefined
+              return { source: { kind: 'runtime-context', form: 'snapshot', sections }, content: [{ type: 'text', text: current }] }
+            },
+          }
+          const projAgent = { session: { id: 'ctx-proj', events: [] }, runtimeContext: fakeProjection }
+          const fakeAgentsP = { list: function () { return [projAgent] } }
+          const projHandlers: Record<string, unknown[]> = {}
+          const projCtx = {
+            fiber: { entry: { options: { id: 'dsh-zh' } } },
+            loader: { entries: function () { return [] } },
+            get: function (name) {
+              if (name === 'agents') return fakeAgentsP
+              if (name === 'settings') return undefined
+              return undefined
+            },
+            on: function (name, handler) {
+              if (!Array.isArray(projHandlers[name])) projHandlers[name] = []
+              projHandlers[name].push(handler)
+            },
+            effect: function () {},
+          }
+          const projMod = await import(`./lib/context-locale.js?verify=proj-${Date.now()}-${Math.random()}`)
+          // 带 query 只换 context-locale 自身；它 import 的 chinese-prompt 不带
+          // query，因此与上面 ctxPromptMod 是同一模块实例、共享同一 modelState。
+          const projState = ctxState
+          const prevReady = projState.ready
+          const prevInject = projState.zhContextInject
+          projState.ready = true
+          projState.zhContextInject = true
+          const origLogP = console.log
+          const origWarnP = console.warn
+          try {
+            console.log = function () {}
+            console.warn = function () {}
+            projMod.installContextLocale(projCtx)
+          } finally {
+            console.log = origLogP
+            console.warn = origWarnP
+          }
+          const enSnapshot = 'Current runtime context. This snapshot supersedes earlier runtime-context snapshots.\n\n'
+            + 'Current working directory: "D:\\\\proj\\\\demo".\n\n'
+            + 'Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.'
+          const enSections = [
+            { name: 'working-directory:current', text: 'Current working directory: "D:\\\\proj\\\\demo".' },
+            { name: 'sandbox:policy', text: 'Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.' },
+          ]
+          const first = fakeProjection.project(enSnapshot, enSections)
+          check(first !== undefined, true, '投影包装：首次渲染产生快照消息')
+          check(first.content[0].text.includes('当前运行时上下文。本快照取代更早的运行时上下文快照。'), true, '投影包装：快照头部行换成中文')
+          check(first.content[0].text.includes('当前工作目录："D:\\\\proj\\\\demo"。'), true, '投影包装：工作目录正文换成中文且路径保留')
+          check(first.content[0].text.includes('当前 DSH 文件策略：danger-full-access。'), true, '投影包装：文件策略正文换成中文')
+          check(first.content[0].text.includes('Current runtime context'), false, '投影包装：快照头部英文不再出现')
+          check(first.content[0].text.includes('Current DSH file policy'), false, '投影包装：正文英文不再出现')
+          check(first.source.sections[0].text, '当前工作目录："D:\\\\proj\\\\demo"。', '投影包装：source.sections 归属文本同样换成中文')
+          check(first.source.sections[1].text.includes('当前 DSH 文件策略：'), true, '投影包装：sections 正文换成中文')
+          // 比较语义：同一份英文输入再 project 一次必须判为无更新（retained 与
+          // 产出都以中文存储，两侧相等）。
+          const second = fakeProjection.project(enSnapshot, enSections)
+          check(second, undefined, '投影包装：同一快照重复渲染不再追加（比较基准也中文化）')
+          // 内容变化时必须仍然产出新快照。
+          const changed = fakeProjection.project(enSnapshot + '\n\nChanged: x', enSections)
+          check(changed !== undefined, true, '投影包装：快照变化时正常追加')
+          // 老会话（regime=en）不翻译。
+          const enProjAgent = { session: { id: 'ctx-proj-old', events: [{ type: 'assistant/message' }] }, runtimeContext: { project: function (c) { return { content: [{ type: 'text', text: c }], source: { kind: 'runtime-context' } } } } }
+          const enProjCtx = { ...projCtx, get: function (name) { return name === 'agents' ? { list: function () { return [enProjAgent] } } : undefined } }
+          try {
+            console.log = function () {}
+            console.warn = function () {}
+            projMod.installContextLocale(enProjCtx)
+          } finally {
+            console.log = origLogP
+            console.warn = origWarnP
+          }
+          const enOut = enProjAgent.runtimeContext.project('Current runtime context. x')
+          check(enOut.content[0].text, 'Current runtime context. x', '投影包装：老会话快照保持英文')
+
+          // (b) append 接缝：agent-loop 自己 append 的快照与 official 注入在落盘前翻译。
+          const appended: { type: string; data: unknown }[] = []
+          const fakeSession = {
+            append: function (type, data) { appended.push({ type, data }); return { seq: appended.length, type, data } },
+          }
+          const appendAgent = { session: fakeSession, runtimeContext: { project: function () {} } }
+          const appendCtx = { ...projCtx, get: function (name) { return name === 'agents' ? { list: function () { return [appendAgent] } } : undefined } }
+          projState.zhContextInject = true
+          try {
+            console.log = function () {}
+            console.warn = function () {}
+            projMod.installContextLocale(appendCtx)
+          } finally {
+            console.log = origLogP
+            console.warn = origWarnP
+          }
+          const snapMsg = { role: 'user', id: 'ctx-snap', content: [{ type: 'text', text: enSnapshot }], source: { kind: 'runtime-context', form: 'snapshot', sections: enSections } }
+          fakeSession.append('user/message', snapMsg, { surfaceOp: 'append' })
+          const snapLogged = appended[0].data as { content: { text: string }[]; source: { sections: { text: string }[] } }
+          check(snapLogged.content[0].text.includes('当前运行时上下文。'), true, 'append 接缝：快照正文落盘前换成中文')
+          check(snapLogged.source.sections[0].text.includes('当前工作目录：'), true, 'append 接缝：sections 落盘前换成中文')
+          check((appended[0] as { data: unknown }).data !== snapMsg, true, 'append 接缝：注入消息被克隆而非原地改')
+          // time-context 三行（链外层注入，pre-step 拿不到的那种）。
+          const tcMsg = { role: 'user', id: 'ctx-tc', content: [{ type: 'text', text: 'Time sampled while preparing turn 1, step 1: 2026-10-27T11:11:49+08:00[Asia/Hong_Kong]\nBrowser time zone for this request: Asia/Hong_Kong. Interpret otherwise-unqualified dates and times in this zone.\nElapsed since the preceding model-visible message: unavailable.' }], source: { kind: 'time-context', form: 'snapshot', sections: [{ name: 'time-context', text: 'Time sampled while preparing turn 1, step 1: 2026-10-27T11:11:49+08:00[Asia/Hong_Kong]' }] } }
+          fakeSession.append('user/message', tcMsg, { surfaceOp: 'append' })
+          const tcLogged = appended[1].data as { content: { text: string }[] }
+          check(tcLogged.content[0].text.includes('准备第 1 轮、第 1 步时采样的时间：'), true, 'append 接缝：time-context 采样行换成中文')
+          check(tcLogged.content[0].text.includes('2026-10-27T11:11:49+08:00[Asia/Hong_Kong]'), true, 'append 接缝：时间戳保持原文')
+          check(tcLogged.content[0].text.includes('本次请求的浏览器时区：Asia/Hong_Kong。'), true, 'append 接缝：浏览器时区行换成中文')
+          check(tcLogged.content[0].text.includes('距此前模型可见消息的间隔：不可用。'), true, 'append 接缝：间隔行换成中文')
+          // 用户消息与非注入事件一律原样透传。
+          const userRaw = { role: 'user', id: 'u1', content: [{ type: 'text', text: 'Current runtime context. keep me' }], source: { kind: 'user' } }
+          fakeSession.append('user/message', userRaw, { surfaceOp: 'append' })
+          check(appended[2].data, userRaw, 'append 接缝：用户消息原样透传')
+          fakeSession.append('turn/start', { turn: 1 })
+          check(appended[3].type, 'turn/start', 'append 接缝：非消息事件原样透传')
+          // 开关关闭：零改动。
+          projState.zhContextInject = false
+          fakeSession.append('user/message', snapMsg, { surfaceOp: 'append' })
+          check(appended[4].data, snapMsg, 'append 接缝：开关关闭时零改动')
+          projState.zhContextInject = prevInject
+          projState.ready = prevReady
+        }
         // 卸载后恢复原 assemble
         for (let i = ctxEffects.length - 1; i >= 0; i -= 1) await ctxEffects[i]()
         check(ctxSystemPrompt.assemble, ctxOriginal, '卸载后恢复 context-locale 的 assemble')

@@ -86,6 +86,11 @@ function installChineseEnhance(ctx) {
     // 调节（ConversationRoot 手柄 + dsh.conversation.contentWidth 偏好），
     // 与本插件按百分比覆盖 --dsh-chat-content-width 的做法冲突，让位给上游。
     let autoThinkTarget = null
+    // 按帧合并调度：优先 requestAnimationFrame；环境没有时返回 undefined，
+    // 调用方退回同步执行（回归脚本的 mock 环境即走这条）。
+    const rafSchedule = (typeof requestAnimationFrame === 'function')
+      ? function (fn) { requestAnimationFrame(fn) }
+      : undefined
     if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined') {
       const forward = Object.assign({}, PERMISSION_DESCRIPTIONS, SKILL_DESCRIPTIONS, CHAT_LABELS, PLUGIN_ITEM_LABELS)
       const reverse = {}
@@ -698,8 +703,48 @@ function installChineseEnhance(ctx) {
           runObservedPass()
         })
       }
+      // mutation 回调按帧合并（rAF 调度）：对话流式输出时 DSH 每个 token 都会
+      // 触发若干条 mutation 记录，逐条 runObservedPass 会让「全量 think 扫描 +
+      // 整树 rewrite」在一帧内跑上百次——设置页在这种重渲染风暴里被反复重建，
+      // 用户正在编辑的草稿就跟着丢。合并到每帧最多一次，行为不变但开销大降。
+      // 没有 rAF（测试环境/旧浏览器）时退回同步执行，语义保持。
+      let pendingRecords = null
+      let frameScheduled = false
+      const flushRecords = function () {
+        frameScheduled = false
+        // 卸载后到达的帧回调必须空转：resetDomEffects 已把 domStarted 置 false，
+        // 这里再挡一次，避免卸载后仍对已还原的 DOM 跑改写。
+        if (domStarted !== true) {
+          pendingRecords = null
+          return
+        }
+        const records = pendingRecords
+        pendingRecords = null
+        runObservedPass(records === null ? undefined : mutationRoots(records))
+      }
+      const schedulePass = function (records) {
+        if (domStarted !== true) return
+        // 真实 MutationObserver 总是给数组；回归脚本的 mock 可能省略参数或
+        // 传入单条记录，这里统一归一化成数组，nil 视为「整篇重放」。
+        if (records === undefined || records === null) {
+          pendingRecords = null
+        } else if (Array.isArray(records)) {
+          if (pendingRecords === null) pendingRecords = []
+          for (const record of records) pendingRecords.push(record)
+        } else {
+          if (pendingRecords === null) pendingRecords = []
+          pendingRecords.push(records)
+        }
+        if (frameScheduled) return
+        if (typeof rafSchedule === 'function') {
+          frameScheduled = true
+          rafSchedule(flushRecords)
+        } else {
+          flushRecords()
+        }
+      }
       observer = new MutationObserver(function (records) {
-        runObservedPass(mutationRoots(records))
+        schedulePass(records)
       })
       const start = function () {
         domStarted = true

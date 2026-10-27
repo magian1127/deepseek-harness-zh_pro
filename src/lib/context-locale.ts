@@ -250,6 +250,56 @@ function localizeSnapshotBody(text: string): string {
   return changed ? blocks.join('\n\n') : text
 }
 
+/** 替换一条注入消息中的英文文本（source 与 id 原样保留）；未变化时返回原消息。
+ *
+ * 同时翻译两处，且必须一起翻：
+ * - `content` 的 text 块：模型看到的正文。
+ * - `source.sections[].text`：DSH 0.2.1 起快照与时间读数把「逐段归属文本」放在
+ *   这里（`{ kind, form: 'snapshot', sections: [{ name, text }] }`），GUI 上下文
+ *   卡片按它分段展示。只改 content 会让同一段正文在界面与模型输入里出现中英
+ *   两份。
+ *
+ * 快照正文走 localizeSnapshotBody（按 `\n\n` 分块 → 动态多行规则 → 逐行规则），
+ * 能整块命中 team:identity 这类多行 context；其余注入走行级局部替换
+ * （localizeText），保证只动模板句、不碰正文里的用户/程序内容。 */
+function localizeMessage(message: unknown, isSnapshot: boolean): unknown {
+  if (message === null || typeof message !== 'object') return message
+  const entry = message as { content?: unknown; source?: unknown }
+  const localize = isSnapshot ? localizeSnapshotBody : localizeText
+  let content = entry.content
+  if (Array.isArray(content)) {
+    let contentChanged = false
+    const next = content.map(function (block: unknown) {
+      if (block === null || typeof block !== 'object') return block
+      const text = block as { type?: unknown; text?: unknown }
+      if (text.type !== 'text' || typeof text.text !== 'string') return block
+      const zh = localize(text.text)
+      if (zh === text.text) return block
+      contentChanged = true
+      return { ...text, text: zh }
+    })
+    if (contentChanged) content = next
+  }
+  const source = entry.source as { sections?: unknown } | undefined
+  let sections = source?.sections
+  if (Array.isArray(sections)) {
+    let sectionsChanged = false
+    const next = sections.map(function (section: unknown) {
+      if (section === null || typeof section !== 'object') return section
+      const text = section as { text?: unknown }
+      if (typeof text.text !== 'string') return section
+      const zh = localize(text.text)
+      if (zh === text.text) return section
+      sectionsChanged = true
+      return { ...text, text: zh }
+    })
+    if (sectionsChanged) sections = next
+  }
+  if (content === entry.content && sections === source?.sections) return message
+  const nextSource = sections === source?.sections ? source : { ...source, sections }
+  return { ...entry, ...content === entry.content ? {} : { content }, source: nextSource }
+}
+
 /** CONTEXT_ZH 的「英文原文 → 中文」直查表（含 workspace-write 正则之外的
  * 全部逐字键；workspace-write 用单独正则处理动态路径）。 */
 const CONTEXT_ZH_VALUES = new Map<string, string>([
@@ -659,34 +709,129 @@ function isDshInjection(message: unknown): boolean {
   return false
 }
 
-/** 替换一条注入消息中的英文 text 块（source 与 id 原样保留）。未变化时返回原消息。
- * runtime-context 快照消息走 localizeSnapshotBody（整段重译，0.2.1 起正文
- * 由 refreshContext 原文重建，行级模板盖不住 sandbox/approval 等多句正文）。 */
-function localizeMessage(message: unknown): unknown {
+/** 消息 source.kind 是否为 runtime-context 快照（快照走整段重译）。 */
+function isSnapshotMessage(message: unknown): boolean {
   const source = (message as { source?: unknown } | undefined)?.source
-  const isSnapshot = (source as { kind?: unknown } | undefined)?.kind === 'runtime-context'
-  const content = (message as { content?: unknown } | undefined)?.content
-  if (!Array.isArray(content)) return message
-  let changed = false
-  const nextContent = content.map(function (block) {
-    if (block === null || typeof block !== 'object') return block
-    const entry = block as { type?: unknown; text?: unknown }
-    if (entry.type !== 'text' || typeof entry.text !== 'string') return block
-    const zh = isSnapshot ? localizeSnapshotBody(entry.text) : localizeText(entry.text)
-    if (zh === entry.text) return block
-    changed = true
-    return { ...block, text: zh }
-  })
-  if (!changed) return message
-  return { ...(message as object), content: nextContent }
+  return (source as { kind?: unknown } | undefined)?.kind === 'runtime-context'
+}
+
+// ============ 注入消息入历史前的两道接缝 ============
+// 为什么不能只靠 agent/pre-step（0.2.1 升版回归的真正原因）：
+//
+// 1) runtime-context 快照：0.2.1 的 agent-loop 在 `step()` 里对
+//    `decision.messages` 遇到 `source.kind === 'runtime-context'` 时**只把它当
+//    「本步需要快照」的信号**，真正 append 的是
+//    `systemPrompt.refreshContext(assembly, …)` 按 provider 原文重建 contexts、
+//    再由 `RuntimeContextProjection.project()` 渲染出的**另一条新消息**
+//    （`joinContextSections` 拼头部 + 各 context 正文）。pre-step 里改写旧消息
+//    的正文永远进不了会话历史——历史文档曾记成「pre-step 已覆盖」，与运行版
+//    源码不符，这也是「头部译了、正文仍英文」的成因。
+//
+// 2) time-context 读数：`@deepseek-ai/dsh-time-context` 以 `prepend: true`
+//    注册，且在它自己的 `next()` 返回**之后**才追加这条 user 消息。preset 在
+//    agent 创建时才挂载，因此它常晚于本插件注册、排在本插件外层——本插件
+//    `next()` 拿到的 decision 里根本没有这条消息，链序上翻译不到。
+//
+// 因此快照走投影层（installSnapshotProjection），其余注入走 append 接缝
+// （installAppendLocale），pre-step 保留覆盖链内注入。
+//
+// 快照为什么必须在投影层而不是 append：`RuntimeContextProjection.project()`
+// 用 `retained.text`（= 上次 append 进历史的快照正文）与本次渲染结果做相等
+// 比较，只在**变化时**才产生新消息。若等到 append 才翻译，log 里存的是中文、
+// 而下次比较传入的是英文原文 → 恒不相等 → **每一步都追加一条快照**，模型
+// 输入随之膨胀。改在投影层翻译（连同比较基准一起变成中文）则保持官方语义：
+// 快照不变就不追加。
+
+/** 已挂上 append 包装的 Session（WeakSet：会话结束即释放，不留强引用）。 */
+const patchedSessions = new WeakSet<object>()
+/** 已挂上 project 包装的投影实例（同上，按实例去重，避免重复包装）。 */
+const patchedProjections = new WeakSet<object>()
+
+/** 给一个 Agent 的 Session 挂上「注入消息入历史前翻译」的 append 包装。 */
+function installAppendLocale(agent: unknown): void {
+  const session = (agent as { session?: unknown } | undefined)?.session
+  if (session === null || typeof session !== 'object') return
+  const target = session as { append?: unknown }
+  if (typeof target.append !== 'function') return
+  if (patchedSessions.has(session)) return
+  const original = target.append as (this: unknown, ...args: any[]) => unknown
+  const patched = function (this: unknown, ...args: any[]): unknown {
+    try {
+      if (args[0] === 'user/message' && args[1] !== null && typeof args[1] === 'object') {
+        if (getModelState().zhContextInject === true
+          && isDshInjection(args[1])
+          && regimeOf(agent) === 'zh') {
+          const localized = localizeMessage(args[1], isSnapshotMessage(args[1]))
+          if (localized !== args[1]) args = [args[0], localized, ...args.slice(2)]
+        }
+      }
+    } catch (error) {
+      warn(`上下文注入中文化失败（append），本次沿用原内容: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return Reflect.apply(original, this, args)
+  }
+  target.append = patched
+  patchedSessions.add(session)
+}
+
+/** 给一个 Agent 的快照投影挂上「渲染即中文」的 project 包装（见上方代价说明）。 */
+function installSnapshotProjection(agent: unknown): void {
+  // agent-loop 的运行时字段名；缺失（未来改名）时静默降级为「快照保持英文」。
+  const projection = (agent as { runtimeContext?: unknown } | undefined)?.runtimeContext
+  if (projection === null || typeof projection !== 'object') return
+  const target = projection as { project?: unknown }
+  if (typeof target.project !== 'function') return
+  if (patchedProjections.has(target)) return
+  const original = target.project as (this: unknown, current: unknown, sections: unknown) => unknown
+  const patched = function (this: unknown, current: unknown, sections: unknown): unknown {
+    try {
+      if (getModelState().zhContextInject !== true || regimeOf(agent) !== 'zh') {
+        return Reflect.apply(original, this, [current, sections])
+      }
+      // 比较基准与产出一起中文化：original 用 retained.text 与传入正文比较，
+      // 只翻正文会让两侧恒不等、每步追加一条快照。
+      const zhCurrent = typeof current === 'string' ? localizeSnapshotBody(current) : current
+      const zhSections = Array.isArray(sections)
+        ? sections.map(function (section: unknown) {
+          if (section === null || typeof section !== 'object') return section
+          const entry = section as { text?: unknown }
+          if (typeof entry.text !== 'string') return section
+          const zh = localizeSnapshotBody(entry.text)
+          return zh === entry.text ? section : { ...entry, text: zh }
+        })
+        : sections
+      return Reflect.apply(original, this, [zhCurrent, zhSections])
+    } catch (error) {
+      warn(`上下文注入中文化失败（snapshot），本次沿用原内容: ${error instanceof Error ? error.message : String(error)}`)
+      return Reflect.apply(original, this, [current, sections])
+    }
+  }
+  target.project = patched
+  patchedProjections.add(target)
+}
+
+/** 为一个 Agent 挂上全部接缝；结构不可预期时静默跳过（绝不阻断会话）。 */
+function ensureAgentLocale(agent: unknown): void {
+  if (agent === null || typeof agent !== 'object') return
+  try { installAppendLocale(agent) } catch { /* 降级：该会话不做 append 翻译。 */ }
+  try { installSnapshotProjection(agent) } catch { /* 降级：该会话快照保持英文。 */ }
 }
 
 /**
- * 装配「上下文注入中文化」：pre-step 监听在注入消息（含 runtime-context
- * 快照，0.2.1 起正文在 pre-step 按段重译）进入会话历史前做替换；assemble
- * 改写器保留为 0.1.x 兼容路径（0.2.1 的 refreshContext 会用原文重建
- * contexts、覆盖该路径的改写，主路径已让给 pre-step 重译）。开关关闭或
- * regime 非 zh 时零改动；失败只 warn 一次，绝不阻断模型请求。
+ * 装配「上下文注入中文化」。三条互补路径：
+ *
+ * 1. **快照投影**（`installSnapshotProjection`）：包装 agent-loop 的
+ *    `RuntimeContextProjection.project`，让 runtime-context 快照在**渲染时**
+ *    即为中文（正文 + `source.sections` + 头部行）。这是 0.2.1 起的唯一有效
+ *    路径——agent-loop 会把 pre-step 里的快照消息丢弃并按 provider 原文重建。
+ * 2. **append 接缝**（`installAppendLocale`）：包装 `Session.append`，兜住
+ *    pre-step 链序够不到的注入（典型是比本插件更外层注册的 time-context）；
+ *    同时保证落盘历史与投影一致。
+ * 3. **pre-step 行级替换**：覆盖链内官方注入（工作区指令帧、skill 目录帧等）。
+ *
+ * assemble 改写器保留为 0.1.x 兼容路径（0.2.1 的 refreshContext 会用原文重建
+ * contexts、覆盖该路径的改写）。开关关闭或 regime 非 zh 时零改动；任何失败只
+ * warn 一次并沿用原文，绝不阻断模型请求。
  */
 export function installContextLocale(ctx: HostContext): void {
   const state = getModelState()
@@ -741,7 +886,7 @@ export function installContextLocale(ctx: HostContext): void {
       let changed = false
       const messages = entry.messages.map(function (message: unknown) {
         if (!isDshInjection(message)) return message
-        const localized = localizeMessage(message)
+        const localized = localizeMessage(message, isSnapshotMessage(message))
         if (localized !== message) changed = true
         return localized
       })
@@ -752,5 +897,22 @@ export function installContextLocale(ctx: HostContext): void {
       return decision
     }
     }, { prepend: true })
+  // 3) 最终接缝：给已有会话与后续新建会话挂上 append / 快照投影包装
+  //    （为什么需要它们、以及快照为什么必须在投影层，见上方接缝说明）。
+  const agents = ctx.get('agents') as { list(): unknown[] } | undefined | null
+  if (agents !== undefined && agents !== null && typeof agents.list === 'function') {
+    try {
+      for (const existing of agents.list()) ensureAgentLocale(existing)
+    } catch (error) {
+      noteFailure('agents.list', error)
+    }
+  }
+  ctx.on('agent/created', function (payload: unknown) {
+    try {
+      ensureAgentLocale((payload as { agent?: unknown } | undefined)?.agent)
+    } catch (error) {
+      noteFailure('agent/created', error)
+    }
+  })
   log(`上下文注入中文化已就绪（当前${state.zhContextInject ? '开启' : '关闭'}）`)
 }

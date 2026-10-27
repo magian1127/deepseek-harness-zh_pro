@@ -7,6 +7,7 @@
 import { readFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { PKG } from '../bin/dsh-zh.mjs'
+import { getModelState } from './chinese-prompt.js'
 import { preMountEvictionRecord, reloadRecord, reloadSequence, unloadEvictionRecord, watchState } from './hot-reload.js'
 import { getConfiguredWebSearchProvider, getLiveWebSearchSelection, getWebSearchFallbackState, getWebSearchSelectionState, getWebSearchSnippetFallbackState } from './web-search.js'
 import { getWebFetchFallbackState, getWebFetchSelectionState } from './web-fetch.js'
@@ -77,6 +78,10 @@ export function handleDiagnosticsRoute(_req: RouteRequest, res: RouteResponse, p
       hotReloadWatch: watchState() ?? null,
       reloadSequence: reloadSequence() ?? null,
       applyMark: readApplyMark(),
+      // 提示词注入当前生效状态：排查「设置改了但新会话仍是旧文本」时，
+      // 用它区分「插件没收到新配置」与「插件收到了但 assembly 没带上」。
+      promptInjection: getModelState().promptInjection ?? null,
+      promptSync: getModelState().promptSync ?? null,
       webSearchSelection: getWebSearchSelectionState() ?? null,
       webSearchLive: getLiveWebSearchSelection() ?? null,
       webSearchFallback: getWebSearchFallbackState(),

@@ -8,13 +8,14 @@
 // 缺失时保持 null，设置页显示禁用的开关行，插件其余功能不受影响。
 const PROMPT_SETTINGS_NS = 'dsh-zh'
 // 与主机半边 ZH_PROMPT_TEXT 同文案：主机 schema 默认值即此文本，
-// 客户端在 configForms 未就绪时也用它预填文本框。
-const DEFAULT_PROMPT_TEXT = '思考过程和回复始终使用中文输出'
+// 客户端在 configForms 未就绪时也用它预填文本框（verify-pairs 断言两侧一致）。
+const DEFAULT_PROMPT_TEXT = '始终用中文进行推理，并用中文输出你的思考过程。'
 // 「排序位置」默认值与取值范围：与主机半边 ZH_PROMPT_ORDER_DEFAULT /
 // ZH_PROMPT_ORDER_MIN / ZH_PROMPT_ORDER_MAX 同值副本（客户端不能 import
-// 主机模块），verify-cli.mts 会断言两侧一致。
+// 主机模块），verify-cli.mts 会断言两侧一致。默认 100 = persona 之后、
+// 官方政策与工具说明之前。
 const DEFAULT_PROMPT_ORDER = 100
-const PROMPT_ORDER_MIN = 1
+const PROMPT_ORDER_MIN = -9999
 const PROMPT_ORDER_MAX = 9999
 // 自动归档默认天数（与主机 schema 默认值一致）。
 const ZH_AUTO_ARCHIVE_DAYS_DEFAULT = 7

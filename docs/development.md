@@ -171,18 +171,37 @@ client-modules 会缓存某个包名是否为有效客户端包。结构错误�
 全部 hook（`useEffect` 缺失会让设置页渲染直接抛错），新增 hook 用法时要同步补齐。
 
 **设置草稿层（2026-10 起，解决逐项写入卡顿）**：设置页所有设置项不再即时写入
-（`settingsStore.set` / `scope.set`）。改动先落进组件内 `pending = { local, host }`
-草稿，底部置底操作栏的「保存」才一次性提交：主机字段用 `configForms.mutate(ops)`
-原子提交（一次 revision fence、一次文档广播），界面设置用 `settingsStore.setMany(patch)`
-一次写盘且只通知一次订阅者，「还原」清空草稿。逐项 `set` 每次都是一次网络提交 +
-设置文档广播 + 整页重渲染，是用户反馈「动一下卡一下」的根因；折叠态（卡片展开）、
-API Key 录入与插件同步属于操作/瞬时状态，仍即时生效。提示词文本框用子组件
-`DraftTextarea` 持有显示值、失焦才写草稿：父组件是上千行的设置页，逐键 `setState`
-会整页重渲染，长文本编辑的卡顿主要来自这里；点「保存」前必然先触发失焦，草稿不会漏。
+（`settingsStore.set` / `scope.set`）。改动先落进草稿，底部置底操作栏的「保存」才
+一次性提交：主机字段用 `configForms.mutate(ops)` 原子提交（一次 revision fence、一次
+文档广播），界面设置用 `settingsStore.setMany(patch)` 一次写盘且只通知一次订阅者，
+「还原」清空草稿。逐项 `set` 每次都是一次网络提交 + 设置文档广播 + 整页重渲染，是用户
+反馈「动一下卡一下」的根因；折叠态（卡片展开）、API Key 录入与插件同步属于操作/瞬时
+状态，仍即时生效。提示词文本框用子组件 `DraftTextarea` 持有显示值、失焦才写草稿：
+父组件是上千行的设置页，逐键 `setState` 会整页重渲染，长文本编辑的卡顿主要来自这里；
+点「保存」前必然先触发失焦，草稿不会漏。
 新增可写设置时必须走草稿（`setPendingLocal` / `setPendingHost`）并补 `verify-pairs`
 的草稿契约断言（改动不立即写 store、保存后一次生效、还原丢弃、无草稿时按钮禁用），
 否则会退回逐项即时写入。`verify-pairs` 的 mock React 因此实现了按组件函数分栈的
-`useState`（原先返回 no-op setter，草稿层无法测试）。
+`useState`。
+
+**草稿必须放在模块级 store，不能放组件 `useState`（2026-10-27 用户实测缺陷）**：
+症状是「对话进行中根本没法改设置，改什么都瞬间跳回去」。根因不是写入失败，而是
+设置分区由宿主 `renderSlot('settings.section', …, { only: active })` 渲染，**对话
+流式输出会把分区重挂载**，组件状态随之清空，草稿凭空消失、输入框跳回已保存值。
+草稿因此提升为模块级 `draftStore`（`local`/`host`/`status` 三项，`useSyncExternalStore`
+订阅），`DraftTextarea` 与「排序位置」输入框的本地草稿同样改用模块级
+`createScalarDraftStore`。**判定要点**：任何「组件重挂载后仍应保留」的状态都不能放在
+`useState`；只有刷新页面才该清空的东西放模块级，需要跨刷新保留的才放 `localStorage`。
+守护用例「分区重新挂载后草稿仍在」（`settingsRender()` 每次调用等价一次全新挂载）：
+把 `draftStore.getSnapshot` 改成返回初始空草稿，该用例必须失败——已做变异测试确认。
+
+**DOM 观察按帧合并（2026-10-27，同上缺陷的放大器）**：`dom-enhance` 的
+`MutationObserver` 观察整个 `documentElement`（`childList`/`characterData`/`attributes`），
+对话流式输出时 DSH 每个 token 都产生多条 mutation 记录；原先每条记录都直接跑
+`runObservedPass`（内含 `querySelectorAll('[data-variant="think"]')` 两次全文档扫描 +
+整树 `rewrite`），一帧内可执行上百次。现在记录先累积、用 `requestAnimationFrame`
+每帧最多跑一次；没有 `requestAnimationFrame` 的环境（回归脚本 mock）退回同步执行，
+语义不变。卸载后到达的帧回调被 `domStarted` 挡掉，不会对已还原的 DOM 再改写。
 
 **置底结构契约（2026-10-23 实测回归）**：官方设置页把分区渲染进滚动容器
 `.options`（`overflow-y: auto; padding: 0 24px 24px`），slot 包裹层是
@@ -322,12 +341,33 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
 7. **核对 contexts 的渲染链路（0.2.1 起的新失败模式）**：`assemble` 返回后对
    `assembly.contexts` 的改写**不再可靠**——`agent-loop` 在每次请求前调用
    `systemPrompt.refreshContext(assembly, …)`，按注册 provider 的原文重建 contexts，
-   再交给 `renderContextSections` 渲染快照。因此 contexts 翻译必须落在
-   `agent/pre-step` 对最终快照消息的重译上（`localizeSnapshotBody`：按 `\n\n` 分块，
-   逐块匹配动态规则与逐字表）。判定方法：新会话首轮快照里 contexts 仍是英文即此因
-   （本插件 0.1.7 时代的 assemble 改写路径在 0.2.1 下静默失效，`npm test` 不覆盖）。
+   再交给 `renderContextSections` 渲染快照。判定方法：新会话首轮快照里 contexts
+   仍是英文即此因（0.1.7 时代的 assemble 改写路径在 0.2.1 下静默失效）。
    同时注意快照新增的 context：`working-directory:current`（required）、`team:identity`
    （Agent Teams 会话）、`harness:source` / `app:web-surface` 的值形态。
+
+   **翻译必须落在投影层，不是 pre-step（2026-10-27 实测澄清）**：
+   `packages/core/agent-loop/src/agent.ts` 的 `step()` 遍历 `decision.messages` 时，
+   遇到 `message.source.kind === 'runtime-context'` **只把它当「本步需要快照」的
+   信号**（用于占位插入顺序），真正 `session.append` 的是
+   `systemPrompt.refreshContext(assembly, …)` 重建后由
+   `RuntimeContextProjection.project()`（`runtime-context.ts`）渲染的**新消息**。
+   所以 pre-step 里改旧消息正文永远进不了历史——这是「头部译了、正文仍英文」
+   的真正原因。现在实现为包装 agent 实例的 `runtimeContext.project`：
+   **传入的 current/sections 与产出的消息一起中文化**。只翻产出是错的：
+   `project()` 用 `retained.text`（上次 append 的文本）与传入正文比较，
+   只翻产出会让两侧恒不等 → 每步追加一条快照、上下文膨胀。
+   快照按 `\n\n` 分块匹配（`localizeSnapshotBody`：动态多行规则 → 逐行规则 →
+   逐字表），`team:identity` 这类多行 context 不会被拆散。
+   守护测试：`verify-cli.mjs` 的「投影包装」组断言头部/正文/sections 都换中文，
+   并断言**同一快照重复渲染不再追加**（比较基准已中文化）。
+
+   另一类漏网：**比本插件更外层注册的注入**。`time-context` 以 `prepend: true`
+   注册，且在自己 `next()` 返回**之后**才追加 user 消息；preset 在 agent 创建时
+   才挂载，因此它常晚于本插件、排在外层——本插件 `next()` 的 decision 里根本
+   没有这条消息。这类注入由包装 `Session.append` 兜住（只处理
+   `user/message` + 官方注入 kind，其余原样透传）。守护测试：`verify-cli.mjs`
+   的「append 接缝」组。
 
 8. **绝不把 `{{…}}` 写回 section/context（0.2.1 起会直接拒掉整个请求）**：
    `packages/core/system-prompt/src/index.ts` 的 `interpolate()` 对未注册变量是
@@ -357,17 +397,22 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
    `renderPrompt` 逐例对拍（17 例 0 不一致）。
    判定方法：新会话首个请求直接报 `unknown prompt variable`，或把开关关掉就恢复正常。
 
-- **注入段落点**（`chinese-prompt.ts`）：`zhPromptOrder`（1–9999，默认 100）与官方
-  `SECTION_ORDERS` 同一坐标系。`AssembledSection` 只带 name/text/interpolate、**不带
+- **注入段落点**（`chinese-prompt.ts`）：`zhPromptOrder`（-9999–9999，默认 `100`）与官方
+  `SECTION_ORDERS` 同一坐标系。默认 `100` 落在 `deployment:persona-prefix`（order 0）之后、
+  首个工具说明（`TOOL_BASH` 1000）之前。`AssembledSection` 只带 name/text/interpolate、**不带
   order**，因此模块内维护「官方段名 → SECTION_ORDERS 键名」表
   （`OFFICIAL_SECTION_ORDER_NAMES`）：优先用运行时 `systemPrompt.getSectionOrder(key)`
   取真实数值（官方调整档位时自动跟随），旧宿主回退 `OFFICIAL_SECTION_ORDER_FALLBACK`；
   MCP 段按 `mcp:` 前缀归到 `MCP_SERVERS`。插入位置 = 第一个 order 更大的官方段之前，
   未收录的第三方新增段不参与定位。DSH 新增官方段或调档时同步这张表；守护在
-  `verify-cli.mjs`（默认 100 落在 persona 之后、等于官方 order 时的先后、越界钳制、
-  非数字回退、反复同步不产生双份）与 `verify-pairs.cjs`（双侧默认值/范围一致）。
+  `verify-cli.mjs`（缺省走默认 100 落在 persona 之后、负数落点（-1/-500/-1000/-1001）、
+  负小数四舍五入与 `-0` 归零、等于官方 order 时的先后、越界钳制、非数字回退、反复同步
+  不产生双份）与 `verify-pairs.cjs`（双侧默认值/范围一致，含设置页 setter 允许的负数下界）。
   **不得**回到「按名字硬插在 persona 之前」的旧实现：那会让注入段越过所有系统自带
   段落排到最前面。
+  负数下界的理由：官方最小 order 是 `HARNESS_IDENTITY`（-1000），下界取 -9999 让用户
+  能把注入段放到 system prompt 绝对最前；`resolveInsertIndex` 本身对 `targetOrder` 无假设，
+  归一化只做钳制，因此放开下界不需要改落点算法。
 
 ## DOM 文本层
 
@@ -858,18 +903,36 @@ Host 半边热通道（2026-10-17 重写，逐层实测后的结论；实现见 
 ### 上下文注入中文化（context-locale）
 
 `src/lib/context-locale.ts` 维护开关 `zhContextInject`（与上述两开关共用 `dsh-zh` 命名空间
-与 regime 锁定，`regimeOf` 从 model-locale 导出共享同一张锁定表），覆盖两类注入面：
+与 regime 锁定，`regimeOf` 从 model-locale 导出共享同一张锁定表），覆盖三类落点：
 
-- **runtime-context 正文**：通过共享 assemble 管线注册改写器，按 context 注册名
+- **runtime-context 快照（投影层）**：包装 agent 实例的
+  `runtimeContext.project(current, sections)`，把传入正文与 sections、以及产出的消息
+  一起换成中文。**必须同时翻传入的比较基准**，否则 `retained` 比较恒失配、每步追加
+  一条快照。这是 0.2.1 起的唯一有效路径（详见下文「快照为什么不在 pre-step 翻译」）。
+- **`Session.append` 接缝**：包装会话的 `append`，兜住链序之外的注入（典型是比本插件
+  更外层注册的 `time-context`、`tmux-context`）。只处理 `user/message` + 官方注入
+  kind，其余事件与用户消息原样透传；`.d.ts` 与 `id` 不变。
+- **assemble 改写器（0.1.x 兼容）**：按 context 注册名
   （`sandbox:policy` / `approval:policy` / `subagent:delegation`）把官方英文正文换成
-  中文（workspace-write 的动态路径用正则提取拼入）。改写发生在渲染前，快照投影
-  两次渲染得到同一中文文本，`RuntimeContextProjection` 的 retained 比较稳定、不重复注入。
-- **注入消息**：`agent/pre-step` 监听在 decision.messages append 进会话之前做行级模板
-  替换（整行锚定正则 + 捕获组重建动态值），按 source 白名单识别官方注入
+  中文（workspace-write 的动态路径用正则提取拼入）。0.2.1 下 `refreshContext` 会覆盖
+  它，仅保留给旧部署与未走 refreshContext 的消费者。
+- **`agent/pre-step` 行级替换**：监听以 `prepend: true` 注册在链头，对 `next()` 返回的
+  decision.messages 做整行锚定模板替换（捕获组重建动态值），覆盖链内官方注入
   （`agent-instructions` / `skill-catalog` / `user-approval` / `compact-checkpoint` /
   `runtime-context` / `plan-mode` / `cordis-host-runner` / `tool-cordis` / `schedule` /
   `subagent-settled` / `time-context`）；source 与 id 原样保留——agent-instructions
   的基线/变更去重、skill 目录 digest、runtime-context 投影归属全部由 source 驱动。
+
+**快照为什么不在 pre-step 翻译（2026-10-27 更正）**：`agent-loop/src/agent.ts` 的
+`step()` 遍历 `decision.messages` 时，遇到 `source.kind === 'runtime-context'`
+**只用它当「本步需要快照」的信号**，真正 append 的是 `refreshContext` 重建 contexts
+后由 `RuntimeContextProjection.project()` 渲染的**新消息**。因此 pre-step 里改旧消息
+的正文进不了历史——旧版本「头部译了、正文仍英文」即此因。同理，
+`time-context` 以 `prepend: true` 注册且在自己 `next()` 返回**之后**才追加消息，
+preset 又在 agent 创建时才挂载，因此它常排在本插件外层、根本不在 `next()` 的返回值里。这两类都由上面两条接缝兜住。
+回归见 `verify-cli.mts` 的「投影包装」与「append 接缝」两组（含「同一快照重复渲染
+不再追加」的比较语义断言、用户消息原样透传、开关关闭零改动）。
+
 - **time-context 为什么此前整段英文（0.10.2 修）**：`@deepseek-ai/dsh-time-context`
   以自己的 `export const name`（`'time-context'`）作为 `source.kind` 注入一条**独立
   user 消息**，既不叫 `runtime-context`、也不是快照形态，因此 `isDshInjection`
@@ -884,8 +947,8 @@ Host 半边热通道（2026-10-17 重写，逐层实测后的结论；实现见 
   状态词（`unavailable` → 「不可用」、`mixed` → 「混合」）、两个基线名
   （`model-visible message` → 「模型可见消息」、`step context` → 「步骤上下文」）。
   回归见 `verify-cli.mts` 的四组断言（三种时区形态 + 老会话零改动）。
-  注意它**不是** `localizeSnapshotBody` 路径：那条只对 `source.kind ===
-  'runtime-context'` 的快照生效，所以规则必须加在 `LINE_RULES`。
+  规则加在 `LINE_RULES`（快照专用路径只对 `source.kind === 'runtime-context'` 生效），
+  实际执行由 pre-step 与 append 接缝两条通道各自覆盖。
 
 **source.kind 的两代形态（DSH 0.1.7 起必读）**：会话格式 v4 要求消息 `source.kind` 是
 「生产者自有」的非空字符串，且**显式拒绝 `'plugin'`**——`v3 → v4` 迁移只重写**已落盘**的
@@ -907,10 +970,12 @@ Host 半边热通道（2026-10-17 重写，逐层实测后的结论；实现见 
 英文消息，翻译后返回。`verify-cli.mts` 的 `makePreStepDispatcher` 忠实模拟该顺序，
 并以「内层 fake 注入器追加的消息也被翻译」作为链序回归。
 
-**头行翻译的替换代价**：快照头行（`Current runtime context. …` 及 CLEARED 变体）由
-agent-loop 硬编码拼接，官方渲染侧永远是英文；按用户需求在行级规则中翻译它，代价是
-投影比较每步失配、每步注入一条替换快照（surface 替换语义，模型输入不膨胀，会话
-日志每步 +1 条快照事件）。tmux-context 快照同理且为 per-turn 重注入，不翻。
+**头行翻译与「不再有替换代价」**：快照头行（`Current runtime context. …` 及 CLEARED
+变体）由 agent-loop 的 `joinContextSections` 硬编码拼接，官方渲染侧永远是英文。
+头行现在在投影层与正文一起翻译，且**翻译后的文本同时充当比较基准**，因此
+快照内容不变就不再追加——旧版「每步注入一条替换快照」的代价已消除。判据：
+若发现会话日志里快照事件每步 +1，即说明比较基准没跟着翻译（见投影包装注释）。
+tmux-context 等链外层注入由 append 接缝覆盖，不再单独说明。
 
 修改本模块后同样要求 lib/context-locale.js 在运行进程里生效（见上文热重载说明）。
 

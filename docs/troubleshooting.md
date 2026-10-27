@@ -139,7 +139,28 @@ profile 重置会清理依赖、补丁和工作区注册；重新安装即可恢
 `subagent_fork` 的子会话继承父对话全部历史（含 `assistant/message`），regime 按设计锁定 en，
 注入不翻译是正确行为——用它验收会得到假阴性（2026-09-01 连续五轮误判；而重启后首次用全新
 subagent 验收即全部命中）。用普通 `subagent`（无种子）或 GUI 新建会话，验收点：persona 中文、
-文件策略/审批策略正文中文、skill 目录首句中文、runtime-context 头部句英文（设计保留）。
+文件策略/审批策略正文中文、skill 目录首句中文、runtime-context 头部与正文均为中文、
+time-context 三行均为中文。
+
+### 注入中文化只译了一半（头部中文、正文英文 / 时间三行仍英文）
+
+两个**不同**原因，现象都是「同一段注入半中半英」：
+
+1. **runtime-context 正文仍英文**：快照不是 pre-step 的那条消息。0.2.1 的 `agent-loop`
+   在 `step()` 里对 `source.kind === 'runtime-context'` 只当「本步需要快照」的信号，
+   真正 append 的是 `refreshContext` 重建 contexts 后由
+   `RuntimeContextProjection.project()` 渲染的新消息。因此快照必须在**投影层**翻译
+   （包装 agent 的 `runtimeContext.project`）。判定：`session.v4.jsonl.zstd` 里
+   `source.kind=runtime-context` 的事件正文是英文，但同一步的
+   `source.sections` 也是英文 → 投影包装没生效（`agents` 服务缺席或 agent 字段改名）。
+   注意包装必须**同时**翻译传入的比较基准，否则每步追加一条快照。
+2. **time-context 三行仍英文**：该包以 `prepend: true` 注册，且在自身 `next()` 返回
+   **之后**才追加 user 消息；preset 在 agent 创建时才挂载，因此它常排在本插件外层，
+   本插件 `next()` 的 decision 里没有这条消息。由 `Session.append` 接缝覆盖。
+
+两条接缝都在 `installContextLocale` 里对「已存在的 agent」（`agents.list()`）与
+「后续创建的 agent」（`agent/created`）各挂一次；开关关闭或 regime=en 时零改动。
+回归：`node verify-cli.mjs`（「投影包装」「append 接缝」两组）。
 
 ## 中文界面仍出现英文或还原错误
 

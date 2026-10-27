@@ -78,14 +78,77 @@ const ZH_FREE_MULTI_BACKEND_ID = 'dsh-zh-free'
 const FETCH_ORDER_DEFAULT = ['deepseek-fetch-api', 'zhipu-web-reader', 'dsh-zh-free-fetch', 'http']
 const ZH_FREE_FETCH_BACKEND_ID = 'dsh-zh-free-fetch'
 
-// 提示词文本框：显示值只在本组件内部维护，失焦才把最终文本交给设置草稿。
+// ============ 设置草稿 store（模块级，跨组件重挂载存活） ============
+// 为什么不能只用组件 useState：设置分区由宿主 `renderSlot('settings.section')`
+// 渲染，对话进行中流式输出会持续触发整页重渲染，分区被重挂载时**组件状态全部
+// 丢失**——草稿凭空消失、输入框跳回已保存值（实测症状：对话中根本没法改设置，
+// 改什么都会瞬间跳回去）。草稿与保存状态因此提升到模块级 store，重挂载后原样
+// 读回；它与 localStorage 的 settingsStore 不同，只在页面会话内存在，
+// 刷新页面即清空（符合「未保存就别留」的直觉）。
+const DRAFT_INITIAL = Object.freeze({ local: Object.freeze({}), host: Object.freeze({}), status: 'idle' })
+let draftSnapshot = DRAFT_INITIAL
+const draftListeners = []
+const draftStore = {
+  getSnapshot: function () { return draftSnapshot },
+  subscribe: function (listener) {
+    draftListeners.push(listener)
+    return function () {
+      const i = draftListeners.indexOf(listener)
+      if (i !== -1) draftListeners.splice(i, 1)
+    }
+  },
+  set: function (next) {
+    draftSnapshot = next
+    for (const listener of draftListeners.slice()) listener()
+  },
+  update: function (fn) {
+    draftStore.set(fn(draftSnapshot))
+  },
+  /** 「保存」成功或被撤销后清空全部草稿（保持折叠态等非草稿状态不动）。 */
+  clear: function () {
+    if (draftSnapshot !== DRAFT_INITIAL) draftStore.set(DRAFT_INITIAL)
+    else draftStore.set(Object.assign({}, DRAFT_INITIAL, { local: {}, host: {} }))
+  },
+}
+
+
+// 提示词文本框：显示值存在模块级草稿里（与设置草稿同因：分区重挂载后
+// 不能丢用户正在敲的内容），失焦才把最终文本交给设置草稿。
 // 父组件是上千行的设置页，逐键 setState 会整页重渲染——长文本编辑的卡顿
 // 主要来自这里，而不是写入本身。点「保存」前会先触发失焦，草稿不会漏。
+// 单值草稿 store（文本框与排序位置输入框共用同一套实现）：null = 无草稿，
+// 显示已保存值。
+function createScalarDraftStore(initial) {
+  let value = initial
+  const listeners = []
+  return {
+    getSnapshot: function () { return value },
+    subscribe: function (listener) {
+      listeners.push(listener)
+      return function () {
+        const i = listeners.indexOf(listener)
+        if (i !== -1) listeners.splice(i, 1)
+      }
+    },
+    set: function (next) {
+      if (value === next) return
+      value = next
+      for (const listener of listeners.slice()) listener()
+    },
+  }
+}
+const textareaDraftStore = createScalarDraftStore(null)
+const orderDraftStore = createScalarDraftStore(null)
+// 文本框「已提交但主机尚未回声」的文本。提交后主机值是异步回来的，中间任意
+// 一次重渲染（对话流式输出、其它设置变更）都会让 props.value 仍是旧值——
+// 若此时草稿已清空，输入框就会跳回上一版内容，用户看到「我刚写的没了/变成
+// 了旧的那句」。记住最后一次提交值，在主机值追上来之前优先显示它。
+let textareaCommitted = null
 const DraftTextarea = function (props) {
-  const draftState = React.useState(null)
-  const draft = draftState[0]
-  const setDraft = draftState[1]
-  const shown = draft !== null ? draft : props.value
+  const draft = React.useSyncExternalStore(textareaDraftStore.subscribe, textareaDraftStore.getSnapshot)
+  // 主机值已经等于最后一次提交值 → 回声到达，可以忘掉本地记忆。
+  if (textareaCommitted !== null && props.value === textareaCommitted) textareaCommitted = null
+  const shown = draft !== null ? draft : (textareaCommitted !== null ? textareaCommitted : props.value)
   return React.createElement('textarea', {
     value: shown,
     disabled: props.disabled,
@@ -93,10 +156,16 @@ const DraftTextarea = function (props) {
     'aria-label': props.label,
     placeholder: props.placeholder,
     style: props.style,
-    onChange: function (event) { setDraft(event.target.value) },
+    onChange: function (event) {
+      textareaDraftStore.set(event.target.value)
+      textareaCommitted = null
+    },
     onBlur: function (event) {
-      setDraft(null)
-      props.onCommit(event.target.value)
+      const value = event.target.value
+      textareaDraftStore.set(null)
+      // 与主机已保存值相同就不必记（避免无谓地压住 props）。
+      textareaCommitted = value === props.value ? null : value
+      props.onCommit(value)
     },
   })
 }
@@ -123,12 +192,26 @@ const ZhSettingsSection = function (props) {
   // 设置文档广播 + 整页重渲染（提示词文本框防抖后每停顿一次就写一次）。改成
   // 「保存」时用一次 mutate 原子提交全部主机字段、一次 setMany 写全部界面设置。
   // 折叠态、API Key、插件同步属于操作/瞬时状态，仍即时生效。
-  const pendingState = React.useState({ local: {}, host: {} })
-  const pending = pendingState[0]
-  const setPending = pendingState[1]
-  const saveStatusState = React.useState('idle')
-  const saveStatus = saveStatusState[0] // 'idle' | 'saving' | 'failed'
-  const setSaveStatus = saveStatusState[1]
+  // 状态存放在**模块级 draftStore**而不是 useState：设置分区在对话流式输出期间
+  // 会被宿主重挂载，组件状态随之清空，草稿就会凭空消失（见 draftStore 注释）。
+  const draft = React.useSyncExternalStore(draftStore.subscribe, draftStore.getSnapshot)
+  const pending = draft
+  const setPending = function (next) {
+    draftStore.update(function (prev) {
+      const value = typeof next === 'function' ? next(prev) : next
+      return {
+        local: value.local !== undefined ? value.local : prev.local,
+        host: value.host !== undefined ? value.host : prev.host,
+        status: value.status !== undefined ? value.status : prev.status,
+      }
+    })
+  }
+  const saveStatus = draft.status // 'idle' | 'saving' | 'failed'
+  const setSaveStatus = function (status) {
+    draftStore.update(function (prev) {
+      return prev.status === status ? prev : { local: prev.local, host: prev.host, status: status }
+    })
+  }
   const sameValue = function (a, b) {
     if (a === b) return true
     if (Array.isArray(a) && Array.isArray(b)) {
@@ -151,14 +234,48 @@ const ZhSettingsSection = function (props) {
   }
   const setPendingLocal = function (key, value, savedValue) { setPendingField('local', key, value, savedValue) }
   const setPendingHost = function (field, value, savedValue) { setPendingField('host', field, value, savedValue) }
+  // 把「仍在输入框里、尚未失焦」的本地草稿并入设置草稿。输入框草稿单独存放
+  // （避免逐键重渲染整页），因此保存前必须显式合并一次。
+  const flushLocalInputDrafts = function () {
+    const textDraft = textareaDraftStore.getSnapshot()
+    if (textDraft !== null) {
+      // 走的是「保存按钮」路径（没有失焦事件）：同样要记住提交值，
+      // 否则下一次重渲染会让输入框跳回主机旧值。
+      textareaCommitted = textDraft
+      setPendingHost('zhPromptText', textDraft, promptTextSaved)
+      textareaDraftStore.set(null)
+    }
+    const orderDraft = orderDraftStore.getSnapshot()
+    if (orderDraft !== null) {
+      const parsed = Number.parseInt(String(orderDraft).trim(), 10)
+      if (Number.isFinite(parsed)) {
+        const next = parsed < PROMPT_ORDER_MIN ? PROMPT_ORDER_MIN : (parsed > PROMPT_ORDER_MAX ? PROMPT_ORDER_MAX : parsed)
+        setPendingHost('zhPromptOrder', next, promptOrderSaved)
+      }
+      orderDraftStore.set(null)
+    }
+  }
   // 视图：草稿优先于已保存值（界面设置与主机字段各一套）。
   const view = Object.assign({}, snapshot, pending.local)
   const hostView = promptReady ? Object.assign({}, promptSnapshot.value, pending.host) : {}
-  const pendingCount = Object.keys(pending.local).length + Object.keys(pending.host).length
+  // 在途输入草稿（文本框/排序位置尚未失焦）也算未保存改动：否则刚敲完还没失焦
+  // 时底栏会显示「无改动」、保存按钮禁用，用户被迫先点别处——这正是「慢一拍」
+  // 体感的一部分。两个草稿 store 的变化会触发本组件重渲染，计数随输入实时更新。
+  const inputDraftCount = (textareaDraftStore.getSnapshot() !== null ? 1 : 0)
+    + (orderDraftStore.getSnapshot() !== null ? 1 : 0)
+  const pendingCount = Object.keys(pending.local).length + Object.keys(pending.host).length + inputDraftCount
   const savePending = async function () {
     if (pendingCount === 0 || saveStatus === 'saving') return
-    const localPatch = pending.local
-    const hostFields = Object.keys(pending.host)
+    // 先把「还在输入框里、尚未失焦」的本地草稿合并进设置草稿再提交。
+    // 否则点「保存」时读到的是渲染闭包里的旧 pending：textarea 的 onBlur 在
+    // 按钮 onClick 之后才触发，用户刚敲完直接点保存就会提交上一版文本
+    // （实测症状：每次保存都慢一拍，新会话注入的是上一次的内容）。
+    flushLocalInputDrafts()
+    // 关键：从 store 取**最新**快照，而不是继续用渲染闭包里的 `pending`——
+    // flush 刚写入的字段只有在 store 里才看得到。
+    const latest = draftStore.getSnapshot()
+    const localPatch = latest.local
+    const hostFields = Object.keys(latest.host)
     setSaveStatus('saving')
     if (hostFields.length > 0) {
       if (boundPromptScope === null || promptReady !== true || typeof boundPromptScope.mutate !== 'function') {
@@ -166,13 +283,26 @@ const ZhSettingsSection = function (props) {
         return
       }
       const ops = hostFields.map(function (field) {
-        return { op: 'set', path: [field], value: pending.host[field] }
+        return { op: 'set', path: [field], value: latest.host[field] }
       })
+      // revision 冲突自动重试一次：宿主把「行 config 的 JSON 快照 + fiber uid」
+      // 一起算进 revision（packages/settings/settings 的 describe），因此本插件
+      // 热重载（改代码/build 换 fiber）或别的窗口刚写过配置，都会让客户端手里的
+      // revision 过期。mutate 失败时会自己 recover 一次（重新拉快照 → 更新
+      // revision），所以紧接着用新 revision 再写一次就能成功——不必让用户先看到
+      // 「保存失败」再手动点第二次。只有真正不可写（schema 不符等）才落到 failed。
       let accepted = false
-      try {
-        accepted = await boundPromptScope.mutate(ops)
-      } catch {
-        accepted = false
+      for (let attempt = 0; attempt < 2 && accepted !== true; attempt += 1) {
+        try {
+          accepted = (await boundPromptScope.mutate(ops)) === true
+        } catch {
+          accepted = false
+        }
+        if (accepted !== true && attempt === 0 && typeof boundPromptScope.load === 'function') {
+          // 再取一次快照，确保重试用的是恢复后的 revision（mutate 内部通常已
+          // recover；这里对不自动 recover 的旧宿主补一次）。
+          try { await boundPromptScope.load() } catch { /* 读取失败则直接重试 */ }
+        }
       }
       if (accepted !== true) {
         setSaveStatus('failed')
@@ -189,7 +319,7 @@ const ZhSettingsSection = function (props) {
       }
       const nextHost = Object.assign({}, prev.host)
       for (const field of hostFields) {
-        if (sameValue(nextHost[field], pending.host[field])) delete nextHost[field]
+        if (sameValue(nextHost[field], latest.host[field])) delete nextHost[field]
       }
       return { local: nextLocal, host: nextHost }
     })
@@ -198,7 +328,10 @@ const ZhSettingsSection = function (props) {
   const revertPending = function () {
     setPending({ local: {}, host: {} })
     setSaveStatus('idle')
+    // 输入框草稿也要一起丢弃，否则「还原」后文本框仍显示被丢弃的内容。
     setPromptOrderDraft(null)
+    textareaDraftStore.set(null)
+    textareaCommitted = null
   }
   // 已保存值（草稿判断的基准，必须是主机已接受的值，不能取草稿视图）。
   const promptTextSaved = (promptReady && typeof promptSnapshot.value.zhPromptText === 'string')
@@ -224,16 +357,16 @@ const ZhSettingsSection = function (props) {
     ? 'user'
     : 'system'
   // 排序位置（仅初始系统提示目标可见）：与官方 SECTION_ORDERS 同一坐标系，
-  // 主机侧默认 100 = persona 之后、官方政策与工具说明之前。
+  // 默认 100 = 排在 persona（order 0）之后、官方政策与工具说明之前。
   const promptOrderBase = (promptReady
     && typeof hostView.zhPromptOrder === 'number'
     && Number.isFinite(hostView.zhPromptOrder))
     ? Math.round(hostView.zhPromptOrder)
     : DEFAULT_PROMPT_ORDER
   // 本地草稿优先于草稿值：输入过程中不回弹，失焦/回车才写进设置草稿。
-  const promptOrderDraftState = React.useState(null)
-  const promptOrderDraft = promptOrderDraftState[0]
-  const setPromptOrderDraft = promptOrderDraftState[1]
+  // 同 DraftTextarea：存在模块级草稿里，分区重挂载后不丢用户正在输入的数字。
+  const promptOrderDraft = React.useSyncExternalStore(orderDraftStore.subscribe, orderDraftStore.getSnapshot)
+  const setPromptOrderDraft = function (value) { orderDraftStore.set(value) }
   const shownPromptOrder = promptOrderDraft !== null ? promptOrderDraft : String(promptOrderBase)
   const commitPromptOrder = function (raw) {
     setPromptOrderDraft(null)

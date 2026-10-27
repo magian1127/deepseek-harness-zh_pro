@@ -864,6 +864,30 @@ const revertDrafts = function () {
   check(commitDrafts(), true, '收尾保存')
   check(store.getSnapshot().thinkingAuto, before, '收尾恢复原值')
 }
+// ---- 草稿必须跨组件重挂载存活（2026-10-27 用户实测缺陷的守护） ----
+// 症状：对话进行中流式输出会让设置分区被宿主重挂载，草稿若只存在组件
+// useState 里就会瞬间消失，用户「改什么都跳回去」。settingsRender() 每次都
+// 重新调用渲染函数（等价于一次全新挂载），草稿必须仍保留在同一位置。
+{
+  const store = pluginExports.settingsStore
+  const savedBefore = store.getSnapshot().thinkingAuto
+  check(clickSettingToggle('自动展开最新思考'), true, '重挂载用例：点击开关产生草稿')
+  // 重新「挂载」一次设置分区，草稿不得丢失。
+  const afterRemount = findElement(settingsRender(), function (n: any) {
+    return n.props && n.props.role === 'status'
+  })
+  check(afterRemount !== null && String(afterRemount.props.children).indexOf('未保存') !== -1, true,
+    '分区重新挂载后草稿仍在（底栏仍显示未保存改动）')
+  const saveNodeAfter = draftBarNode('save')
+  check(saveNodeAfter !== null && saveNodeAfter.props.disabled === false, true,
+    '分区重新挂载后「保存」仍可用（草稿没丢）')
+  check(commitDrafts(), true, '重挂载用例：保存草稿')
+  check(store.getSnapshot().thinkingAuto, !savedBefore, '重挂载后保存的正是重挂载前改的值')
+  // 复原，避免污染后续用例。
+  check(clickSettingToggle('自动展开最新思考'), true, '重挂载用例：改回')
+  check(commitDrafts(), true, '重挂载用例：保存改回')
+  check(store.getSnapshot().thinkingAuto, savedBefore, '重挂载用例收尾还原')
+}
 
 // 置底实现的结构契约：根必须是 display:contents，底栏必须是滚动容器
 // （官方 `.options`）的直接子元素。sticky 的粘附范围受包含块限制——底栏一旦
@@ -885,7 +909,8 @@ const revertDrafts = function () {
 
 
 
-// 「排序位置」（zhPromptOrder）：仅「初始系统提示」目标可见，默认 100。
+// 「排序位置」（zhPromptOrder）：仅「初始系统提示」目标可见，默认 100
+// （落在 persona 之后、官方政策与工具说明之前）。
 // 设置服务缺失时目标按 system 处理，因此这一行仍会渲染（禁用态）。
 const promptOrderInput = findElement(settingsTree, function (node) {
   return node.type === 'input' && node.props && node.props['aria-label'] === '排序位置'
@@ -894,23 +919,62 @@ check(promptOrderInput !== null, true, '排序位置 设置输入框存在')
 check(promptOrderInput === null || promptOrderInput.props.value, '100', '排序位置 默认值 100')
 check(promptOrderInput !== null && promptOrderInput.props.disabled === true, true, '设置服务缺失时禁用排序位置输入')
 check(promptOrderInput === null || promptOrderInput.props.type, 'number', '排序位置 输入框为数字类型')
+check(promptOrderInput === null || promptOrderInput.props.min, -9999, '排序位置 输入框允许负数（min = -9999）')
+check(promptOrderInput === null || promptOrderInput.props.max, 9999, '排序位置 输入框上界为 9999')
 check(locale.lookup('dsh-zh-settings', 'promptOrderLabel'), '排序位置', '排序位置 中文文案')
-check(locale.lookup('dsh-zh-settings', 'promptOrderInvalid'), '请输入 1–9999 的整数', '排序位置 非法输入提示文案')
+check(locale.lookup('dsh-zh-settings', 'promptOrderInvalid'), '请输入 -9999–9999 的整数', '排序位置 非法输入提示文案')
+// 注入文本默认值：主机 constants.ts 的 ZH_PROMPT_TEXT 与客户端 prompt-store.js
+// 的 DEFAULT_PROMPT_TEXT 必须是同一句（客户端不能 import 主机模块）。
+{
+  const DEFAULT_TEXT = '始终用中文进行推理，并用中文输出你的思考过程。'
+  const hostConstants = fs.readFileSync(__dirname + '/lib/constants.js', 'utf8')
+  const clientSource = fs.readFileSync(__dirname + '/lib/client.js', 'utf8')
+  check(hostConstants.includes(DEFAULT_TEXT), true, '主机侧注入文本默认值为默认句')
+  check(clientSource.includes(DEFAULT_TEXT), true, '客户端注入文本默认值与主机同文案')
+  // 文本框在 configForms 未就绪时用 DEFAULT_PROMPT_TEXT 预填该值。
+  check(findElement(settingsTree, function (node) {
+    return node.type === 'textarea' && node.props && node.props.value === DEFAULT_TEXT
+  }) !== null, true, '注入文本框以默认文本预填')
+}
+// ---- 「未失焦就点保存」必须提交最新输入（2026-10-27 用户实测缺陷的守护） ----
+// 症状：每次改完提示词直接点「保存」，新会话拿到的总是上一次的文本（慢一拍）。
+// 根因是 textarea 的 onBlur 在保存按钮 onClick 之后才触发，而保存读的是渲染
+// 闭包里的旧草稿。修复要点（结构守护，mock 环境没有 configForms 无法点保存）：
+//   1. savePending 开始处必须 flush 输入框草稿；
+//   2. 提交时必须从 draftStore 取最新快照，不能继续用闭包里的 pending/host；
+//   3. 在途输入草稿要计入未保存计数，否则刚敲完时保存按钮是禁用的。
+{
+  const clientSource = fs.readFileSync(__dirname + '/lib/client.js', 'utf8')
+  // 必须**调用**（`flushLocalInputDrafts();` 独立语句），仅有定义不算通过。
+  const callSite = /^\s*flushLocalInputDrafts\(\);$/m.test(clientSource)
+  check(callSite, true, '保存前会调用 flushLocalInputDrafts（未失焦的文本不会漏）')
+  check(clientSource.includes('const latest = draftStore.getSnapshot()'), true,
+    '保存时从 draftStore 取最新快照（不用渲染闭包里的旧草稿）')
+  check(/const ops = hostFields\.map\(function \(field\) \{\s*\n\s*return \{ op: 'set', path: \[field\], value: latest\.host\[field\] \}/.test(clientSource),
+    true, '提交的字段值取自最新快照 latest.host')
+  check(clientSource.includes('inputDraftCount'), true,
+    '在途输入草稿计入未保存计数（否则保存按钮在敲完未失焦时被禁用）')
+  // 提交后主机回声未到的窗口里，输入框不得跳回旧 props.value。
+  check(clientSource.includes('textareaCommitted'), true,
+    '记住最后一次提交的文本（主机回声到达前不跳回旧值）')
+}
 // 排序位置默认值与范围：客户端只负责展示与写入，真实默认值在主机侧
 // constants.ts（ZH_PROMPT_ORDER_DEFAULT / MIN / MAX）。两侧必须同值。
 {
   const hostConstants = fs.readFileSync(__dirname + '/lib/constants.js', 'utf8')
   const clientSource = fs.readFileSync(__dirname + '/lib/client.js', 'utf8')
   check(/ZH_PROMPT_ORDER_DEFAULT\s*=\s*100/.test(hostConstants), true, '主机侧排序位置默认值为 100')
-  check(/ZH_PROMPT_ORDER_MIN\s*=\s*1\b/.test(hostConstants), true, '主机侧排序位置下界为 1')
+  check(/ZH_PROMPT_ORDER_MIN\s*=\s*-9999/.test(hostConstants), true, '主机侧排序位置下界为 -9999（允许负数）')
   check(/ZH_PROMPT_ORDER_MAX\s*=\s*9999/.test(hostConstants), true, '主机侧排序位置上界为 9999')
   check(/DEFAULT_PROMPT_ORDER\s*=\s*100/.test(clientSource), true, '客户端排序位置默认值与主机一致（100）')
-  check(/PROMPT_ORDER_MIN\s*=\s*1\b/.test(clientSource), true, '客户端排序位置下界与主机一致（1）')
+  check(/PROMPT_ORDER_MIN\s*=\s*-9999/.test(clientSource), true, '客户端排序位置下界与主机一致（-9999）')
   check(/PROMPT_ORDER_MAX\s*=\s*9999/.test(clientSource), true, '客户端排序位置上界与主机一致（9999）')
-  // DSH 官方 persona 前缀 order 为 0；默认 100 必须落在它之后（回退表守护）。
+  // 默认 100 必须落在 persona（官方 order 0）之后、首个工具说明（1000）之前。
   const hostPrompt = fs.readFileSync(__dirname + '/lib/chinese-prompt.js', 'utf8')
+  check(/HARNESS_IDENTITY:\s*-1000\b/.test(hostPrompt), true, '回退表里 harness:identity 的 order 为 -1000')
   check(/DEPLOYMENT_PERSONA_PREFIX:\s*0\b/.test(hostPrompt), true, '回退表里 persona-prefix 的 order 为 0')
-  check(/ZH_PROMPT_ORDER_DEFAULT\s*=\s*100/.test(hostConstants), true, '默认排序位置 100 在 persona（order 0）之后')
+  check(/TOOL_BASH:\s*1000\b/.test(hostPrompt), true, '回退表里首个工具说明的 order 为 1000')
+  check(100 > 0 && 100 < 1000, true, '默认排序位置 100 落在 persona（0）之后、工具说明区（≥1000）之前')
 }
 
 // 默认展开行数（thinkMaxLines）：设置行渲染 + 思考正文折叠/展开/收起
