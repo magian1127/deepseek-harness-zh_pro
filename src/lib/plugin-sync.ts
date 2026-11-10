@@ -324,6 +324,25 @@ interface SyncRunResult {
   complete: boolean
 }
 
+/**
+ * pluginManager 的预期拒绝只有错误码、没有 diagnostic（`ManagementFailure` 把细节
+ * 留给调用方按语言渲染），照搬 diagnostic 会让界面只显示「失败」而无原因——
+ * 2026-10-27 实测：`already-installed` 的 message 就是 null。这里按码补一句可读原因。
+ */
+const MANAGEMENT_CODE_TEXT: Record<string, string> = {
+  'already-installed': '该包名已在当前 profile 中，官方安装入口拒绝重复安装，需先卸载旧版本',
+  'invalid-spec': '安装 spec 不被接受',
+  'ambiguous-install': 'pnpm 完成后无法确定装入了哪个包',
+  'not-bundle': '该包没有声明组合包 patch，不能作为插件启用',
+  'not-removable': '该包不是本 profile 可移除的依赖，无法先卸载再升级',
+  'stop-profile': '该包在启动期加载，需先在插件页停用后再试',
+  'bundle-in-use': '该包的插件仍在运行，无法卸载',
+  'management-required': '该包是 DSH 自身的管理组件，不能由插件同步改动',
+  'unknown-plugin': '插件管理器不认识该包',
+  'stale-approval': '构建脚本的允许记录已过期，请重试',
+  'incompatible-version': '运行时版本不满足该包的 peer 要求',
+}
+
 /** 从 ManagementError 形状里取可读信息。 */
 function describeError(error: unknown): { code: string | null; message: string | null } {
   if (error === null || typeof error !== 'object') {
@@ -340,7 +359,73 @@ function describeError(error: unknown): { code: string | null; message: string |
       : ''
     return { code, message: `运行时版本不满足 peer 要求${peers === '' ? '' : `：${peers}`}` }
   }
-  return { code, message: diagnostic }
+  const fallback = code === null ? null : MANAGEMENT_CODE_TEXT[code] ?? null
+  return { code, message: diagnostic ?? fallback }
+}
+
+/** 官方落点里算作「已生效」的取值。 */
+function isApplied(record: Record<string, unknown>): boolean {
+  return record.application === 'applied' || record.application === 'overridden'
+}
+
+/**
+ * 升级一个已安装的包。
+ *
+ * 为什么必须两步：官方 `installBundle` 在有 HMR 时，若 spec 的包名已在 profile 的
+ * `dependencies` 里就直接拒绝（`ManagementFailure('already-installed')`，见
+ * `packages/boot/plugin-manager/src/index.ts` 的 known/hasOwn 判断）——它假定调用方
+ * 已经卸载过旧版本（官方插件页的 update 正是 removeBundle → installBundle）。整包同步
+ * 早先只调 installBundle，于是**所有升级条目在 pnpm 启动前就必然失败**。
+ *
+ * 为什么失败要回滚：本功能承诺「只增不减，绝不卸载」。卸载成功而新版本装不上时
+ * （常见原因是 pnpm 11 的 minimumReleaseAge 挡下新发布、或构建脚本待允许），
+ * 不把旧记录装回去就等于把包留在了已删除状态。
+ * @param manager 官方 pluginManager（惰性取得，结构按最小面使用）。
+ * @param entry 待升级条目；`current` 是当前 profile 原本记录的值。
+ * @param approvals 本次显式允许的构建脚本名。
+ * @returns 观测到的落点记录（安装那一步）与一句额外说明（回滚结果等）。
+ */
+async function upgradeInstalled(
+  manager: { removeBundle(name: string): Promise<unknown>; installBundle(spec: string, options?: unknown): Promise<unknown> },
+  entry: SyncEntry,
+  approvals: string[],
+): Promise<{ record: Record<string, unknown>; note: string | null }> {
+  const installOptions = approvals.length === 0 ? {} : { approvedBuilds: approvals }
+  // 能力探测：removeBundle 是官方 pluginManager 的服务面方法，但更老的运行时没有它。
+  // 此时直接说明「无法升级」比抛 "is not a function" 更诚实，也绝不退化成单步
+  // installBundle——那必然再次撞上 already-installed。
+  if (typeof manager.removeBundle !== 'function') {
+    return {
+      record: { application: 'failed', error: { code: 'unsupported', diagnostic: '当前运行时的 pluginManager 不提供 removeBundle，无法先卸载旧版本再升级' } },
+      note: null,
+    }
+  }
+  const removed = (await manager.removeBundle(entry.name) ?? {}) as Record<string, unknown>
+  // 卸载失败时旧版本还在，原样上报：本次没有任何东西被丢弃。
+  if (removed.error !== undefined && removed.error !== null) {
+    return { record: removed, note: '卸载旧版本失败，当前版本未被改动' }
+  }
+  const installed = (await manager.installBundle(entry.spec, installOptions) ?? {}) as Record<string, unknown>
+  // 成功，或失败但未抛错却不该回滚（例如 cancelled）：交给调用方按落点判断。
+  if (isApplied(installed) || installed.application === 'restart-required') {
+    return { record: installed, note: null }
+  }
+  const previous = entry.current === null || entry.current === '' ? null : specFor(entry.name, entry.current)
+  if (previous === null) {
+    return { record: installed, note: `新版本未生效，且没有可回滚的旧版本记录，请手动重装 ${entry.name}` }
+  }
+  let restored: Record<string, unknown> | null = null
+  try {
+    restored = (await manager.installBundle(previous, {}) ?? {}) as Record<string, unknown>
+  } catch {
+    restored = null
+  }
+  return {
+    record: installed,
+    note: restored !== null && isApplied(restored)
+      ? `新版本未生效，已回滚到 ${entry.current}`
+      : `新版本未生效且回滚失败，请手动重装 ${previous}`,
+  }
 }
 
 /**
@@ -381,21 +466,28 @@ export async function runPluginSync(
       application: null, code: null, message: null, pendingBuilds: [],
     }
     try {
-      const outcome = entry.action === 'enable'
-        ? await manager.setBundleEnabled(entry.name, true)
-        : await manager.installBundle(
-          entry.spec,
-          approvals.length === 0 ? {} : { approvedBuilds: approvals },
-        )
-      const record = (outcome ?? {}) as Record<string, unknown>
+      // upgrade 必须「先卸载再安装」：官方 installBundle 遇到已存在的同名依赖会在
+      // pnpm 启动前就拒绝（already-installed）。enable 只调整 bundle 选择，install
+      // 是全新包名，两者仍是一次调用。
+      const upgrade = entry.action === 'upgrade' ? await upgradeInstalled(manager, entry, approvals) : null
+      const record = upgrade !== null
+        ? upgrade.record
+        : entry.action === 'enable'
+          ? ((await manager.setBundleEnabled(entry.name, true) ?? {}) as Record<string, unknown>)
+          : ((await manager.installBundle(
+            entry.spec,
+            approvals.length === 0 ? {} : { approvedBuilds: approvals },
+          ) ?? {}) as Record<string, unknown>)
       row.application = typeof record.application === 'string' ? record.application : null
-      row.ok = row.application === 'applied' || row.application === 'overridden'
+      row.ok = isApplied(record)
       const error = record.error
       if (error !== undefined && error !== null) {
         const described = describeError(error)
         row.code = described.code
         row.message = described.message
       }
+      // 回滚说明优先：它才是用户最需要知道的结果（旧版本是否还在）。
+      if (upgrade !== null && upgrade.note !== null) row.message = upgrade.note
       if (Array.isArray(record.pendingBuilds)) {
         row.pendingBuilds = record.pendingBuilds.filter((item): item is string => typeof item === 'string')
       }

@@ -71,7 +71,7 @@ Reader rows (same card, right after the search rows):
 
 | Feature | Default | Description |
 | --- | --- | --- |
-| Plugin sync | Direction follows the current environment | Copies installed plugins from the other profile: desktop → web when running the web app, web → desktop in the desktop app. Only the highest version of a package is kept, never downgraded, additive only; runs through the official plugin manager with peer checks and rollback |
+| Plugin sync | Direction follows the current environment | Copies installed plugins from the other profile: desktop → web when running the web app, web → desktop in the desktop app. Only the highest version of a package is kept, never downgraded; upgrades uninstall first and reinstall, and a new version that fails to install is rolled back to the previous one. Runs through the official plugin manager with peer checks and rollback |
 
 **Service monitor** (own card, off by default)
 
@@ -133,7 +133,11 @@ both profiles — open **Settings → Enhancements → Plugin sync** on the side
 click "Check differences" to see the list, then "Sync now". The direction follows the current
 environment automatically: running in the web app it is desktop → web, running in the desktop app
 it is web → desktop. For the same package only the higher version is kept — if this profile is
-already at or above the reference it is left alone (never downgraded), and nothing is removed. The
+already at or above the reference it is left alone (never downgraded), and no package is ever left
+uninstalled. Upgrades are a two-step operation (uninstall, then install) because the official
+installer refuses to install a package name that already exists in the profile; if the new version
+fails to install — typically because pnpm's 24-hour `minimumReleaseAge` holds back a fresh release —
+the previously recorded version is reinstalled and the row says so. The
 feature reuses the official DSH plugin manager, so it is equivalent to installing from the desktop
 app sidebar "Plugins" page, and it inherits the same peer checks and rollback.
 

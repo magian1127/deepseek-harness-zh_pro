@@ -979,8 +979,13 @@ dsh 无法启动），此路径下进程重启前官方列表可能仍按旧缓�
   - 其余归入「已一致」，不产生动作。
   - 版本比较只看版本核心（`^4.0.0` 与 `4.0.0` 视为等价，不因写法差异判更新）；预发布按 semver 规则排序（`1.0.0-beta.2` > `1.0.0-beta.1`）；`link:` / `file:` / `workspace:` / git 等无法按版本号比较的来源不参与比高低，仍按参考记录同步。
 - **只读参考**：参考 profile 的 `package.json` 只用于计算差异，全程不被改写；计算计划也不写任何文件。
+- **「待更新」是两步操作（先卸载再安装）**：官方 `installBundle` 在有 HMR 时若发现同名依赖已在当前 profile 的 `dependencies` 里，会在 pnpm 启动前直接拒绝（`already-installed`）——它假定调用方已卸载旧版本，官方插件页的更新同样是 remove → install 两步。因此升级条目按「卸载旧版本 → 安装新版本」执行；`install`（全新包名）与 `enable`（只改 bundle 选择）仍是一次调用。
+  - **失败即回滚**：本功能承诺只增不减。若卸载成功但新版本没装上（常见原因是 pnpm 11 的 `minimumReleaseAge` 默认 24 小时观察期挡下了新发布，或构建脚本待允许），会按当前 profile 原本记录的值把旧版本装回去，并在该条目上说明「已回滚到 …」；回滚也失败时明确要求手动重装并给出 spec。
+  - **卸载失败不回滚也不继续**：旧版本本来还在，该条目直接报告卸载失败的原因（如 `not-removable`、`stop-profile`），本次不改动任何东西。
+  - 运行时若没有 `removeBundle`（更老的 DSH），升级条目给出可读说明，而不是抛出 `is not a function`。
 - **安装通道**：复用 DSH 官方 `pluginManager` 服务（与桌面应用侧栏「插件」页、`dsh plugin` 同一实现）。因此自动获得它的全部保护：profile 文件锁、peer 兼容检查（不满足时回 `incompatible-version` 并说明缺哪个 peer）、失败时把 `package.json` 与 `pnpm-lock.yaml` 回滚、构建脚本需显式允许。桌面版 Host 的 PATH 不含 node/pnpm，官方实现会改用应用内置的 pnpm（经 `profileContext.packageManager`），这也是本功能不自行调用 pnpm 的原因。
 - **逐条结果**：每个条目显示自己的落点——已生效（`applied` / `overridden`）、需重启（`restart-required`，如启用了一个启动期生效的 bundle）、失败（带原因）。全部落地才提示「同步完成」，否则提示「部分未生效」。
+  - 官方对预期拒绝只回错误码、不携带 `diagnostic`（`already-installed` 即此类），界面不能因此只显示「失败」而无原因。这类情况按已知错误码补一句中文原因（`already-installed` / `not-removable` / `stop-profile` / `bundle-in-use` / `incompatible-version` 等）；未知码保留通用失败文案并附错误码。
 - **构建脚本**：若某包的安装被构建脚本拦下（pnpm 返回 `pendingBuilds`），该条目旁会出现「允许构建脚本并重试」，由用户显式确认后仅对该包重试（对应官方 `approvedBuilds`）。
 - **路径**：`GET /dsh-zh/api/plugin-sync` 回差异计划；`POST /dsh-zh/api/plugin-sync` 执行同步（请求体可选 `source` 覆盖参考 profile、`only` 限定单个包名、`approvedBuilds` 允许构建脚本）。与 `/dsh-zh/api` 其余路由共用回环 + 同源信任围栏。
 - **安全围栏**：参考 profile 名必须是 `profiles/` 下的单层安全目录名（拒绝 `/`、`\`、`.`、`..`、`node_modules`），且必须已存在；不允许把当前 profile 自身当参考；`pluginManager` 缺席时执行直接失败而非静默成功。

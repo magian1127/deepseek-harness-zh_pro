@@ -1304,7 +1304,34 @@ profile patch 只编辑带 `# dsh-zh:begin/end` 的受管块，同时兼容旧�
 差异规则（`planPluginSync`）：参考有、当前无 → `install`；两边都有且**参考版本更高** → `upgrade`；
 版本等价但参考选了 bundle、当前未选 → `enable`；两边都有且**当前版本不低于参考** → `skipped`
 （界面单独列出，不进 `entries`）；其余归入 `current`（不产生动作）。
-**只增不减**——从不卸载，也**绝不降级**：同名包只取版本号更高的一侧。参考 profile 全程只读。
+**只增不减**——从不降级，也**绝不把包留在已删除状态**：同名包只取版本号更高的一侧。
+参考 profile 全程只读。
+
+**`upgrade` 必须两步：`removeBundle` → `installBundle`（2026-10-27 实测修正）。**
+官方 `installBundle` 在 `ownerContext.get('hmr') !== undefined` 时，若 spec 的包名已存在于
+profile 的 `dependencies`，会在 **pnpm 启动前**抛 `ManagementFailure('already-installed')`
+（`packages/boot/plugin-manager/src/index.ts` 的 `specPackageName` + `Object.hasOwn(before, known)`）——
+它假定调用方已卸载旧版本，官方插件页的 update 也正是 remove → install 两步。
+早先的实现对 `upgrade` 只调 `installBundle`，导致**所有升级条目必然失败**：现场 5 个条目全部
+`code=already-installed`，且**没有产生任何 `operation-*` 日志目录**（这是「失败发生在 pnpm 之前」
+的决定性判据，可用于区分网络/注册表/构建脚本类失败）。`install`（全新包名）与 `enable`
+（只改 bundle 选择）不受影响，仍是一次调用。
+
+`upgradeInstalled()` 的失败语义（重要，勿简化成「删了再装」）：
+
+- **卸载失败**（返回 `error`，如 `not-removable` / `stop-profile` / `bundle-in-use`）→ 旧版本仍在，
+  原样上报并附「当前版本未被改动」，**绝不继续安装**。
+- **装新版本失败** → 按 `entry.current` 经 `specFor()` 还原旧 spec 回滚（回滚不带 `approvedBuilds`），
+  条目文案改为「新版本未生效，已回滚到 …」；回滚也失败则写「请手动重装 <spec>」。
+- **运行时没有 `removeBundle`**（更老的 DSH）→ 返回 `application: failed` +
+  可读 `diagnostic`，不退化成单步 `installBundle`（那必然再撞 `already-installed`）。
+- 常见的新版本装不上原因是 pnpm 11 默认 `minimumReleaseAge`（24 小时观察期）挡下新发布，
+  此时 profile 的 `pnpm-workspace.yaml` `minimumReleaseAgeExclude` 需补该版本，否则回滚会生效。
+
+`describeError()` 必须为「只有错误码、没有 `diagnostic`」的预期拒绝补中文原因：
+`ManagementFailure` 只带 `code`（细节留给调用方按语言渲染），早先直接透传 `diagnostic`
+会让 `already-installed` 这类失败在界面上只显示「失败」而无原因（`message` 为 `null`）。
+映射表是 `MANAGEMENT_CODE_TEXT`，未知码仍回 `null` 并走通用失败文案 + 错误码。
 
 版本比较（`versionCore` / `compareVersions` / `compareRecorded`，纯字符串实现，不引 semver 依赖）：
 先从记录值抽出可比较的版本核心（剥掉 `^`/`~`/`>=` 等范围前缀，`npm:别名@~2.0.0` 取 `@` 之后），
@@ -1334,6 +1361,10 @@ build metadata 忽略）。`link:`/`file:`/`portal:`/`workspace:`/git/https 等�
 预发布按 semver 排序、`link:` 不比版本）、`specFor` 各形态、安全围栏、
 路由命中与不接管、无 `pluginManager` 时失败、逐条调用分派（`installBundle` vs
 `setBundleEnabled`）、失败态不透传为 `complete`、`only` 过滤，以及夹具全程未被改写。
+升级语义另有专项断言：仅 `upgrade` 条目调 `removeBundle`（install 条目不卸载）、
+每个 upgrade 包的 `remove` 必须早于其 `install`、卸载失败后不再安装且文案含「未被改动」、
+装新版本失败后按原记录回滚（断言两次 install 的 spec 顺序）、缺 `removeBundle` 时给出
+可读原因而非抛 `is not a function`、以及仅有错误码（`already-installed`）时 `message` 非空。
 
 
 ## 安全审计（2026-09）

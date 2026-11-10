@@ -2527,11 +2527,13 @@ try {
       check(run.ok, false, '插件同步 无 pluginManager 时执行失败')
       check(run.results.length, 0, '插件同步 无 pluginManager 时不产生结果')
 
-      // 有 pluginManager 时逐条调用：install 走 installBundle、enable 走 setBundleEnabled。
+      // 有 pluginManager 时逐条调用：install 走 installBundle、enable 走 setBundleEnabled，
+      // upgrade 必须 removeBundle → installBundle（官方 installBundle 拒绝重复安装同名依赖）。
       const calls: Array<{ method: string; spec: string }> = []
       const managerCtx = {
         get: (name: string) => name !== 'pluginManager' ? undefined : {
           installBundle: (spec: string) => { calls.push({ method: 'installBundle', spec }); return Promise.resolve({ application: 'applied' }) },
+          removeBundle: (spec: string) => { calls.push({ method: 'removeBundle', spec }); return Promise.resolve({ application: 'applied', changed: true }) },
           setBundleEnabled: (name: string) => { calls.push({ method: 'setBundleEnabled', spec: name }); return Promise.resolve({ application: 'applied' }) },
         },
       }
@@ -2540,13 +2542,74 @@ try {
       check(ok.complete, true, '插件同步 全部 applied 时 complete')
       check(ok.results.length, 7, '插件同步 逐条结果与计划条目数一致')
       check(calls.filter(c => c.method === 'setBundleEnabled').length, 1, '插件同步 enable 条目走 setBundleEnabled')
-      check(calls.filter(c => c.method === 'installBundle').length, 6, '插件同步 install/upgrade 走官方 installBundle')
+      check(calls.filter(c => c.method === 'installBundle').length, 6, '插件同步 install 与 upgrade 的安装步走官方 installBundle')
       check(calls.filter(c => c.method === 'installBundle').map(c => c.spec).includes('plain-plugin@^1.2.3'), true, '插件同步 传给 installBundle 的是拼好的 spec')
+      // 只有 3 条 upgrade 需要先卸载；install 条目绝不调用 removeBundle。
+      check(calls.filter(c => c.method === 'removeBundle').length, 3, '插件同步 仅 upgrade 条目先调用 removeBundle')
+      check(calls.filter(c => c.method === 'removeBundle').map(c => c.spec).sort().join(','),
+        'both-linked-plugin,prerelease-plugin,upgradable-plugin', '插件同步 removeBundle 命中的正是 upgrade 条目')
+      // 顺序契约：每个 upgrade 包必须先 remove 再 install（不可颠倒）。
+      const order = calls.map(c => `${c.method}:${c.spec}`)
+      const upgradableIdx = order.indexOf('removeBundle:upgradable-plugin')
+      check(upgradableIdx !== -1 && order.indexOf('installBundle:upgradable-plugin@^2.0.0') > upgradableIdx, true,
+        '插件同步 upgrade 先 remove 后 install')
+      check(order.indexOf('removeBundle:plain-plugin'), -1, '插件同步 install 条目不被卸载')
+
+      // 卸载失败时旧版本仍在：必须原样上报，且绝不继续安装。
+      const removeFailCalls: string[] = []
+      const removeFailCtx = {
+        get: () => ({
+          installBundle: (spec: string) => { removeFailCalls.push(`install:${spec}`); return Promise.resolve({ application: 'applied' }) },
+          removeBundle: (name: string) => { removeFailCalls.push(`remove:${name}`); return Promise.resolve({ application: 'failed', error: { code: 'not-removable' } }) },
+          setBundleEnabled: () => Promise.resolve({ application: 'applied' }),
+        }),
+      }
+      const removeFail = await sync.runPluginSync(removeFailCtx, plan, { only: 'upgradable-plugin' })
+      check(removeFail.complete, false, '插件同步 卸载失败时不算完成')
+      check(removeFail.results[0]?.ok, false, '插件同步 卸载失败条目 ok=false')
+      check(removeFail.results[0]?.code, 'not-removable', '插件同步 卸载失败透传错误码')
+      check(typeof removeFail.results[0]?.message === 'string' && removeFail.results[0].message.includes('未被改动'), true,
+        '插件同步 卸载失败给出「当前版本未被改动」')
+      check(removeFailCalls.join(','), 'remove:upgradable-plugin', '插件同步 卸载失败后不再安装')
+
+      // 装新版本失败 → 必须回滚到旧记录，绝不把包留在已删除状态。
+      const rollbackCalls: string[] = []
+      const rollbackCtx = {
+        get: () => ({
+          installBundle: (spec: string) => {
+            rollbackCalls.push(spec)
+            // 第一次装新版本失败（例如 minimumReleaseAge 挡下新发布），回滚那次成功。
+            return Promise.resolve(spec === 'upgradable-plugin@^2.0.0'
+              ? { application: 'failed', error: { code: 'operation-error', diagnostic: 'pnpm add exited with 1' } }
+              : { application: 'applied' })
+          },
+          removeBundle: () => Promise.resolve({ application: 'applied' }),
+          setBundleEnabled: () => Promise.resolve({ application: 'applied' }),
+        }),
+      }
+      const rolled = await sync.runPluginSync(rollbackCtx, plan, { only: 'upgradable-plugin' })
+      check(rolled.results[0]?.ok, false, '插件同步 装新版本失败时条目仍为失败')
+      check(rollbackCalls.join(','), 'upgradable-plugin@^2.0.0,upgradable-plugin@^1.0.0', '插件同步 新版本失败后按原记录回滚')
+      check(typeof rolled.results[0]?.message === 'string' && rolled.results[0].message.includes('已回滚'), true,
+        '插件同步 回滚成功时明确告知已回滚')
+
+      // 运行时没有 removeBundle（更老的 DSH）：升级必须给出可读原因，不得抛 is not a function。
+      const legacyCtx = {
+        get: () => ({
+          installBundle: () => Promise.resolve({ application: 'applied' }),
+          setBundleEnabled: () => Promise.resolve({ application: 'applied' }),
+        }),
+      }
+      const legacy = await sync.runPluginSync(legacyCtx, plan, { only: 'upgradable-plugin' })
+      check(legacy.results[0]?.ok, false, '插件同步 缺 removeBundle 时升级失败')
+      check(typeof legacy.results[0]?.message === 'string' && legacy.results[0].message.includes('removeBundle'), true,
+        '插件同步 缺 removeBundle 时给出可读原因而非抛错')
 
       // 失败/需重启不得被判为 complete。
       const failingCtx = {
         get: () => ({
           installBundle: () => Promise.resolve({ application: 'failed', error: { code: 'incompatible-version', incompatible: [{ peers: { '@deepseek-ai/dsh-llm': '^9.0.0' } }] } }),
+          removeBundle: () => Promise.resolve({ application: 'applied' }),
           setBundleEnabled: () => Promise.resolve({ application: 'restart-required' }),
         }),
       }
@@ -2557,9 +2620,22 @@ try {
       check(failedRow?.code, 'incompatible-version', '插件同步 透传 incompatible-version')
       check(typeof failedRow?.message === 'string' && failedRow.message.includes('dsh-llm'), true, '插件同步 peer 不满足时给出可读提示')
 
+      // 预期拒绝只有错误码、没有 diagnostic 时也必须给出可读原因（already-installed 即此类）。
+      const codedCtx = {
+        get: () => ({
+          installBundle: () => Promise.resolve({ application: 'failed', error: { code: 'already-installed' } }),
+          removeBundle: () => Promise.resolve({ application: 'applied' }),
+          setBundleEnabled: () => Promise.resolve({ application: 'applied' }),
+        }),
+      }
+      const coded = await sync.runPluginSync(codedCtx, plan, { only: 'plain-plugin' })
+      check(coded.results[0]?.code, 'already-installed', '插件同步 透传 already-installed')
+      check(typeof coded.results[0]?.message === 'string' && coded.results[0].message.length > 0, true,
+        '插件同步 仅有错误码时也补出可读原因（不再是 null）')
+
       // only 过滤：只执行指定包。
       const onlyCalls: string[] = []
-      const onlyCtx = { get: () => ({ installBundle: (spec: string) => { onlyCalls.push(spec); return Promise.resolve({ application: 'applied' }) }, setBundleEnabled: () => Promise.resolve({ application: 'applied' }) }) }
+      const onlyCtx = { get: () => ({ installBundle: (spec: string) => { onlyCalls.push(spec); return Promise.resolve({ application: 'applied' }) }, removeBundle: () => Promise.resolve({ application: 'applied' }), setBundleEnabled: () => Promise.resolve({ application: 'applied' }) }) }
       await sync.runPluginSync(onlyCtx, plan, { only: 'plain-plugin' })
       check(onlyCalls.length, 1, '插件同步 only 只执行一个条目')
       check(onlyCalls[0], 'plain-plugin@^1.2.3', '插件同步 only 执行命中的条目')
