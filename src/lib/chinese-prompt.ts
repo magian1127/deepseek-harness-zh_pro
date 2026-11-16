@@ -159,6 +159,20 @@ const modelState: {
     lastText: string | null
     lastSource?: 'apply' | 'volatile' | 'assemble'
   }
+  /**
+   * 「模型请求中文化」改写器的最近一次执行读数（model-locale 写入，诊断读取）。
+   * 排查「工具说明又变英文」时用它区分两件事：改写器根本没跑（runs 不增），
+   * 还是跑了但某条说明没命中字典（englishTools 里会列出名字）。
+   */
+  localeSync?: {
+    runs: number
+    lastAt: string
+    tools: number
+    /** 改写后仍不含任何 CJK 字符的工具名（按名列出，便于对照词典）。 */
+    englishTools: string[]
+    /** 看过但被 regime/开关跳过的次数（老会话或开关关闭）。 */
+    skipped: number
+  }
 } = { ready: false, zhPrompt: false, zhAgentPrompt: false, zhToolDesc: false, zhContextInject: false, zhWebSearch: true, zhSearchOrder: [...ZH_SEARCH_ORDER_DEFAULT], zhSearchPerQuery: 0, zhWebFetch: true, zhFetchOrder: [...ZH_FETCH_ORDER_DEFAULT] }
 
 /**

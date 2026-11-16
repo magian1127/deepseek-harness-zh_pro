@@ -157,7 +157,8 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
 - `zhToolDesc`：注入模型请求的工具说明按工具名替换为**DSH 官方工具**的中文版本，同时把
     system prompt 里的官方工具指引段落（`tool:*` sections）替换为中文。段落覆盖：
     `tool:read` / `tool:write` / `tool:edit` / `tool:glob` / `tool:grep` / `tool:pwsh` /
-    `tool:jobs` / `tool:pty` / `tool:lsp` / `tool:web_search` / `tool:web_fetch` /
+    `tool:jobs` / `tool:pty` / `tool:pty-panel` / `tool:schedule` / `tool:lsp` /
+    `tool:web_search` / `tool:web_fetch` /
     `tool:goal` / `tool:ralph` / `tool:subagent` / `tool:subagent_fork` / `tool:workflow` /
     `tool:session-query` / `tool:structured_output` / `mcp-resource-servers`（MCP 服务器
     名字列表按分段替换，运行时数据原样保留）/ `team:policy`（Agent Teams 的协作策略，
@@ -178,8 +179,8 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
     因此收录。同一工具名的多种官方描述逐 flavor 翻译：极简模式的
     persistent `pwsh`/`bash`（包默认与 preset 覆盖两套文本）、`str_replace_editor`
     默认描述、PTC 模式 `run_code` 的 TypeScript/Python 两语言描述；Agent Teams 的
-    `send_message`/`list_agents`/`interrupt_agent` 与 subagent-control 的内置工具
-    **重名但描述不同**，也走 flavor 分派，Team 会话与子代理会话各取对应译文。
+    `send_message`/`list_agents`/`interrupt_agent`/`wait_agent` 与 subagent-control
+    的内置工具**重名但描述不同**，也走 flavor 分派，Team 会话与子代理会话各取对应译文。
     对**动态拼接**的官方描述（`subagent` / `subagent_fork` 按 provider 是否
     continuable、是否启用模型选择、是否有 route defaults 追加不同尾句；
     `tool:subagent` / `tool:subagent_fork` 段落内嵌排序后的可见工具名列表）
@@ -273,6 +274,39 @@ section 与全部已翻译工具描述，并附带正负样本自证（判据被
 局限：判据只认「句子」，不认孤立单词——`inactive` 这类单个英文词夹在中文里属于术语
 统一问题，靠逐条断言与人工复核，不靠本判据。
 
+**2026-11-15 对齐部署版 0.2.2-rc.3：特征片段再次过期（9 个工具 + 3 处段落）**
+
+DSH 连续升级后用户反馈「提示词和工具介绍又出现很多英文」。按**运行中的部署包**
+（`app.asar` 里的 `@deepseek-ai/dsh-*`，不是工作区 checkout——两者文案已经不同）
+逐条比对，确认仍是同一类失效：`TOOL_MATCH` 特征片段与 `section match` 守卫过期，
+`localizeTools` / `localizeSections` 整条跳过。补齐内容：
+
+- 工具说明（特征片段过期、整条英文）：`list_agents`（描述改为「完整子代理树」长文）、
+  `wait_agent`（改为 subagent-control 的「输入等待」版；Agent Teams 版移入
+  `TOOL_FLAVOR_DESC_ZH` 按 flavor 分派）、`list_subagent_models`（首句改为
+  "Inspect the routes available…"）、`schedule_create` / `schedule_list`
+  （口径由 reminder 改为 scheduled task）、`schedule_edit` / `schedule_view`
+  （工具集由 update/delete 改为 edit/view，按新名收录）。
+- 工具说明（此前完全未收录）：`user_terminal_list` / `user_terminal_read`——
+  只读用户自己在侧边栏开的终端，与可读写的 `terminal_*` 不是同一组。
+- system 段落：`tool:read`（部署版又把 `cat, sed, head, or tail` 加回并列，后半句
+  改为 `read a line range or continue a large file`）、`tool:subagent`（上游把
+  `When only waiting…`、`Collect the subagent results…` 与 Bash 协作段重新加回模板，
+  只翻前两句会留下整段英文）、新增 `tool:pty-panel`（终端面板交互约束）与
+  `tool:schedule`（定时任务管理授权句）。
+
+**诊断**：`/dsh-zh/api/diagnostics` 新增 `localeSync`（`runs` / `lastAt` / `tools` /
+`englishTools` / `skipped`）。排查「又出现英文」的第一步是看 `runs` 是否递增：
+不增说明改写器没进链（宿主换了 assemble 实现、或包装被顶掉）；在增而
+`englishTools` 里仍列着名字，才是字典/守卫失配。第三方工具（`codex_*`、`mcp__*`）
+按设计始终英文，会出现在该列表里，不是缺口。本机实测：同一请求 60 个工具里
+只剩 4 个第三方工具为英文。
+
+**教训（与 10-18 同一结论的第二次验证）**：核对官方文案必须以**部署包**为准。
+本轮 `dsh-v0.2.2-rc.3` 的 release checkout 与运行中的 `app.asar` 在 `tool:read`、
+`session_search`、`load_workspace_dependencies` 等文案上已经不同——只对着 tag 读源码
+会得出「守卫仍然有效」的错误结论。
+
 
 **新会话生效、老会话不重新注入**：以会话是否产生过模型输出（`assistant/message`）
 判定新旧。会话首次模型请求时按当前开关状态锁定语言（中文或英文），锁定后开关翻转
@@ -303,7 +337,7 @@ DSH 注入会话的官方英文上下文在 `agent/pre-step` 阶段、进入会�
     Agent Teams 身份行（`team:identity`：Lead 与 teammate 两种形态，动态名字保留）、
     委派深度用尽声明（`tool:subagent:depth`，动态工具名与数字保留）、
     实现检出目录与 GUI URL（0.2.1 起 `harness:source` / `app:web-surface` 的值从段落
-    搬到这里，动态路径 / URL 保留），以及快照头部行与清空行（翻译代价见下）。
+    搬到这里，动态路径 / URL 保留），以及快照引导句与清空行（形态与翻译边界见下）。
     未收录的未来 context 保持英文。
 - **审批策略切换通知**：`The approval policy changed from …`（策略名 ask/never 保留）。
 - **压缩检查点前言**（会话历史中的 replacement 消息）。`<compacted-summary>` 标签与
@@ -333,11 +367,16 @@ DSH 注入会话的官方英文上下文在 `agent/pre-step` 阶段、进入会�
 > 「Time sampled…／Browser time zone…／Elapsed since…」三行长期保持英文的根因，
 > 不是词典缺条目。
 
-**已知限制与代价**：运行时上下文的头部行（`Current runtime context. This snapshot
-supersedes …` 及其清空变体）由 `joinContextSections` 硬编码拼接，官方渲染侧永远是英文。
-本开关在**快照投影层**翻译它（连同正文与 `source.sections`），因此中文快照一次成型、
-没有「每步多一条替换快照」的代价：翻译后的正文同时作为
-`RuntimeContextProjection` 的比较基准，快照内容不变就不会追加新消息。
+**快照引导句与去重边界**：运行时上下文的引导句由上游投影层硬编码拼接，官方渲染侧永远
+是英文——0.2.2-rc.2 起是 `<system-reminder>` 包装内的
+`The following information describes your current session:`（首条）与带
+`It replaces earlier versions of this context…` 的替换变体；更早版本是
+`Current runtime context. This snapshot supersedes …`，清空行两版一致。本开关按整行
+锚定翻译它们（历史文案保留以兼容旧会话）。引导句**不进 `source.sections`**，而去重只
+比较 sections，因此翻译引导句本身不会引起额外快照。真正决定「会不会每步多一条」的是
+**传入的 sections 是否与落盘的中文 sections 一致**：0.11.1 在 dsh 0.2.2-rc.2+
+上沿用了旧的双参投影包装，比较基准被绕过，表现为「每个 step 多一条内容重复的快照」
+（issue #15）；当前版本按实参形状自适应两种投影契约，快照内容不变就不再追加新消息。
 
 **0.2.1 起快照正文在哪里翻译（重要更正）**：上游 `agent-loop` 在 `step()` 里遇到
 `decision.messages` 中 `source.kind === 'runtime-context'` 的消息时，**只把它当作
@@ -348,6 +387,12 @@ supersedes …` 及其清空变体）由 `joinContextSections` 硬编码拼接�
 正文仍英文」的根因（早期文档曾记成 pre-step 已覆盖，与运行版
 源码不符）。现在快照改在投影层翻译，`source.sections` 的逐段归属文本一并更换，
 GUI 上下文卡片与模型输入保持一致。
+
+投影包装必须同时适配两种宿主契约：0.2.2-rc.2 起是单参 `project(sections)`
+（比较基准由实例内部的 `retained.sections` 持有），更早版本是双参
+`project(current, sections)`（比较 `retained.text`）。两种都识别不了时，该会话的快照
+**整链路保持英文**、沿用官方去重——不采用「跳过投影包装但继续翻落盘侧」的做法，因为那会
+让比较基准与落盘内容不一致、每个 step 追加一条快照。
 
 同理，**比本插件更外层注册的注入**（典型是 `@deepseek-ai/dsh-time-context`：它
 以 `prepend: true` 注册，且在自身 `next()` 返回**之后**才追加消息，preset 又在

@@ -82,6 +82,9 @@ export function handleDiagnosticsRoute(_req: RouteRequest, res: RouteResponse, p
       // 用它区分「插件没收到新配置」与「插件收到了但 assembly 没带上」。
       promptInjection: getModelState().promptInjection ?? null,
       promptSync: getModelState().promptSync ?? null,
+      // 模型请求中文化改写器的运行态读数：runs 不增 = 改写器没进链；
+      // englishTools 非空 = 该请求里这些工具说明仍是英文（第三方工具按设计在内）。
+      localeSync: getModelState().localeSync ?? null,
       webSearchSelection: getWebSearchSelectionState() ?? null,
       webSearchLive: getLiveWebSearchSelection() ?? null,
       webSearchFallback: getWebSearchFallbackState(),

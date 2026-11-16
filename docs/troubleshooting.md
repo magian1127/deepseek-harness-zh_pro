@@ -153,7 +153,7 @@ time-context 三行均为中文。
    （包装 agent 的 `runtimeContext.project`）。判定：`session.v4.jsonl.zstd` 里
    `source.kind=runtime-context` 的事件正文是英文，但同一步的
    `source.sections` 也是英文 → 投影包装没生效（`agents` 服务缺席或 agent 字段改名）。
-   注意包装必须**同时**翻译传入的比较基准，否则每步追加一条快照。
+   注意包装必须**同时**翻译传入的比较基准，否则每步追加一条快照（见下一条独立症状）。
 2. **time-context 三行仍英文**：该包以 `prepend: true` 注册，且在自身 `next()` 返回
    **之后**才追加 user 消息；preset 在 agent 创建时才挂载，因此它常排在本插件外层，
    本插件 `next()` 的 decision 里没有这条消息。由 `Session.append` 接缝覆盖。
@@ -161,6 +161,58 @@ time-context 三行均为中文。
 两条接缝都在 `installContextLocale` 里对「已存在的 agent」（`agents.list()`）与
 「后续创建的 agent」（`agent/created`）各挂一次；开关关闭或 regime=en 时零改动。
 回归：`node verify-cli.mjs`（「投影包装」「append 接缝」两组）。
+
+### 每个 step 都多一条内容重复的 runtime-context 快照
+
+症状：会话日志里 `step/start` 与 `source.kind=runtime-context` 的 `user/message`
+接近 1:1（实测 66 steps / 50 snapshots），相邻快照的 `source.sections` 逐字节相同，
+只有用户真的切换过 sandbox / approval 策略时才有合法差异。这是**只翻落盘侧、没翻投影
+比较基准**的必然结果；写入走 `surfaceOp: 'append'`、不替换旧快照，所以模型可见历史
+前缀会持续膨胀（不只是「日志每步 +1」）。
+
+- 判定：解出 `session.v4.jsonl.zstd`，统计 `step/start` 与 runtime-context 事件数量。
+  正常应「快照只在内容变化时出现」；1:1 即命中。
+- 已知成因（issue #15，0.11.1 + dsh 0.2.2-rc.2+）：宿主把
+  `RuntimeContextProjection.project` 改成单参 `project(sections)`（`ce85be0a44`），
+  而包装器仍按双参 `project(current, sections)` 解构——`Array.isArray(sections)` 与
+  `typeof current === 'string'` 两条分支同时落空，投影照常产出英文快照、append 接缝
+  照常翻成中文，两侧恒不等。修复后包装按实参形状自适应两种契约；形状无法识别时
+  把该 agent 记入 `snapshotLocaleBlocked`，快照整链路退回英文并 warn 一次，
+  不再每步一条。
+- 与引导句翻译无关：引导句不进 `source.sections`，而去重只比较 sections。
+- 修复生效判据（运行态真值，不看进程启动时间）：同一会话在构建 + Host 换血前后各统计一次，
+  修复后新增 `step/start` 而快照数**不变**即成立。本机实测：修复前 66 steps / 50 snapshots
+  （每步一条），换血后新增 31 步、快照数仍为 50；`/dsh-zh/api/diagnostics` 的
+  `reload.count` 随之 +1、`applyMark.at` 与 `reload.at` 同一时刻。
+- 回归：`node verify-cli.mjs`（「投影包装」组的「同一快照重复渲染不再追加」与
+  「投影不可用时快照保持英文」两条断言）。
+
+### 工具说明或 system 提示词段落又变英文（升级后）
+
+症状：开关是开的，但某几条工具说明（`list_agents`、`schedule_*`、`user_terminal_*` 等）
+或某个 system 段落（`tool:read`、`tool:subagent`、`tool:pty-panel`）整条/整段英文，
+其余部分正常；没有报错，`npm test` 也可能全绿。
+
+按下面三步分开原因：
+
+1. `/dsh-zh/api/diagnostics` 看 `localeSync.runs`：连续两次请求之间**不增** → 改写器
+   没进 assemble 链（宿主换了 assemble 实现，或包装被别的插件顶掉）。这种情形下**所有**
+   工具说明都该是英文，而不是「一部分」。
+2. `runs` 在增，而 `englishTools` 里列着**官方工具名** → 特征片段过期：
+   `description.includes(match)` 不成立，`localizeTools` 整条跳过。按部署包
+   （`resources/app.asar` 里的 `@deepseek-ai/dsh-*`）的新描述改 `TOOL_MATCH` 并同步
+   译文。第三方工具（`codex_*`、`mcp__*`）按设计始终英文，列在这里不算缺口。
+3. system 段落**整段**英文 → `SECTION_ZH` 的 `match` 守卫过期（上游改了文案）；
+   段落**半中半英** → `replacements` 的 `en` 片段过期（前半句命中、后半句没命中）。
+   两者都按部署包新原文改 `match`/`en`，译文同步。
+
+注意核对真值要用**部署包**，不要只看 release tag 的 checkout：本轮实测
+`dsh-v0.2.2-rc.3` 的 checkout 与运行中的 `app.asar` 在 `tool:read`、`session_search`、
+`load_workspace_dependencies` 等文案上已经不同。
+
+回归：`node verify-cli.mjs`。fixture 已换成部署版原文（`tool:read` 新文案、
+`tool:pty-panel`、`tool:schedule`、`tool:subagent` 完整模板、9 个工具的新描述），
+守卫再过期时断言会直接失败。
 
 ## 中文界面仍出现英文或还原错误
 

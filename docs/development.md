@@ -316,6 +316,22 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
    （`… to inspect text files. Use offset and limit to continue reading large files.`）。
    同一条原则适用于所有 `match`：**第三方在 Agent 作用域注册的同名阴影段落不得被按名
    盖成官方译文**。
+
+   **工具说明的特征片段是同一类失效，但排查入口不同。** `TOOL_MATCH` /
+   `TOOL_FLAVOR_DESC_ZH.match` / `TOOL_DESC_REPLACEMENTS.match` 过期时不会有任何测试
+   失败，症状是「某条工具说明整条英文」。2026-11-15 实测 9 条过期（`list_agents`、
+   `wait_agent`、`list_subagent_models`、`schedule_create`/`list`/`edit`/`view`）
+   与 2 条从未收录（`user_terminal_list`/`read`）。
+   **核对真值必须用部署包，不能只用 release tag 的 checkout**：运行中的 DSH 把实现放在
+   `resources/app.asar`，用约 20 行脚本解析 asar 头（偏移 12 处的 uint32 是 header JSON
+   长度，`16 + jsonSize` 再按 4 字节对齐就是内容起点）即可逐个包读 `lib/*.js`；
+   本轮实测 `dsh-v0.2.2-rc.3` 的 checkout 与部署包在 `tool:read`、`session_search`、
+   `load_workspace_dependencies` 等文案上**已经不同**，只读 checkout 会得出「守卫仍然
+   有效」的错误结论。
+   运行时判定用 `/dsh-zh/api/diagnostics` 的 `localeSync`：`runs` 不增 = 改写器没进链
+   （宿主换 assemble 实现或包装被顶掉）；`runs` 在增而 `englishTools` 非空 = 词典/守卫
+   失配。第三方工具（`codex_*`、`mcp__*`）按设计始终英文，出现在该列表里属预期。
+
 6. **核对段落覆盖（不是守卫是否有效，而是**表里根本没有这一项**）**——与第 5 步互补，漏的是
    另一种失败：守卫全绿、`npm test` 全绿，但某个官方段落从未被收录，于是一直整段英文。
    跑 `node temp/audit-section-coverage.mjs`：枚举部署版 `packages/` 里所有
@@ -354,13 +370,29 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
    `RuntimeContextProjection.project()`（`runtime-context.ts`）渲染的**新消息**。
    所以 pre-step 里改旧消息正文永远进不了历史——这是「头部译了、正文仍英文」
    的真正原因。现在实现为包装 agent 实例的 `runtimeContext.project`：
-   **传入的 current/sections 与产出的消息一起中文化**。只翻产出是错的：
-   `project()` 用 `retained.text`（上次 append 的文本）与传入正文比较，
-   只翻产出会让两侧恒不等 → 每步追加一条快照、上下文膨胀。
+   **传入的 sections 与产出的消息一起中文化**。只翻产出是错的：
+   0.2.2-rc.2 起 `project(sections)` 用实例内部的 `retained.sections`（上次 append
+   落盘的 `source.sections`，已被 append 接缝翻成中文）与传入 sections 做
+   `deepEqualJson` 比较，只翻产出会让两侧恒不等 → 每步追加一条快照、上下文膨胀。
    快照按 `\n\n` 分块匹配（`localizeSnapshotBody`：动态多行规则 → 逐行规则 →
    逐字表），`team:identity` 这类多行 context 不会被拆散。
-   守护测试：`verify-cli.mjs` 的「投影包装」组断言头部/正文/sections 都换中文，
+   守护测试：`verify-cli.mjs` 的「投影包装」组断言正文/sections 都换中文，
    并断言**同一快照重复渲染不再追加**（比较基准已中文化）。
+
+   **两种投影契约必须同时适配（issue #15 的教训）**：`project()` 的签名在
+   `dsh-v0.2.2-rc.2`（commit `ce85be0a44` "frame runtime reminders…"）从双参
+   `project(current, sections)` 改成单参 `project(sections)`。0.11.1 的包装器仍按
+   双参形参解构，在单参宿主上 `Array.isArray(sections)` 与
+   `typeof current === 'string'` 两条分支同时落空——**翻译整体失效**，而 append 接缝
+   照样把落盘消息翻成中文，于是「比较基准英文、落盘中文」每步失配，每个 step 追加
+   一条快照（实测 66 steps / 50 snapshots，见 issue #15）。现在按**实参形状**判定
+   （首参是数组 = 单参契约，首参是字符串 = 旧双参契约），两种宿主都能翻；
+   形状都识别不了时把该 agent 记入 `snapshotLocaleBlocked`，**快照整链路退回英文**
+   （保持官方去重），并在首次遇到未知形状时 warn 一次。不要「跳过投影包装但继续翻
+   append」——那正是每步一条的成因。
+   验收（运行态真值）：本机在同一长会话上采样两次，修复前 66 steps / 50 snapshots，
+   构建 + Host 换血后新增 31 步、快照数仍为 50；`/dsh-zh/api/diagnostics` 的
+   `reload.count` 同时 +1。
 
    另一类漏网：**比本插件更外层注册的注入**。`time-context` 以 `prepend: true`
    注册，且在自己 `next()` 返回**之后**才追加 user 消息；preset 在 agent 创建时
@@ -905,10 +937,12 @@ Host 半边热通道（2026-10-17 重写，逐层实测后的结论；实现见 
 `src/lib/context-locale.ts` 维护开关 `zhContextInject`（与上述两开关共用 `dsh-zh` 命名空间
 与 regime 锁定，`regimeOf` 从 model-locale 导出共享同一张锁定表），覆盖三类落点：
 
-- **runtime-context 快照（投影层）**：包装 agent 实例的
-  `runtimeContext.project(current, sections)`，把传入正文与 sections、以及产出的消息
-  一起换成中文。**必须同时翻传入的比较基准**，否则 `retained` 比较恒失配、每步追加
-  一条快照。这是 0.2.1 起的唯一有效路径（详见下文「快照为什么不在 pre-step 翻译」）。
+- **runtime-context 快照（投影层）**：包装 agent 实例的 `runtimeContext.project`，
+  把传入的 sections 与产出的消息一起换成中文。**必须同时翻传入的比较基准**，否则
+  `retained.sections` 比较恒失配、每步追加一条快照。包装按实参形状自适应
+  0.2.2-rc.2 的单参契约与更早的双参契约；两种都识别不了时该会话快照退回英文
+  （不再只翻落盘侧，见 `snapshotLocaleBlocked`）。这是 0.2.1 起的唯一有效路径
+  （详见下文「快照为什么不在 pre-step 翻译」）。
 - **`Session.append` 接缝**：包装会话的 `append`，兜住链序之外的注入（典型是比本插件
   更外层注册的 `time-context`、`tmux-context`）。只处理 `user/message` + 官方注入
   kind，其余事件与用户消息原样透传；`.d.ts` 与 `id` 不变。
@@ -970,11 +1004,15 @@ preset 又在 agent 创建时才挂载，因此它常排在本插件外层、根
 英文消息，翻译后返回。`verify-cli.mts` 的 `makePreStepDispatcher` 忠实模拟该顺序，
 并以「内层 fake 注入器追加的消息也被翻译」作为链序回归。
 
-**头行翻译与「不再有替换代价」**：快照头行（`Current runtime context. …` 及 CLEARED
-变体）由 agent-loop 的 `joinContextSections` 硬编码拼接，官方渲染侧永远是英文。
-头行现在在投影层与正文一起翻译，且**翻译后的文本同时充当比较基准**，因此
-快照内容不变就不再追加——旧版「每步注入一条替换快照」的代价已消除。判据：
-若发现会话日志里快照事件每步 +1，即说明比较基准没跟着翻译（见投影包装注释）。
+**引导句翻译与「不再有替换代价」**：快照引导句（0.2.2-rc.2 起是
+`The following information describes your current session:` 与带
+`It replaces earlier versions of this context …` 的替换变体；更早是
+`Current runtime context. This snapshot supersedes …`；清空行
+`Current runtime context: none. …` 两版一致）由宿主投影层硬编码拼接，官方渲染侧
+永远是英文。引导句在 `LINE_RULES` 里按整行锚定翻译，但它**不进 `source.sections`**
+——去重只比较 sections，所以翻引导句本身不会引起额外快照。真正的判据是**传入的
+sections 有没有跟着翻**：若会话日志里快照事件每步 +1，说明投影包装没生效或没翻
+比较基准（0.11.1 在 dsh 0.2.2-rc.2+ 上即此，见 issue #15 与上方双契约说明）。
 tmux-context 等链外层注入由 append 接缝覆盖，不再单独说明。
 
 修改本模块后同样要求 lib/context-locale.js 在运行进程里生效（见上文热重载说明）。

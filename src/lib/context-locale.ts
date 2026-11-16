@@ -10,15 +10,19 @@
 // 覆盖两类注入面（只处理 DSH 官方注入，用户消息与本插件自身消息绝不动）：
 //
 // 1) runtime-context 快照正文（systemPrompt contexts：文件策略、审批策略、
-//    子代理委派声明）：**DSH 0.2.1 起正文翻译改在 agent/pre-step 对最终
-//    快照消息按段重译**（localizeSnapshotBody）——0.2.1 的 agent-loop 在
-//    每次请求前用 systemPrompt.refreshContext 按注册 provider 原文重建
+//    子代理委派声明）：**DSH 0.2.1 起正文翻译改在投影层**
+//    （localizeSnapshotBody + installSnapshotProjection）——0.2.1 的 agent-loop
+//    在每次请求前用 systemPrompt.refreshContext 按注册 provider 原文重建
 //    assembly.contexts 再渲染快照，assemble 后对 contexts 的改写会在这一步
 //    被覆盖（0.1.7 时代的 assemble 改写路径已静默失效，属升版回归）。
-//    快照头行（"Current runtime context. ..." 与 CLEARED 行）由 joinContextSections
-//    硬编码拼接，官方渲染侧永远是英文：按用户需求在行级规则中翻译它，代价是
-//    投影比较每步失配、每步注入一条替换快照（surface 替换语义，模型输入不
-//    膨胀，但会话日志每步 +1 条快照事件）——这是翻译头部的结构性代价，文档已说明。
+//    快照头行（0.2.2-rc.2 起是 `<system-reminder>` 包装 + "The following
+//    information describes your current session…" 自然语言引导）由投影层硬编码
+//    拼接，官方渲染侧永远是英文：按用户需求在行级规则中翻译它。
+//
+//    「翻译快照」与「投影去重」必须落在同一侧：投影层包装会连同**传入的比较
+//    基准**一起把 sections 翻成中文，官方 project() 拿它与落盘的 retained.sections
+//    深比较因此仍然相等、快照不变就不追加。只翻落盘侧（append）会让两侧恒不等
+//    → 每个 step 追加一条快照（2026-11-15 issue #15）。见 installSnapshotProjection。
 //
 // 2) 注入消息（agent/pre-step 的 decision.messages）：工作区指令帧
 //    （AGENTS.md system-reminder）、skill 目录帧、审批策略切换通知、压缩
@@ -168,12 +172,16 @@ function localizeContexts(assembly: unknown): void {
 // DSH 0.2.1 起 agent-loop 在每次请求前用 systemPrompt.refreshContext 按注册
 // provider 的**原文**重建 assembly.contexts，再渲染快照——assemble 后对
 // contexts 的任何改写都会在这一步被覆盖（本插件 0.1.7 时代的「assemble
-// 改写 contexts」路径静默失效）。因此快照正文的翻译改在 agent/pre-step
-// 对最终快照消息做：按已知 context 的英文原文逐段识别并替换为中文，
-// 未识别的段落原样保留。头部/CLEARED 行沿用行级规则（LINE_RULES）。
-// 快照消息的结构：`Current runtime context. This snapshot supersedes …\n\n`
-// + 各 context 渲染文本以 `\n\n` 连接。段落的顺序与注册 order 一致，
-// 但翻译按内容匹配、不依赖顺序，未来插入新 context 也不会错位。
+// 改写 contexts」路径静默失效）。因此快照正文的翻译改在渲染出口：
+// 投影层（installSnapshotProjection）翻 sections，append 接缝翻最终消息，
+// 两处共用下面的 localizeSnapshotBody；未识别的段落原样保留。
+//
+// 快照消息的结构（0.2.2-rc.2 起）：
+// `<system-reminder>\n<intro>\n\n` + 各 context 渲染文本以 `\n\n` 连接
+// + `\n</system-reminder>`；0.2.1～0.2.2-rc.1 是无包装的 `<header>\n\n…`。
+// 按 `\n\n` 分块对两种形态都成立（包装标签与 intro 落在同一块里，逐行规则
+// 只替换命中的行）。段落的顺序与注册 order 一致，但翻译按内容匹配、
+// 不依赖顺序，未来插入新 context 也不会错位。
 
 /** 把一条 runtime-context 快照消息的正文按 CONTEXT_ZH 规则重译。
  * 按 `\n\n` 分块（各 context 渲染文本之间的分隔；team:identity 等多行
@@ -433,9 +441,19 @@ const LINE_RULES: LineRule[] = [
     zh: function () { return '这是一个自动生成的检查点，压缩了对话较早的片段以释放上下文。请把捕获的内容当作既有背景，在无需复述的基础上继续工作。直接从其后的消息继续任务，无需确认本检查点。' },
   },
   // ---- runtime-context 头部（agent-loop 硬编码拼接） ----
-  // 注意：翻译头部会使快照投影的 retained 文本与官方渲染恒不等，每步注入一条
-  // 替换快照（surface 替换语义，模型输入不膨胀，但会话日志每步 +1 条）。
-  // 按用户需求选择翻译头部并接受该代价；关闭本开关后回到官方行为。
+  // 0.2.2-rc.2 起头部改为 `<system-reminder>` 包装 + 自然语言引导句（旧文案
+  // "Current runtime context. …" 不再产生）。头部只出现在投影产出的正文里、
+  // 不进 `source.sections`，而投影去重只比较 sections——因此翻译头部不再影响
+  // 去重（0.2.1 时代「翻头部导致每步失配」的代价已随宿主改契约而消失）。
+  // 前两条是当前文案，后两条保留以覆盖 0.2.2-rc.1 及更早落盘的历史文本。
+  {
+    test: /^The following information describes your current session:$/,
+    zh: function () { return '以下信息描述你的当前会话：' },
+  },
+  {
+    test: /^The following information describes your current session\. It replaces earlier versions of this context, including any retained in conversation summaries\.$/,
+    zh: function () { return '以下信息描述你的当前会话。它取代此前的运行时上下文，包括对话摘要中保留的部分。' },
+  },
   {
     test: /^Current runtime context\. This snapshot supersedes earlier runtime-context snapshots\.$/,
     zh: function () { return '当前运行时上下文。本快照取代更早的运行时上下文快照。' },
@@ -736,16 +754,66 @@ function isSnapshotMessage(message: unknown): boolean {
 // （installAppendLocale），pre-step 保留覆盖链内注入。
 //
 // 快照为什么必须在投影层而不是 append：`RuntimeContextProjection.project()`
-// 用 `retained.text`（= 上次 append 进历史的快照正文）与本次渲染结果做相等
-// 比较，只在**变化时**才产生新消息。若等到 append 才翻译，log 里存的是中文、
-// 而下次比较传入的是英文原文 → 恒不相等 → **每一步都追加一条快照**，模型
-// 输入随之膨胀。改在投影层翻译（连同比较基准一起变成中文）则保持官方语义：
+// 用**上次落盘快照的 sections**（`retained.sections`，即上次 append 进历史的
+// 快照 `source.sections`）与本次传入的 sections 做 `deepEqualJson` 比较，只在
+// **变化时**才产生新消息。若只翻落盘侧（append），log 里存的是中文、而比较
+// 基准仍是英文原文 → 恒不相等 → **每一步都追加一条快照**，写入又是
+// `surfaceOp: 'append'`（不替换旧快照），模型可见历史前缀随之膨胀。
+// 改在投影层翻译（连同传入的比较基准一起变成中文）则保持官方语义：
 // 快照不变就不追加。
 
 /** 已挂上 append 包装的 Session（WeakSet：会话结束即释放，不留强引用）。 */
 const patchedSessions = new WeakSet<object>()
 /** 已挂上 project 包装的投影实例（同上，按实例去重，避免重复包装）。 */
 const patchedProjections = new WeakSet<object>()
+/** 投影层不可用的 Agent：其快照必须保持英文，否则比较基准与落盘内容不一致。 */
+const snapshotLocaleBlocked = new WeakSet<object>()
+
+/** 该 Agent 的快照是否必须保持英文（投影层装不上或契约无法识别）。 */
+function snapshotLocaleBlockedFor(agent: unknown): boolean {
+  return agent !== null && typeof agent === 'object' && snapshotLocaleBlocked.has(agent)
+}
+
+/** 把快照 sections 的每段正文翻成中文；无变化时返回原数组（保持引用稳定）。 */
+function localizeSnapshotSections(sections: unknown): unknown {
+  if (!Array.isArray(sections)) return sections
+  let changed = false
+  const next = sections.map(function (section: unknown) {
+    if (section === null || typeof section !== 'object') return section
+    const entry = section as { text?: unknown }
+    if (typeof entry.text !== 'string') return section
+    const zh = localizeSnapshotBody(entry.text)
+    if (zh === entry.text) return section
+    changed = true
+    return { ...entry, text: zh }
+  })
+  return changed ? next : sections
+}
+
+/**
+ * 把 `RuntimeContextProjection.project()` 的实参翻成中文，返回新实参数组；
+ * `undefined` 表示参数形状无法识别（调用方原样透传并降级）。
+ *
+ * 宿主契约演过一次（0.2.2-rc.2 的 `ce85be0a44` "frame runtime reminders…"）：
+ * - `project(sections)` 单参：sections 是 `ContextSnapshotSection[]`，比较基准由
+ *   实例内部的 `retained.sections` 持有；
+ * - `project(current, sections)` 双参：`current` 是上次快照正文（0.2.2-rc.1 及更早）。
+ *
+ * 按**实参形状**判定而非参数个数（首参是数组即单参形态）：未来宿主再加尾参数
+ * 也能原样透传，不会像旧版双参包装那样在单参宿主上两条翻译分支同时落空。
+ */
+function localizeProjectArgs(args: readonly unknown[]): unknown[] | undefined {
+  if (args.length === 0) return undefined
+  const first = args[0]
+  if (Array.isArray(first)) {
+    return [localizeSnapshotSections(first), ...args.slice(1)]
+  }
+  if (typeof first === 'string') {
+    const sections = args.length > 1 ? [localizeSnapshotSections(args[1])] : []
+    return [localizeSnapshotBody(first), ...sections, ...args.slice(2)]
+  }
+  return undefined
+}
 
 /** 给一个 Agent 的 Session 挂上「注入消息入历史前翻译」的 append 包装。 */
 function installAppendLocale(agent: unknown): void {
@@ -760,7 +828,9 @@ function installAppendLocale(agent: unknown): void {
       if (args[0] === 'user/message' && args[1] !== null && typeof args[1] === 'object') {
         if (getModelState().zhContextInject === true
           && isDshInjection(args[1])
-          && regimeOf(agent) === 'zh') {
+          && regimeOf(agent) === 'zh'
+          // 投影层不可用时**不翻快照**：只翻落盘侧会让官方去重恒失配（issue #15）。
+          && !(isSnapshotMessage(args[1]) && snapshotLocaleBlockedFor(agent))) {
           const localized = localizeMessage(args[1], isSnapshotMessage(args[1]))
           if (localized !== args[1]) args = [args[0], localized, ...args.slice(2)]
         }
@@ -774,47 +844,56 @@ function installAppendLocale(agent: unknown): void {
   patchedSessions.add(session)
 }
 
-/** 给一个 Agent 的快照投影挂上「渲染即中文」的 project 包装（见上方代价说明）。 */
-function installSnapshotProjection(agent: unknown): void {
-  // agent-loop 的运行时字段名；缺失（未来改名）时静默降级为「快照保持英文」。
+/** 给一个 Agent 的快照投影挂上「渲染即中文」的 project 包装。
+ *
+ * @returns 包装可用（含此前已包装）时 true；投影结构不可识别时 false——
+ *   调用方据此把该 Agent 加入 `snapshotLocaleBlocked`，禁止只翻落盘侧。
+ */
+function installSnapshotProjection(agent: unknown): boolean {
+  // agent-loop 的运行时字段名；缺失（未来改名）时降级为「快照保持英文」。
   const projection = (agent as { runtimeContext?: unknown } | undefined)?.runtimeContext
-  if (projection === null || typeof projection !== 'object') return
+  if (projection === null || typeof projection !== 'object') return false
   const target = projection as { project?: unknown }
-  if (typeof target.project !== 'function') return
-  if (patchedProjections.has(target)) return
-  const original = target.project as (this: unknown, current: unknown, sections: unknown) => unknown
-  const patched = function (this: unknown, current: unknown, sections: unknown): unknown {
+  if (typeof target.project !== 'function') return false
+  if (patchedProjections.has(target)) return true
+  const original = target.project as (this: unknown, ...args: unknown[]) => unknown
+  let shapeWarned = false
+  const patched = function (this: unknown, ...args: unknown[]): unknown {
+    if (getModelState().zhContextInject !== true || regimeOf(agent) !== 'zh') {
+      return Reflect.apply(original, this, args)
+    }
+    let localized: unknown[] | undefined
     try {
-      if (getModelState().zhContextInject !== true || regimeOf(agent) !== 'zh') {
-        return Reflect.apply(original, this, [current, sections])
-      }
-      // 比较基准与产出一起中文化：original 用 retained.text 与传入正文比较，
-      // 只翻正文会让两侧恒不等、每步追加一条快照。
-      const zhCurrent = typeof current === 'string' ? localizeSnapshotBody(current) : current
-      const zhSections = Array.isArray(sections)
-        ? sections.map(function (section: unknown) {
-          if (section === null || typeof section !== 'object') return section
-          const entry = section as { text?: unknown }
-          if (typeof entry.text !== 'string') return section
-          const zh = localizeSnapshotBody(entry.text)
-          return zh === entry.text ? section : { ...entry, text: zh }
-        })
-        : sections
-      return Reflect.apply(original, this, [zhCurrent, zhSections])
+      localized = localizeProjectArgs(args)
     } catch (error) {
       warn(`上下文注入中文化失败（snapshot），本次沿用原内容: ${error instanceof Error ? error.message : String(error)}`)
-      return Reflect.apply(original, this, [current, sections])
+      return Reflect.apply(original, this, args)
     }
+    if (localized === undefined) {
+      // 契约无法识别：**不跳过包装后继续翻 append**（那正是每步一条快照的成因），
+      // 而是让整个快照链路回到「全英文 + 官方去重」，只提示一次。
+      if (agent !== null && typeof agent === 'object') snapshotLocaleBlocked.add(agent)
+      if (!shapeWarned) {
+        shapeWarned = true
+        warn(`RuntimeContextProjection.project 的参数形状无法识别（${args.length} 个参数），本会话快照保持英文`)
+      }
+      return Reflect.apply(original, this, args)
+    }
+    return Reflect.apply(original, this, localized)
   }
   target.project = patched
   patchedProjections.add(target)
+  return true
 }
 
 /** 为一个 Agent 挂上全部接缝；结构不可预期时静默跳过（绝不阻断会话）。 */
 function ensureAgentLocale(agent: unknown): void {
   if (agent === null || typeof agent !== 'object') return
   try { installAppendLocale(agent) } catch { /* 降级：该会话不做 append 翻译。 */ }
-  try { installSnapshotProjection(agent) } catch { /* 降级：该会话快照保持英文。 */ }
+  let projectionReady = false
+  try { projectionReady = installSnapshotProjection(agent) } catch { projectionReady = false }
+  // 投影层装不上时禁止只翻快照：落盘中文 + 比较基准英文 = 每个 step 一条快照。
+  if (!projectionReady) snapshotLocaleBlocked.add(agent)
 }
 
 /**
@@ -824,6 +903,8 @@ function ensureAgentLocale(agent: unknown): void {
  *    `RuntimeContextProjection.project`，让 runtime-context 快照在**渲染时**
  *    即为中文（正文 + `source.sections` + 头部行）。这是 0.2.1 起的唯一有效
  *    路径——agent-loop 会把 pre-step 里的快照消息丢弃并按 provider 原文重建。
+ *    包装按实参形状自适应 0.2.2-rc.2 的单参契约与更早的双参契约；投影层不可用
+ *    时该会话快照退回「全英文 + 官方去重」，不再只翻落盘侧（issue #15）。
  * 2. **append 接缝**（`installAppendLocale`）：包装 `Session.append`，兜住
  *    pre-step 链序够不到的注入（典型是比本插件更外层注册的 time-context）；
  *    同时保证落盘历史与投影一致。
