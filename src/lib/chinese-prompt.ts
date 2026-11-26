@@ -12,7 +12,8 @@
 import { randomUUID } from 'node:crypto'
 import { PKG } from '../bin/dsh-zh.mjs'
 import {
-  ZH_AUTO_ARCHIVE_DAYS_DEFAULT, ZH_FETCH_ORDER_DEFAULT, ZH_FETCH_ORDER_MAX,
+  ZH_AUTO_ARCHIVE_DAYS_DEFAULT, ZH_AUTO_DELETE_DAYS_DEFAULT,
+  ZH_FETCH_ORDER_DEFAULT, ZH_FETCH_ORDER_MAX,
   ZH_PROMPT_ORDER_DEFAULT, ZH_PROMPT_ORDER_MAX, ZH_PROMPT_ORDER_MIN,
   ZH_PROMPT_SECTION_NAME, ZH_PROMPT_TARGET_LEGACY,
   ZH_PROMPT_TARGET_SYSTEM, ZH_PROMPT_TARGET_USER, ZH_PROMPT_TEXT,
@@ -243,6 +244,7 @@ export function createZhConfigSchema(z: any): unknown {
     // -9999–9999，默认 100 = persona 之后、官方政策与工具说明之前）。
     zhPromptOrder: mark(z.number().default(ZH_PROMPT_ORDER_DEFAULT)),
     zhAutoArchiveDays: mark(z.number().default(ZH_AUTO_ARCHIVE_DAYS_DEFAULT)),
+    zhAutoDeleteDays: mark(z.number().default(ZH_AUTO_DELETE_DAYS_DEFAULT)),
     zhAgentPrompt: mark(z.boolean().default(false)),
     zhToolDesc: mark(z.boolean().default(false)),
     zhContextInject: mark(z.boolean().default(false)),

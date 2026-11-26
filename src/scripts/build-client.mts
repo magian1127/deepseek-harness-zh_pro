@@ -121,6 +121,11 @@ const wrapperEnd = `    exports.inject = ['locale', 'slots', 'sidebarRightTabs']
       validationCodes: SEARCH_CREDENTIAL_VALIDATION_CODES,
       endpoint: SEARCH_CREDENTIAL_ENDPOINT,
     };
+    exports.autoArchive = {
+      candidates: autoArchiveCandidates,
+      deleteCandidates: autoDeleteCandidates,
+      sessionKey: autoArchiveSessionKey,
+    };
     return module.exports;
   },
 });`

@@ -562,6 +562,12 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
 - 自动归档与归档视图使用官方 `sessions`、`workspaces`、`configForms`、`locale`、`slots` 服务；名称以运行版 `ui-conversation` 等插件的契约为准。
 - `sessions.list` / `workspaces.list` 的订阅建立后要立即按当前快照刷新一次归档视图，否则插件加载时已存在的会话不会进入首次计算。
 - `ZH_AUTO_ARCHIVE_DAYS_DEFAULT` 等跨端默认值必须在 Client 构建输入中显式维护并由测试校对；误引用 Host 常量会使整个经典 bundle apply 失败。
+- **`sessions.list` 快照没有 `current` 字段**（运行版 `SessionListState` 只有 `ids / byId / phase / projectionsBySession`）。判断「当前选中会话」只能读官方导航的 localStorage 持久化键 `dsh.sessions.current`（形如 `{"sessionId":"session-…"}`）；不要按快照字段写判定，否则条件恒为假、功能静默永不执行（2026-11-26 自动归档失效的直接原因）。
+- 自动归档是**全量扫描**：遍历 `list.ids`，用 `autoArchiveCandidates` 纯函数筛选（超期 + 未归档 + 未置顶 + 不在跳过集合 + 非当前/运行中/空白/子代理），再按 4 个一批串行调用 `workspaces.archiveSession`。判定用 `phase === 'ready'` 兜底：列表未拉回时不能把「没数据」当作「都已超期」。
+- 自动归档**每天最多清理一次，唯一触发点是「新会话」空白界面，且没有任何定时器**：`lastRunAt` 持久化在 localStorage（`deepseek-harness-zh_pro:autoArchiveLastRun`），只有本地日期变化（`autoArchiveDayKey`）才允许再次清理。`sessions.list` 的订阅回调 1 秒节流，只检测选中会话的 blank 上升沿；`workspaces.list` 的订阅只做「取消归档」记账。**不要**给自动归档加 setInterval、visibilitychange、页面加载或列表变化扫描：这些触发会让它在每次对话与流式输出时反复执行。设置页保存新天数时会清掉当日标记并立即清理一次（显式操作例外）。
+- 自动删除旧归档与自动归档共用同一次清理：`collectCleanupPlan` 同时算出 `archive`（未归档超期）与 `remove`（已归档且 `updatedAt` 超期、有日志、非运行中/子代理，纯函数 `autoDeleteCandidates`），`runCleanupPlan` 先分批归档再逐条删除。删除复用主机 `/dsh-zh/api/session.delete`（日志进系统回收站、账本席位移除），成功后刷新 `sessions`/`workspaces`。归档集合里无日志的死 id 不在 `list.byId` 中，天然不会成为删除候选。
+- 手动取消归档的会话记入 localStorage `deepseek-harness-zh_pro:autoArchiveSkip`（`{id, at}`，90 天过期、上限 500 条）：通过对比前后两次 `archivedSessionIds` 快照识别「从归档集合消失」的 id。没有这层记账时，下一轮扫描会把用户刚取消归档的会话立刻重新归档。
+- 归档候选筛选抽成纯函数并挂在 `exports.autoArchive`（`src/scripts/build-client.mts` 的工厂尾部）上，由 `verify-archive.cjs` 覆盖各条排除规则。
 
 ## 会话列表多选与归档视图（注入行交互与全选的实现要点）
 
@@ -653,6 +659,39 @@ Models 设置页产生内部目录行，中文界面由受限 DOM 映射隐藏�
   同理 `buildMenuItem` 用**语义类名**（`itemLabel`/`itemIcon`）定位，不要用
   `span:first/last-child`（新结构下 `last-child` 是徽标）；注入项要摘掉克隆来的
   徽标并清 `aria-keyshortcuts`。详见 `troubleshooting.md` 同名章节。
+- **注入项图标走官方 sprite 引用，不用 emoji**：官方 itemIcon 内是
+  `<span data-slot="contextMenu.icon"><svg data-icon=...><use href="#dsw-icon-...">`，
+  引用 ui-theme 挂在 `document.body` 的图标 sprite（`svg[data-dsh-icon-sprite]`）
+  里的 `<symbol>`。`session-menu.ts` 的 `makeSpriteIconSvg(glyph)` 按官方同构结构
+  生成（删除/批量删除用 `trash`、批量归档用 `archive`、批量取消归档用
+  `unarchive`，统一 `dsw-icon-<glyph>-outline-regular`、20px），描边走
+  currentColor，危险项随按钮变红，主题替换的 artwork 自动生效。拿不到 DOM
+  命名空间工厂（受限环境）时退化为无图标。**自建归档菜单**（archive-view）的
+  图标是内嵌 path 的 `makeOfficialIcon`（该菜单全部图标同机制），trash 以官方
+  `IconTrashOutlineRegular` 的 stroke artwork 数据加入 `ARCHIVE_ICONS`
+  （`makeOfficialIcon` 因此支持 `stroke: true` 的 path）。
+- **摘徽标必须排除 `itemIcon` 本身**（2026-11-13 真实 GUI bug）：官方图标容器
+  就是 `span[class*=itemIcon][aria-hidden="true"]`（`aria-hidden` 是读屏装饰
+  标记）。按 `span[aria-hidden="true"]` 无差别摘除会把**整个图标容器连根删掉**，
+  于是装进去的图标/emoji 一律显示不出来——现象是「插件加的菜单项永远没有图标」，
+  与语言、主题、构建新旧全部无关，重启也不解决。摘徽标时要跳过 `itemIcon`
+  及其后代（`badge === itemIcon` / `itemIcon.contains(badge)`）。
+  对应地，**测试夹具的 icon span 必须带 `aria-hidden="true"`**，否则这条 bug
+  测不出来（夹具里 icon 没有该属性 → 摘不到 → 假绿）。
+- **菜单内容被 React 重建后要能补注入**（2026-11-13 真实 GUI bug）：会话菜单里有
+  子菜单触发器（「在应用中打开」，`aria-haspopup="menu"`），指针移上去官方会
+  重渲染菜单内容（surface 上的 `--dsh-menu-replace` 就是这次替换动画），React
+  重建 children 会把注入的原生节点摘掉，而 **menu 元素与其上的
+  `data-dsh-zh-delete-session` 标记都还在** → 「标记还在所以永不补注入」→
+  删除/批量项就此消失（表现为「鼠标移到子菜单项上，我们加的项没了」）。
+  两个支撑点缺一不可：① `injectIntoMenu` 的已标记守卫要叠加**注入项存活判定**
+  （`button[data-dsh-zh-delete-session]` / `button[data-dsh-zh-batch-menuitem]`
+  都不在就清标记重注入）；② observer 必须处理 **`removedNodes`**（只看
+  `addedNodes` 抓不到「被摘掉」这件事），从 `record.target` 向上
+  `closest('div[role="menu"]')` 定位所属菜单后补注入。重注入前先清掉本菜单内
+  残留的旧注入项（移除整个 itemWrap，不留空 wrap），否则会叠加成两份。
+  安全性由锚点匹配保证：子菜单内容里没有「归档会话」/「取消归档」，重注入
+  在其上必然落空返回，不会把删除项塞进子菜单。
 - **归档行标题/时间用 caption 灰**：对齐官方 `Rows.module.css`
   `.sessionRow.archived .title/.time` 的 `--dsw-alias-label-caption`（官方特意选
   caption 而非 dimmed，后者在侧栏底色上过淡）。

@@ -807,6 +807,12 @@ menu1 = menuOf()
 check(menu1 !== null, true, '数据同步（内容未变）不误关菜单')
 check(menuLabelsOf(menu1), ['重命名', '分叉会话', '取消归档', '删除会话'], '菜单 4 项文案与顺序（归档会话反转为取消归档）')
 check(menu1.querySelectorAll('[data-dsh-zh-archive-menu-item]')[3].getAttribute('data-dsh-zh-archive-menu-danger'), 'true', '删除会话为危险项（红色）')
+// 删除项带官方垃圾桶 artwork（stroke path，随 currentColor 变红），不再是 emoji。
+const deleteItemIconSvg = menu1.querySelectorAll('[data-dsh-zh-archive-menu-item]')[3]
+  .querySelector('[data-dsh-zh-archive-menu-icon] svg')
+check(deleteItemIconSvg !== null, true, '归档菜单删除项有垃圾桶 svg 图标')
+check(deleteItemIconSvg !== null && deleteItemIconSvg.querySelector('path[stroke="currentColor"]') !== null, true,
+  '归档菜单删除项垃圾桶是官方 stroke artwork')
 // Escape 只关菜单，不退出归档视图。
 fakeDoc._handlers.keydown({ key: 'Escape' })
 check(menuOf(), null, 'Escape 关闭菜单')
@@ -1141,7 +1147,12 @@ function makeOfficialMenuItem(menu, label, shortcutKeys) {
   const itemWrap = new FakeEl('div', { class: '_itemWrap_gzo7u_90' })
   const btn = new FakeEl('button', { role: 'menuitem' })
   if (shortcutKeys !== undefined) btn.setAttribute('aria-keyshortcuts', shortcutKeys.join('+'))
-  const icon = new FakeEl('span', { class: '_itemIcon_gzo7u_148' })
+  // **icon span 必须带 aria-hidden="true"**：官方 itemIcon 容器就是这样
+  // （`<span aria-hidden="true" class="_itemIcon_...">`，aria-hidden 是给读屏
+  // 用的装饰标记）。夹具缺这个属性时，2026-11-13 那个「按
+  // `span[aria-hidden="true"]` 无差别摘徽标 → 把 itemIcon 连根删掉 → 注入项永远
+  // 没图标」的 bug 会**测不出来**（夹具里 icon 没有 aria-hidden，摘不到它）。
+  const icon = new FakeEl('span', { class: '_itemIcon_gzo7u_148', 'aria-hidden': 'true' })
   const lbl = new FakeEl('span', { class: '_itemLabel_gzo7u_190' })
   lbl.textContent = label
   btn.appendChild(icon)
@@ -1183,14 +1194,73 @@ const officialMenu = makeOfficialMenu()
 menuObs.cb([{ addedNodes: [officialMenu], target: body }])
 const batchItems = officialMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]')
 check(batchItems.length, 2, '批量 多选后菜单注入两个批量项')
-check(batchItems[0].querySelector('span:last-child').textContent, '批量删除（1）', '批量删除文案带计数')
-check(batchItems[1].querySelector('span:last-child').textContent, '批量归档（1）', '批量归档文案带计数')
+// 文案按语义类名读（span:last-child 会命中图标 slot——注入项图标 span 内有
+// 官方同构的 data-slot 子节点，是它所在层的最后一个 span）。
+check(batchItems[0].querySelector('span[class*="itemLabel"]').textContent, '批量删除（1）', '批量删除文案带计数')
+check(batchItems[1].querySelector('span[class*="itemLabel"]').textContent, '批量归档（1）', '批量归档文案带计数')
+// 注入项图标与官方菜单同构：itemIcon 内是 `<span data-slot>` + `<svg
+// data-icon=... ><use href="#dsw-icon-...">`（官方 sprite 引用，非 emoji）。
+const menuIconIdOf = function (btn) {
+  const svg = btn.querySelector('svg[data-icon]')
+  return svg !== null ? String(svg.getAttribute('data-icon')) : null
+}
+check(menuIconIdOf(batchItems[0]), 'dsw-icon-trash-outline-regular', '批量删除 用官方垃圾桶图标')
+check(menuIconIdOf(batchItems[1]), 'dsw-icon-archive-outline-regular', '批量归档 用官方归档图标')
+check(batchItems[0].querySelector('svg[data-icon] use') !== null, true, '批量删除 图标是官方 sprite use 引用')
+// 回归保护（2026-11-13 真实 GUI bug）：摘徽标逻辑曾按 `span[aria-hidden="true"]`
+// 无差别摘除，而官方 itemIcon 容器本身就是 `span[class*=itemIcon][aria-hidden]`
+// → 图标容器被连根删掉，装进去的图标/emoji 一律显示不出来。断言必须直接检查
+// **容器仍在且其内有 svg**，只查 `btn.querySelector('svg')` 不足以覆盖。
+// 注意：FakeEl 的后代选择器只沿连续祖先链匹配、不支持隔层（真实链是
+// itemIcon > span[data-slot] > svg），所以这里分两步查，不写 'itemIcon svg'。
+const iconSvgInContainer = function (btn) {
+  const iconEl = btn.querySelector('span[class*="itemIcon"]')
+  return iconEl !== null ? iconEl.querySelector('svg') : null
+}
+check(batchItems[0].querySelector('span[class*="itemIcon"]') !== null, true,
+  '批量删除 的 itemIcon 容器未被摘徽标逻辑误删（回归保护）')
+check(iconSvgInContainer(batchItems[0]) !== null, true,
+  '批量删除 的图标确实挂在 itemIcon 容器内')
+check(iconSvgInContainer(batchItems[1]) !== null, true,
+  '批量归档 的图标确实挂在 itemIcon 容器内')
+// 同时徽标必须仍被摘掉（否则注入项挂着官方快捷键、按了也不触发本项）。
+check(batchItems[0].querySelector('span[class*="shortcut"]'), null, '批量删除 摘掉了官方快捷键徽标')
+check(batchItems[0].getAttribute('aria-keyshortcuts'), null, '批量删除 摘掉了 aria-keyshortcuts')
 // 官方四项原样保留，批量项排在「归档会话」之后。
 check(officialMenu.querySelectorAll('[role="menuitem"]').length, 6, '批量 官方菜单项不被替换')
 check(officialMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]').length, 2,
   '带快捷键徽标的官方菜单仍注入批量项（锚点只读 itemLabel）')
 // 注：「删除会话」项需要行上下文（lastEllipsisRow），在下面的归档行用例里
 // 连同快捷键徽标一起验证。
+
+// 11d-1b) 菜单内容被 React 重建后必须自动补注入（2026-11-13 真实 GUI 回归）。
+// 触发路径：菜单里有子菜单触发器（「在应用中打开」，aria-haspopup="menu"），
+// 指针移上去官方重渲染菜单内容（surface 的 --dsh-menu-replace 就是这次替换的
+// 动画），React 重建 children 会摘掉我们插入的原生节点；menu 元素与其上的
+// 注入标记都还在，于是「标记还在 → 永不补注入 → 删除/批量项就此消失」。
+// 修复有两个支撑点，测试要同时覆盖：
+//   a) observer 收到 **removedNodes** 时补跑存活检查（只看 addedNodes 抓不到）；
+//   b) injectIntoMenu 的标记判定叠加「注入项是否还活着」。
+const batchWrap0 = batchItems[0].parentElement
+const batchWrap1 = batchItems[1].parentElement
+const footerOfMenu = batchWrap0.parentElement
+footerOfMenu.removeChild(batchWrap0)
+footerOfMenu.removeChild(batchWrap1)
+check(officialMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]').length, 0,
+  '重建模拟：注入项已被摘除')
+menuObs.cb([{ type: 'childList', removedNodes: [batchWrap0, batchWrap1], addedNodes: [], target: footerOfMenu }])
+check(officialMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]').length, 2,
+  '菜单内容被重建后自动补注入（子菜单 hover 回归保护）')
+// 补注入必须幂等：不能出现两份（残留 + 重注入叠加）。
+check(officialMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]').length !== 4, true,
+  '补注入不叠加重复项')
+const reinjected = officialMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]')
+check(menuIconIdOf(reinjected[0]), 'dsw-icon-trash-outline-regular', '补注入的批量删除仍带官方图标')
+check(reinjected[0].querySelector('span[class*="itemIcon"]') !== null, true, '补注入项的 itemIcon 容器在')
+// 再跑一次「没有移除」的批次：注入项活着时不得重复注入。
+menuObs.cb([{ type: 'childList', removedNodes: [], addedNodes: [], target: footerOfMenu }])
+check(officialMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]').length, 2,
+  '注入项存活时不重复注入（幂等）')
 
 // 11d-2) 官方「显示已归档」视图的归档行：菜单锚点是「取消归档」而不是
 // 「归档会话」，此前匹配落空 → 已归档会话拿不到「删除会话」（官方明确不做
@@ -1217,6 +1287,7 @@ menuObs.cb([{ addedNodes: [archivedOfficialMenu], target: body }])
 const archivedDeleteItem = archivedOfficialMenu.querySelector('button[data-dsh-zh-delete-session]')
 check(archivedDeleteItem !== null, true,
   '官方归档行菜单注入「删除会话」（锚点扩展到「取消归档」）')
+check(menuIconIdOf(archivedDeleteItem), 'dsw-icon-trash-outline-regular', '删除会话 用官方垃圾桶图标')
 // 注入项紧随「取消归档」之后（锚点即插入位置），且官方四项原样保留。
 // 按 label span 读文案（不是 span:last-child——带快捷键的项最后一个是徽标）。
 const menuItemLabelOf = function (btn) {
@@ -1270,8 +1341,9 @@ const archiveMenu = makeOfficialMenu()
 menuObs.cb([{ addedNodes: [archiveMenu], target: body }])
 const archiveBatchItems = archiveMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]')
 check(archiveBatchItems.length, 2, '批量 重新打开菜单仍注入批量项')
-check((archiveBatchItems[1].querySelector('span:last-child') || {}).textContent, '批量取消归档（1）',
+check((archiveBatchItems[1].querySelector('span[class*="itemLabel"]') || {}).textContent, '批量取消归档（1）',
   '已归档多选给出「批量取消归档」（归档构成判定）')
+check(menuIconIdOf(archiveBatchItems[1]), 'dsw-icon-unarchive-outline-regular', '批量取消归档 用官方取消归档图标')
 const officialUnarchiveBeforeMenu = officialUnarchiveCalls.length
 archiveBatchItems[1].click('click')
 check(confirmOverlaysOf().length, 1, '批量取消归档 弹确认框')
@@ -1291,8 +1363,9 @@ r1.children[0].children[0].click('change')
 const reArchiveMenu = makeOfficialMenu()
 menuObs.cb([{ addedNodes: [reArchiveMenu], target: body }])
 const reArchiveItems = reArchiveMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]')
-check((reArchiveItems[1].querySelector('span:last-child') || {}).textContent, '批量归档（1）',
+check((reArchiveItems[1].querySelector('span[class*="itemLabel"]') || {}).textContent, '批量归档（1）',
   '未归档多选给出「批量归档」（归档构成判定）')
+check(menuIconIdOf(reArchiveItems[1]), 'dsw-icon-archive-outline-regular', '批量归档（重开菜单）用官方归档图标')
 reArchiveItems[1].click('click')
 check(confirmOverlaysOf().length, 1, '批量归档 弹确认框')
 const reArchiveConfirmButtons = confirmOverlaysOf()[0].querySelectorAll('button')
@@ -1321,7 +1394,7 @@ const mixedMenu = makeOfficialMenu()
 menuObs.cb([{ addedNodes: [mixedMenu], target: body }])
 const mixedItems = mixedMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]')
 check(mixedItems.length, 1, '混选 只注入一个批量项')
-check((mixedItems[0].querySelector('span:last-child') || {}).textContent, '批量删除（2）',
+check((mixedItems[0].querySelector('span[class*="itemLabel"]') || {}).textContent, '批量删除（2）',
   '混选 只保留「批量删除」（归档/取消归档都只对一半成立）')
 // 清理：取消混选并移除 n1 行，避免影响后续用例。
 for (const box of batchChecksOf()) {
@@ -1379,7 +1452,7 @@ for (const obs of fakeObs.slice()) {
 }
 const deleteOffBatch = deleteOffMenu.querySelectorAll('button[data-dsh-zh-batch-menuitem]')
 check(deleteOffBatch.length, 1, '关闭删除开关后多选菜单只剩批量归档')
-check((deleteOffBatch[0].querySelector('span:last-child') || {}).textContent, '批量归档（1）', '关闭删除开关后批量归档仍在')
+check((deleteOffBatch[0].querySelector('span[class*="itemLabel"]') || {}).textContent, '批量归档（1）', '关闭删除开关后批量归档仍在')
 check(deleteOffMenu.querySelector('button[data-dsh-zh-delete-session]'), null, '关闭删除开关后单项删除也不注入')
 settingsStoreUnderTest.set('deleteSessionEnabled', true)
 const deleteOnMenu = makeOfficialMenu()
@@ -1695,6 +1768,73 @@ check(intervals.filter(i => i !== null).length, intervalsBefore, '卸载后无�
 const remainingStyles = fakeDoc.head.children.filter(c => c.tagName === 'STYLE')
 check(remainingStyles.length, 0, '卸载后样式移除')
 check(body.querySelectorAll('[data-dsh-zh-deleted-row]').length, 0, '卸载后已删除行标记全部清除')
+
+// 13) 自动归档候选筛选（纯函数；覆盖 2026-11-26 修复后的全量扫描语义）
+// 旧实现读 sessions.list 快照的 current（运行版没有该字段）导致永不归档；
+// 现在改为遍历全部可见会话、跳过当前/置顶/跳过集合/运行中/空白/子代理。
+const ARCHIVE_DAY = 86400000
+const ARCHIVE_NOW = 1700000000000
+const archiveSummaryOf = function (updatedAt, extra) {
+  return Object.assign({ updatedAt: updatedAt, running: false, blank: false }, extra)
+}
+const archiveById = {
+  'session-old': archiveSummaryOf(ARCHIVE_NOW - 10 * ARCHIVE_DAY),
+  'session-new': archiveSummaryOf(ARCHIVE_NOW - 1 * ARCHIVE_DAY),
+  'session-pinned': archiveSummaryOf(ARCHIVE_NOW - 30 * ARCHIVE_DAY),
+  'session-running': archiveSummaryOf(ARCHIVE_NOW - 30 * ARCHIVE_DAY, { running: true }),
+  'session-blank': archiveSummaryOf(ARCHIVE_NOW - 30 * ARCHIVE_DAY, { blank: true }),
+  'session-subagent': archiveSummaryOf(ARCHIVE_NOW - 30 * ARCHIVE_DAY, { origin: 'subagent' }),
+  'session-archived': archiveSummaryOf(ARCHIVE_NOW - 30 * ARCHIVE_DAY),
+  'session-skip': archiveSummaryOf(ARCHIVE_NOW - 30 * ARCHIVE_DAY),
+  'session-current': archiveSummaryOf(ARCHIVE_NOW - 30 * ARCHIVE_DAY),
+  'session-boundary': archiveSummaryOf(ARCHIVE_NOW - 7 * ARCHIVE_DAY),
+  'session-older': archiveSummaryOf(ARCHIVE_NOW - 8 * ARCHIVE_DAY),
+}
+const archiveBaseInput = {
+  ids: Object.keys(archiveById),
+  byId: archiveById,
+  archivedSessionIds: ['session-archived'],
+  pinnedSessionIds: ['session-pinned'],
+  skippedSessionIds: ['session-skip'],
+  currentSessionId: 'session-current',
+  days: 7,
+  now: ARCHIVE_NOW,
+}
+const archivePicked = pluginExports.autoArchive.candidates(archiveBaseInput).slice().sort()
+check(JSON.stringify(archivePicked), JSON.stringify(['session-boundary', 'session-old', 'session-older']),
+  '自动归档 全量扫描挑出超期会话，并跳过归档/置顶/跳过/当前/运行/空白/子代理')
+check(pluginExports.autoArchive.candidates(Object.assign({}, archiveBaseInput, { days: 0 })).length, 0,
+  '自动归档 天数 0 表示关闭')
+check(pluginExports.autoArchive.candidates(Object.assign({}, archiveBaseInput, { currentSessionId: undefined }))
+  .indexOf('session-current') !== -1, true, '自动归档 读不到当前会话时仍归档超期会话')
+check(pluginExports.autoArchive.candidates(Object.assign({}, archiveBaseInput, {
+  archivedSessionIds: ['archived'], pinnedSessionIds: ['pinned'], skippedSessionIds: ['skip'], currentSessionId: 'current',
+})).indexOf('session-archived') !== -1, false, '自动归档 归档集合按去前缀 id 比对')
+check(pluginExports.autoArchive.sessionKey('session-abc'), 'abc', '自动归档 session- 前缀 id 归一化')
+check(pluginExports.autoArchive.sessionKey('abc'), 'abc', '自动归档 裸 id 归一化保持不变')
+
+// 14) 自动删除旧归档候选筛选（纯函数；只删「已归档 + 超期」的会话）
+const deleteById = {
+  'session-archived-old': { updatedAt: ARCHIVE_NOW - 40 * ARCHIVE_DAY, running: false },
+  'session-archived-fresh': { updatedAt: ARCHIVE_NOW - 5 * ARCHIVE_DAY, running: false },
+  'session-unarchived-old': { updatedAt: ARCHIVE_NOW - 40 * ARCHIVE_DAY, running: false },
+  'session-archived-running': { updatedAt: ARCHIVE_NOW - 40 * ARCHIVE_DAY, running: true },
+  'session-archived-subagent': { updatedAt: ARCHIVE_NOW - 40 * ARCHIVE_DAY, origin: 'subagent' },
+}
+const deleteInput = {
+  ids: Object.keys(deleteById),
+  byId: deleteById,
+  archivedSessionIds: [
+    'session-archived-old', 'session-archived-fresh', 'session-archived-running',
+    'session-archived-subagent', 'session-dead-id',
+  ],
+  days: 30,
+  now: ARCHIVE_NOW,
+}
+check(JSON.stringify(pluginExports.autoArchive.deleteCandidates(deleteInput)), JSON.stringify(['session-archived-old']),
+  '自动删除 只挑已归档且超期的会话（跳过未超期/未归档/运行中/子代理/无日志死 id）')
+check(pluginExports.autoArchive.deleteCandidates(Object.assign({}, deleteInput, { days: 0 })).length, 0,
+  '自动删除 天数 0 表示关闭')
 
 console.log(fail > 0 ? `FAIL: ${fail}/${total} 项不符` : `OK: 归档视图回归 ${total} 项通过`)
 process.exit(fail > 0 ? 1 : 0)

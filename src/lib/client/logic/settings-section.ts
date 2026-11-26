@@ -1043,6 +1043,28 @@ const ZhSettingsSection = function (props) {
             }),
             React.createElement('span', { style: zhDescStyle }, t('autoArchiveUnit'))),
           true),
+        // 「自动删除旧归档」：已归档会话中最后活动超过 N 天的直接删除（日志进
+        // 回收站）。默认 0 = 关闭，与自动归档共用「点新会话」的清理时机。
+        row('autoDelete', t('autoDelete'), t('autoDeleteDesc'),
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+            React.createElement('input', {
+              type: 'number', min: 0, max: 365, step: 1,
+              value: (promptReady && typeof hostView.zhAutoDeleteDays === 'number')
+                ? hostView.zhAutoDeleteDays
+                : 0,
+              style: inputStyle,
+              'aria-label': t('autoDelete'),
+              disabled: promptReady === false,
+              onChange: function (event) {
+                const n = parseInt(event.target.value, 10)
+                if (boundPromptScope !== null && promptReady === true && !isNaN(n)) {
+                  setPendingHost('zhAutoDeleteDays', Math.max(0, Math.min(365, Math.round(n))),
+                    typeof promptSnapshot.value.zhAutoDeleteDays === 'number' ? promptSnapshot.value.zhAutoDeleteDays : undefined)
+                }
+              },
+            }),
+            React.createElement('span', { style: zhDescStyle }, t('autoDeleteUnit'))),
+          true),
         row('archiveView', t('archiveView'), t('archiveViewDesc'),
           toggle(view.archiveViewEnabled, function () {
             setPendingLocal('archiveViewEnabled', !view.archiveViewEnabled, snapshot.archiveViewEnabled)

@@ -11,11 +11,15 @@ export const BUNDLE_ROW_ID = 'dsh-zh'
 export const ZH_SETTINGS_NS = 'dsh-zh'
 // 设置暴露目录键（见 chinese-prompt.js 内的注册说明）。
 export const ZH_PROVIDER_KEY = 'zh-prompt'
-// 自动归档：新建会话界面打开时，把超过 zhAutoArchiveDays 天未活动的会话
-// 加入官方归档集合（仅从列表隐藏，日志原地保留）。
-// 默认 7 天；0 表示关闭自动归档。判定依据是 session.list 的 updatedAt
-// （创建时间与最近人工消息的较晚者），运行中与空白会话不参与。
+// 自动归档：把超过 zhAutoArchiveDays 天未活动的会话加入官方归档集合
+// （仅从列表隐藏，日志原地保留）。默认 7 天；0 表示关闭自动归档。
+// 判定依据是 session.list 的 updatedAt（创建时间与最近人工消息的较晚者），
+// 运行中、空白、子代理、置顶、当前会话与手动取消归档过的会话不参与。
 export const ZH_AUTO_ARCHIVE_DAYS_DEFAULT = 7
+// 自动删除旧归档：已归档会话中，最后活动超过 zhAutoDeleteDays 天的直接删除
+// （日志移入系统回收站、工作区账本位移除，与「删除会话」同一通道）。
+// 默认 0 = 关闭；范围 0–365。与自动归档共用「点新会话时每天最多一次」的清理时机。
+export const ZH_AUTO_DELETE_DAYS_DEFAULT = 0
 // 注入到初始系统提示时的 section 名；切换目标或关闭时会从 assembly 清理
 // 同名 section，避免双份残留。
 export const ZH_PROMPT_SECTION_NAME = 'dsh-zh:language'

@@ -45,7 +45,8 @@ the per-keystroke stutter), or **Revert** to drop the drafts.
 
 | Feature | Default | Description |
 | --- | --- | --- |
-| Auto-archive old sessions | 7 days | Archives sessions idle longer than N days when the New Session view opens (hidden only, logs kept); range 0–365, 0 disables it |
+| Auto-archive old sessions | 7 days | Archives sessions idle longer than N days (hidden only, logs kept): covers every workspace; runs when the New Session view opens, at most once a day (skipped when today already ran); range 0–365, 0 disables it |
+| Auto-delete old archived sessions | 0 (off) | Archived sessions inactive for more than N days are deleted (logs move to the system recycle bin, workspace membership removed); shares the New Session cleanup with auto-archive; range 0–365, 0 disables it |
 | Archived-session view | On | Adds an archive entry on each workspace row: archived sessions show inside the official list's own group, and the row menu can rename, fork, unarchive, or delete |
 | Session delete button | On | Adds "Delete session" to session menus for both live and archived rows; the log goes to the OS recycle bin with no list restore slot |
 | Session multi-select | On | Idle rows can be selected for batch delete or archive; running, pending-interaction, and unread-completion rows are not selectable. Batch entries follow the selection, and each workspace row also offers select-all |

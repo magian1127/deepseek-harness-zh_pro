@@ -39,6 +39,37 @@ const BATCH_DELETE_ITEM_LABELS = { zh: '批量删除（{n}）', en: 'Delete sele
 const BATCH_ARCHIVE_ITEM_LABELS = { zh: '批量归档（{n}）', en: 'Archive selected ({n})' }
 const BATCH_UNARCHIVE_ITEM_LABELS = { zh: '批量取消归档（{n}）', en: 'Unarchive selected ({n})' }
 
+// ---------- 官方 sprite 图标（注入菜单项与归档视图菜单共用） ----------
+// 官方菜单项的图标不是文本，而是 ui-theme 图标 sprite（document.body 下的隐藏
+// `<svg data-dsh-icon-sprite>`，随主题挂载/卸载）里的 `<symbol>` 引用：官方
+// itemIcon 内是 `<span data-slot="contextMenu.icon"><svg data-icon=... aria-hidden>
+// <use href="#dsw-icon-<glyph>-outline-regular"/></svg></span>`，描边走
+// currentColor（危险项随按钮变红），主题替换的图标 artwork 自动生效。
+// 这里按官方同构结构生成同款引用。glyph 与渲染尺寸对齐官方 ui-primitives
+// ICON_ARTWORK 的默认渲染：trash/archive 是 16 网格描边 glyph、unarchive 是
+// 20 网格——官方菜单 footer「归档会话」项（IconArchiveOutlineRegular）就是
+// 16 网格放大到 20px 渲染，注入项统一 20px 与它对齐。
+const MENU_ICON_GLYPHS = ['trash', 'archive', 'unarchive']
+function makeSpriteIconSvg(glyph) {
+  if (typeof glyph !== 'string' || MENU_ICON_GLYPHS.indexOf(glyph) === -1) return null
+  try {
+    if (typeof document === 'undefined' || document.createElementNS === undefined || document.createElementNS === null) return null
+    const iconId = 'dsw-icon-' + glyph + '-outline-regular'
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.setAttribute('width', '20')
+    svg.setAttribute('height', '20')
+    svg.setAttribute('data-icon', iconId)
+    svg.setAttribute('aria-hidden', 'true')
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use')
+    use.setAttribute('href', '#' + iconId)
+    svg.appendChild(use)
+    return svg
+  } catch {
+    // 受限环境（无 DOM 命名空间工厂）拿不到图标：菜单项退化为无图标。
+    return null
+  }
+}
+
 // ---------- 已删除会话 id 缓存（归档视图过滤 + 官方列表/搜索行隐藏） ----------
 // 上游没有按 id 卸载 live agent 的公开 API：删除「曾打开过、仍驻留内存」
 // 的会话时，主机会把它加入官方归档集合（archivedSessionIds）来从主列表
@@ -600,7 +631,25 @@ function installSessionMenu(ctx) {
     const BATCH_ITEM_MARK = 'data-dsh-zh-batch-menuitem'
     const injectIntoMenu = function (menu, sessionsList) {
       // 同一次打开只注入一次（全量重放时跳过已注入的菜单）。
-      if (menu.getAttribute(INJECTED_MARK) !== null) return
+      //
+      // 但**标记不能单独作为「注入项还活着」的依据**（2026-11-13 真实 GUI）：
+      // 菜单里有子菜单触发器（「在应用中打开」，`aria-haspopup="menu"`），把
+      // 指针移上去时官方会重渲染菜单内容（surface 上的 `--dsh-menu-replace`
+      // 就是这次替换的动画时长），React 重建 children 会把我们插入的原生节点
+      // 摘掉，而 menu 元素本身与其上的标记都还在——于是「注入项消失了，却因为
+      // 标记还在而永不补注入」，表现为「鼠标移到子菜单项上，删除/批量项消失」。
+      // 这里改成标记 + 注入项存活双重判定：注进去的按钮没了就清标记重注入。
+      // 重注入是安全的：下面的锚点匹配会在子菜单内容上落空（子菜单里没有
+      // 「归档会话」/「取消归档」），直接 return，不会把删除项塞进子菜单。
+      if (menu.getAttribute(INJECTED_MARK) !== null) {
+        let injectedAlive = true
+        try {
+          injectedAlive = menu.querySelector('button[' + INJECTED_MARK + ']') !== null
+            || menu.querySelector('button[' + BATCH_ITEM_MARK + ']') !== null
+        } catch { /* 查询失败按存活处理，避免重复注入 */ }
+        if (injectedAlive) return
+        menu.removeAttribute(INJECTED_MARK)
+      }
       // 跳过**本插件自建**的菜单：归档视图的行菜单也是 div[role="menu"]
       // （data-dsh-zh-archive-menu），它自带「取消归档」文案与自己的删除项，
       // 若在这里再注入一遍会出现重复的「删除会话」。自建菜单的删除项由
@@ -621,6 +670,19 @@ function installSessionMenu(ctx) {
       } catch {
         // 清理失败不影响注入
       }
+      // 摘掉**本菜单内**残留的旧注入项：只有 React 重建菜单内容会走到这里
+      // （标记还在但注入项已死），重建可能只移除一部分、或移除后留下空 wrap。
+      // 先清干净再整套重注入，保证重注入幂等——否则「残留 + 新注入」会让
+      // 批量项变成两份（实测表现为菜单里出现重复的批量删除）。
+      // 移除 wrap 而不是按钮本身，避免留下空格子。
+      try {
+        const existing = menu.querySelectorAll('button[' + INJECTED_MARK + '],button[' + BATCH_ITEM_MARK + ']')
+        for (let i = 0; i < existing.length; i += 1) {
+          const oldButton = existing[i]
+          const oldWrap = oldButton !== null ? oldButton.parentElement : null
+          if (oldWrap !== null && oldWrap.parentNode !== null) oldWrap.parentNode.removeChild(oldWrap)
+        }
+      } catch { /* 忽略 */ }
       // 定位会话行菜单：包含「归档会话」/ Archive session（普通行）或
       // 「取消归档」/ Unarchive session（官方「显示已归档」视图的归档行）
       // 文本的 menuitem。两组锚点互斥出现在同一菜单里，先匹配归档文案、
@@ -689,7 +751,7 @@ function installSessionMenu(ctx) {
       const wrap = anchor.parentElement
       if (wrap === null) return
       let insertAfter = wrap
-      const buildMenuItem = function (mark, iconText, labelText, hintText, danger) {
+      const buildMenuItem = function (mark, iconGlyph, labelText, hintText, danger) {
         const itemWrap = wrap.cloneNode(true)
         const itemButton = itemWrap.querySelector('[role="menuitem"]')
         if (itemButton === null) return null
@@ -702,8 +764,18 @@ function installSessionMenu(ctx) {
         try { itemIcon = itemButton.querySelector('span[class*="itemIcon"]') } catch { itemIcon = null }
         if (itemIcon === null) itemIcon = itemButton.querySelector('span:first-child')
         if (itemIcon !== null) {
-          itemIcon.textContent = iconText
-          itemIcon.style.fontSize = '14px'
+          // 图标走官方 sprite 引用（makeSpriteIconSvg）：清掉从锚点克隆来的
+          // 官方图标，再按官方同构结构装 `<span data-slot>` + `<svg><use>`。
+          // 拿不到 sprite 时退化为无图标（不再用 emoji：与官方观感不一致）。
+          while (itemIcon.firstChild !== null) itemIcon.removeChild(itemIcon.firstChild)
+          const iconSvg = makeSpriteIconSvg(iconGlyph)
+          if (iconSvg !== null) {
+            const iconSlot = document.createElement('span')
+            iconSlot.setAttribute('data-slot', 'contextMenu.icon')
+            iconSlot.style.display = 'contents'
+            iconSlot.appendChild(iconSvg)
+            itemIcon.appendChild(iconSlot)
+          }
         }
         let itemLabel = null
         try { itemLabel = itemButton.querySelector('span[class*="itemLabel"]') } catch { itemLabel = null }
@@ -715,11 +787,20 @@ function installSessionMenu(ctx) {
         }
         // 注入项没有快捷键：摘掉从锚点克隆来的徽标（否则「删除会话」会挂着
         // 官方「归档会话」的 Ctrl+Alt+A，按那个组合键也不会触发本项）。
+        //
+        // **必须排除 itemIcon 及其后代**：官方图标容器本身就是
+        // `span[class*=itemIcon][aria-hidden="true"]`（aria-hidden 是给读屏用的
+        // 装饰标记），按 `span[aria-hidden="true"]` 无差别摘除会把整个图标容器
+        // 连根删掉——图标槽都不在了，装进去的 sprite 图标与历史上的 emoji 一律
+        // 显示不出来（表现为「插件加的菜单项永远没有图标」，且与语言/主题无关）。
         try {
           const badges = itemButton.querySelectorAll('span[aria-hidden="true"]')
           for (let i = 0; i < badges.length; i += 1) {
             const badge = badges[i]
-            if (badge !== null && badge.parentNode !== null) badge.parentNode.removeChild(badge)
+            if (badge === null || badge.parentNode === null) continue
+            if (badge === itemIcon) continue
+            if (itemIcon !== null && typeof itemIcon.contains === 'function' && itemIcon.contains(badge)) continue
+            badge.parentNode.removeChild(badge)
           }
         } catch { /* 忽略 */ }
         itemButton.removeAttribute('aria-keyshortcuts')
@@ -733,7 +814,7 @@ function installSessionMenu(ctx) {
       }
       // 「删除会话」（开关 deleteSessionEnabled；需要能解析到行的会话 id）。
       if (settingsStore.getSnapshot().deleteSessionEnabled === true && sessionId !== null) {
-        const del = buildMenuItem(INJECTED_MARK, '🗑', copy.deleteLabel, copy.deleteHint, true)
+        const del = buildMenuItem(INJECTED_MARK, 'trash', copy.deleteLabel, copy.deleteHint, true)
         if (del !== null) {
           del.button.addEventListener('click', function (event) {
             event.preventDefault()
@@ -759,7 +840,7 @@ function installSessionMenu(ctx) {
         const count = String(ids.length)
         const kind = batchSelectionArchiveKind(ctx)
         if (settingsStore.getSnapshot().deleteSessionEnabled === true) {
-          const batchDelete = buildMenuItem(BATCH_ITEM_MARK, '🗑', copy.batchDeleteLabel.replace('{n}', count), null, true)
+          const batchDelete = buildMenuItem(BATCH_ITEM_MARK, 'trash', copy.batchDeleteLabel.replace('{n}', count), null, true)
           if (batchDelete !== null) {
             batchDelete.button.addEventListener('click', function (event) {
               event.preventDefault()
@@ -777,7 +858,8 @@ function installSessionMenu(ctx) {
           const archiveLabel = unarchiveDirection
             ? copy.batchUnarchiveLabel.replace('{n}', count)
             : copy.batchArchiveLabel.replace('{n}', count)
-          const batchArchive = buildMenuItem(BATCH_ITEM_MARK, '📦', archiveLabel, null, false)
+          // 归档方向用官方 archive glyph，取消归档方向用官方 unarchive glyph。
+          const batchArchive = buildMenuItem(BATCH_ITEM_MARK, unarchiveDirection ? 'unarchive' : 'archive', archiveLabel, null, false)
           if (batchArchive !== null) {
             batchArchive.button.addEventListener('click', function (event) {
               event.preventDefault()
@@ -1144,6 +1226,40 @@ function installSessionMenu(ctx) {
         runPass(document.body)
         runDeletedRowPass(null)
         return
+      }
+      // 有节点被移除 → 可能正是 React 重建菜单内容时摘掉了我们的注入项
+      // （典型触发：hover「在应用中打开」子菜单触发器）。addedNodes 里看不到
+      // 这件事，必须单独按 removedNodes 补一次存活修补；否则注入项消失后
+      // 没有任何事件能把它补回来。
+      let removedAny = false
+      for (const record of records) {
+        const removed = record.removedNodes
+        if (removed === null || removed === undefined || removed.length === 0) continue
+        removedAny = true
+        break
+      }
+      if (removedAny) {
+        // 主路径：从**被修改节点**向上找它所属的菜单。React 重建菜单内容时，
+        // 增删发生在 footer/viewport 内部，record.target 就是那个容器——按它
+        // 向上找最准，也不受「菜单是否挂在 body 上」影响。
+        for (const record of records) {
+          const rawTarget = record.target
+          if (rawTarget === null || rawTarget === undefined || rawTarget.nodeType !== 1) continue
+          const target = rawTarget as unknown as HTMLElement
+          let ownerMenu = null
+          try {
+            if (typeof target.closest === 'function') ownerMenu = target.closest('div[role="menu"]')
+          } catch { ownerMenu = null }
+          if (ownerMenu === null) continue
+          if (ownerMenu.getAttribute(INJECTED_MARK) === null) continue
+          // injectIntoMenu 自带「标记 + 存活」双判定：活着直接返回，死了重注入。
+          injectIntoMenu(ownerMenu, null)
+        }
+        // 兜底：body 下已标记的菜单也补一次（幂等；覆盖菜单整体被替换的形态）。
+        try {
+          const markedMenus = document.body.querySelectorAll('div[role="menu"][' + INJECTED_MARK + ']')
+          for (let i = 0; i < markedMenus.length; i += 1) injectIntoMenu(markedMenus[i], null)
+        } catch { /* 兜底失败不影响主路径 */ }
       }
       for (const record of records) {
         // addedNodes 是 NodeList，不是数组（Array.isArray 恒为 false）。

@@ -19,6 +19,8 @@ const PROMPT_ORDER_MIN = -9999
 const PROMPT_ORDER_MAX = 9999
 // 自动归档默认天数（与主机 schema 默认值一致）。
 const ZH_AUTO_ARCHIVE_DAYS_DEFAULT = 7
+// 自动删除旧归档默认天数（与主机 schema 默认值一致；0 = 关闭）。
+const ZH_AUTO_DELETE_DAYS_DEFAULT = 0
 const PROMPT_SCOPE_PENDING = Object.freeze({
   status: 'unavailable', value: undefined, base: undefined, user: undefined,
   revision: undefined, writable: false, mode: 'memory',

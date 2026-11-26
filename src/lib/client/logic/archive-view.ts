@@ -208,9 +208,24 @@ const ARCHIVE_ICONS = {
       { d: 'M13.0762 1.37207C14.0846 1.37228 14.9021 2.19077 14.9023 3.19922C14.9022 4.20772 14.0847 5.02518 13.0762 5.02539C12.2967 5.02539 11.6325 4.53691 11.3701 3.84961H4.35547C4.79397 4.26458 5.15861 4.7644 5.41699 5.33496L7.10645 9.06738C7.88526 10.7875 9.55104 11.9228 11.4189 12.0371C11.7085 11.4109 12.3411 10.9756 13.0762 10.9756C14.0843 10.9759 14.9023 11.7936 14.9023 12.8018C14.9023 13.81 14.0843 14.6277 13.0762 14.6279C12.2534 14.6279 11.5574 14.0832 11.3291 13.335C8.9868 13.1879 6.89981 11.7612 5.92285 9.60352L4.23242 5.87109C3.67503 4.64033 2.44878 3.84961 1.09766 3.84961V2.54883C1.10665 2.54883 1.11601 2.54975 1.125 2.5498L11.3701 2.54883C11.6326 1.86151 12.2969 1.37207 13.0762 1.37207ZM13.0762 12.2764C12.7858 12.2764 12.5508 12.5114 12.5508 12.8018C12.5508 13.0921 12.7858 13.3281 13.0762 13.3281C13.3664 13.3279 13.6025 13.092 13.6025 12.8018C13.6025 12.5115 13.3664 12.2766 13.0762 12.2764ZM13.0762 2.67285C12.7855 2.67285 12.55 2.90861 12.5498 3.19922C12.5499 3.48987 12.7855 3.72559 13.0762 3.72559C13.3667 3.72538 13.6024 3.48975 13.6025 3.19922C13.6023 2.90874 13.3666 2.67306 13.0762 2.67285Z', fillRule: 'evenodd', clipRule: 'evenodd' },
     ],
   },
+  // 垃圾桶（官方 IconTrashOutlineRegular 的 stroke artwork，删除类项）。
+  trash: {
+    viewBox: '0 0 16 16',
+    strokeWidth: 1,
+    paths: [
+      { d: 'M1.28149 3.88831H14.7187', stroke: true },
+      { d: 'M5.41602 3.88833V2.47962C5.41602 2.29282 5.52492 2.11366 5.71876 1.98157C5.9126 1.84948 6.17551 1.77527 6.44964 1.77527H9.55053C9.82466 1.77527 10.0876 1.84948 10.2814 1.98157C10.4753 2.11366 10.5842 2.29282 10.5842 2.47962V3.88833', stroke: true },
+      { d: 'M2.57349 3.88831L3.19366 13.2943C3.21937 13.5502 3.33952 13.7872 3.53065 13.9593C3.72178 14.1313 3.97016 14.2259 4.22729 14.2246H11.7728C12.0299 14.2259 12.2783 14.1313 12.4694 13.9593C12.6605 13.7872 12.7807 13.5502 12.8064 13.2943L13.4266 3.88831', stroke: true },
+      { d: 'M6.44946 6.98926V11.1238', stroke: true },
+      { d: 'M9.55054 6.98926V11.1238', stroke: true },
+    ],
+  },
 }
 
 // 生成官方图标 SVG 元素（静态 path 数据，非 DOM 克隆）。
+// 条目缺省是 fill 类 artwork（fill: currentColor）；`stroke: true` 的 path 按
+// 官方 stroke artwork 生成（fill: none + stroke: currentColor，条目级
+// strokeWidth，regular 权重为 1）。
 function makeOfficialIcon(name, size) {
   const icon = ARCHIVE_ICONS[name]
   if (icon === undefined) return null
@@ -223,7 +238,13 @@ function makeOfficialIcon(name, size) {
   for (const item of icon.paths) {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
     path.setAttribute('d', item.d)
-    path.setAttribute('fill', 'currentColor')
+    if (item.stroke === true) {
+      path.setAttribute('fill', 'none')
+      path.setAttribute('stroke', 'currentColor')
+      if (icon.strokeWidth !== undefined) path.setAttribute('stroke-width', String(icon.strokeWidth))
+    } else {
+      path.setAttribute('fill', 'currentColor')
+    }
     if (item.fillRule !== undefined) path.setAttribute('fill-rule', item.fillRule)
     if (item.clipRule !== undefined) path.setAttribute('clip-rule', item.clipRule)
     if (item.transform !== undefined) path.setAttribute('transform', item.transform)
@@ -1249,9 +1270,6 @@ function runArchiveView(ctx) {
         if (iconName !== null) {
           const svg = makeOfficialIcon(iconName, 16)
           if (svg !== null) icon.appendChild(svg)
-        } else {
-          icon.textContent = '🗑'
-          icon.style.fontSize = '14px'
         }
         const labelEl = document.createElement('span')
         labelEl.setAttribute('data-dsh-zh-archive-menu-label', '')
@@ -1272,7 +1290,7 @@ function runArchiveView(ctx) {
       try {
         if (typeof settingsStore !== 'undefined' && settingsStore !== null
           && settingsStore.getSnapshot().deleteSessionEnabled === true) {
-          appendItem('menu.delete', null, true, function () { confirmDelete(row) })
+          appendItem('menu.delete', 'trash', true, function () { confirmDelete(row) })
         }
       } catch { /* 设置读取失败时不提供删除项 */ }
       // 会话多选（batchOpsEnabled）：多选非空时追加批量项。提供哪些项由多选
@@ -1303,7 +1321,7 @@ function runArchiveView(ctx) {
             )
           }
           if (settingsStore.getSnapshot().deleteSessionEnabled === true) {
-            appendItem('menu.batchDelete', null, true, function () {
+            appendItem('menu.batchDelete', 'trash', true, function () {
               confirmBatchDelete(batchIds.slice())
             }, { n: batchCount })
           }
