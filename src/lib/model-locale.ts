@@ -10,10 +10,10 @@
 // 「新会话生效、老会话不重新注入」：以会话是否产生过 assistant/message
 // 判定新旧，首次请求时按当前开关状态锁定语言（regime），锁定后开关翻转
 // 不再影响该会话（regime 表为进程内存，随插件实例生命周期存在）。
-// 实现位置：systemPrompt.assemble 返回后原地改写 assembly（与 chinese-prompt
-// 的 section 同步同一模式）。complete persona（minimal）在 assemble 内部
-// 的 waterfall 之后才恢复为唯一 section，因此不能只用 waterfall 监听，
-// 必须等 assemble 完整返回后再改写。
+// 实现位置：systemPrompt.assemble 返回后原地改写 assembly（chinese-prompt 的
+// 提示词注入已改为装配瀑布监听，不走本路径）。complete persona（minimal）在
+// assemble 内部的 waterfall 之后才恢复为唯一 section，因此不能只用 waterfall
+// 监听，必须等 assemble 完整返回后再改写。
 import { getModelState } from './chinese-prompt.js'
 import { ensureAssemblePatch, registerAssembleRewriter } from './assemble-patch.js'
 import { log, warn } from './util.js'

@@ -1,5 +1,5 @@
 // dsh-zh 对 systemPrompt.assemble 的唯一包装层。
-// chinese-prompt（提示词注入）与 model-locale（模型请求中文化）各自通过
+// model-locale（模型请求中文化）与 context-locale（上下文注入中文化）各自通过
 // registerAssembleRewriter 注册「组装后改写器」，由本模块统一包装一次。
 // 历史教训：两个模块各自包装 assemble 时，快速连续热重载的竞态会把旧
 // 包装器留在调用链上（旧实例的 dispose 因链头不再是自己的 wrapper 而

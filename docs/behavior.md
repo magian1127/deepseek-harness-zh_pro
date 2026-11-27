@@ -722,16 +722,19 @@ execute 走官方 web seam，因此自动获得上述后端级联与智谱联动
 
 提示词从设置变更后的后续模型请求开始生效，目标二选一：
 
-- `system`：在 `systemPrompt.assemble` 返回后，把文本作为 `dsh-zh:language` section
-  写入最终 system prompt，不产生可见上下文消息。落点由「排序位置」（`zhPromptOrder`，
-  -9999–9999，默认 **-1001**）决定，与 DSH 官方 `SECTION_ORDERS` 同一坐标系（数值越小
-  越靠前）：默认 `-1001` 排在 `harness:identity`（order -1000，即「你是由 DeepSeek Harness
-  驱动的 AI 代理。」）之前，也就是整段 system prompt 的**最前面**；改成 `100` 则落到
-  `deployment:persona-prefix`（order 0，即「你是一个由 … 模型驱动的编码代理。」）之后、
-  官方政策与工具说明区之前；`-1`～`-1000` 落在 identity 与 persona 之间（等于 -1000 时按
-  「之后」处理）。设置页只在 `system` 目标下显示该输入框；输入在失焦或回车时
+- `system`：在官方 `system-prompt/assemble` 装配瀑布内部，把文本作为 `dsh-zh:language`
+  section 写进最终 system prompt，不产生可见上下文消息。注入必须在官方组装**内部**完成：
+  模型请求的 system/message 由组装过程生成的 `systemUpdates()` 快照决定，组装返回后再改
+  sections 不会进入请求（DSH 0.2.3 起的契约）。落点由「排序位置」（`zhPromptOrder`，
+  -9999–9999，默认 **100**）决定，与 DSH 官方 `SECTION_ORDERS` 同一坐标系（数值越小
+  越靠前）：默认 `100` 落在 `deployment:persona-prefix`（order 0，即「你是一个由 … 模型
+  驱动的编码代理。」）之后、官方政策与工具说明区之前；改成 `-1001` 及更小则越过
+  `harness:identity`（order -1000，即「你是由 DeepSeek Harness 驱动的 AI 代理。」）排到
+  整段 system prompt 的**最前面**；`-1`～`-1000` 落在 identity 与 persona 之间（等于某段
+  order 时按「之后」处理）。设置页只在 `system` 目标下显示该输入框；输入在失焦或回车时
   提交，非整数回弹为当前值，超出范围的数字钳到 -9999 或 9999。落点按「第一个 order 更大的
-  系统自带段之前」计算，未收录的第三方新增段不参与定位。
+  系统自带段之前」计算。`complete: true` persona（如 minimal preset）会在瀑布之后恢复为
+  唯一段并丢弃本段，这种组合请改用 `user` 目标。
 - `user`：不修改 system sections，在 `agent/pre-step` 插入一条来源为
   `deepseek-harness-zh_pro`、form 为 `notice` 的 `user/message`；聊天记录可展开查看全文。
   该消息的 `source.kind` 为 `plugin:deepseek-harness-zh_pro`（DSH 0.1.7 起会话格式 v4
