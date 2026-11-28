@@ -160,6 +160,7 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
 
 - `zhAgentPrompt`：默认代理（standard / ptc / minimal / cordis）在组装后按精确英文原文换成中文；保留 `{{model}}` 等动态占位符，自定义 persona 不匹配则原样保留。
   DSH 0.2.1 起三个 web preset 的 persona 统一为同一句短文本（cordis 旧版长文 persona 已删除）；persona suffix 各 preset 均不再设置，`deployment:persona-suffix` 规则仅覆盖自定义部署显式配置的英文 suffix。
+  DSH 0.2.3 起 persona prefix 追加第二句「You help the user customize DeepSeek Harness itself.」，0.11.5 收录**两句版本**（旧的单句匹配键保留，老会话/旧宿主仍能译）。
   **`{{cwd}}` 例外（DSH 0.2.1 破坏性变更）**：0.2.1 移除了内置 `{{cwd}}` 提示词变量（工作目录改由 working-directory 服务以 user-role context 提供），而 `renderPrompt` 对未注册变量是**抛错**、不是跳过，因此任何写回请求的 `{{cwd}}` 都会让该会话的每个模型请求在准入前失败。本插件据 `assembly.variables` 里有没有 `cwd` 提供者分流：有提供者（老运行时或第三方注册）仍译成中文句并保留占位符；无提供者（0.2.1 常规部署）**清空**该句——原文照抄同样会被拒，而目录信息已由 working-directory 服务的 context 给出，清空不丢信息。匹配键本身仍含 `{{cwd}}`：它是用来认出部署里那句英文原文的，不会被写进 prompt。
   同时替换系统级官方段落：`harness:identity`、`harness:source`、`app:web-surface`、`context:file-reference`、`ui:deliverable-file-references`。
   `harness:source` 与 `app:web-surface` 各有两个变体：0.1.x 形态把检出路径 / GUI URL 内联在段落里（动态值提取后拼入译文），0.2.1 起这些值搬进了同名运行时上下文、段落文本改为「值由 runtime context 给出」——两种形态都能翻译，因此老会话已 admitted 的旧段落不会被漏掉。
@@ -180,7 +181,7 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
     `tools:ptc-only`（PTC 模式的执行器收敛声明，非 PTC 会话为空段、不注入）与
     `tools:sdk`（PTC 模式「Writing code for run_code」段落：TS/Python 两个渲染器的
     固定说明模板分段替换为中文，生成的 SDK 代码声明保留英文，见「已知限制」）。
-    工具名与参数名保持不变。**只覆盖 DSH 系统自己的工具**：段落与工具描述都带官方
+    工具名与参数名保持不变。**以 DSH 官方工具为主**：段落与工具描述都带官方
     特征片段守卫（`TOOL_MATCH` / `TOOL_FLAVOR_DESC_ZH` / `match`）；第三方插件在
     Agent 作用域注册的同名阴影——hashline 替换的 `tool:read`/`tool:edit`、智谱替换的
     `tool:web_search`、以及本插件网络搜索功能注册的 `web_search` 工具壳与
@@ -197,6 +198,10 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
     `tool:subagent` / `tool:subagent_fork` 段落内嵌排序后的可见工具名列表）
     改用**分段替换**：固定句式逐段换中文，随条件变化的段与动态工具名原样保留。
     实测覆盖 standard / ptc / minimal 与 cordis；上述官方段落均按匹配规则换中文；minimal 的 complete persona 仍只含中文 persona。
+    0.11.5 起，默认 profile 中实际出现的少数第三方文本（`codex_*` 三个工具、
+    `mcp__codegraph__codegraph_explore`、`mcp:codegraph` 服务器说明）也按同样的
+    **精确特征片段**收录：上游文本一变就回退英文，不会半中半英，也不会按名盖住
+    同名的第三方阴影。这是对「只覆盖官方工具」的有限放宽，不是普遍承诺。
 
 **2026-10-15 对齐 DSH 0.2.1-alpha.3**：本次升版补齐的官方工具说明包括`create_worktree`、`working_directory`、`terminal_open`/`terminal_send`/`terminal_read`/
 `terminal_signal`/`terminal_close`/`terminal_list`、`session_search`/`session_event_search`/
@@ -209,8 +214,8 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
 `run_code` 两个语言 flavor、`tools:sdk` 的 TS/Python 模板（参数顺序改为
 `description`/`code`，输出条目改写）、`tool:read` 段落（`cat, sed, head, or tail`）、
 `team:policy`（同伴消息句与发送语义改写）、`plan:policy`（首句改为「用户通过
-exit_plan_mode 批准」）。第三方插件注册的工具（如 `dsh-codex-subscription` 的
-`codex_image_generate`）不纳入中文化匹配。
+exit_plan_mode 批准」）。第三方插件注册的工具当时不纳入中文化匹配（0.11.5 起对
+默认 profile 中实际出现的少数条目按精确特征片段收录，见下文）。
 
 **2026-10-18 补全（0.10.2）**：本轮修的是「0.2.1 下仍然漏出英文」的三类残留。
 - 补齐此前完全未收录、一直以英文发给模型的三个官方工具：`lsp`（查询语言服务器做代码
@@ -230,6 +235,25 @@ exit_plan_mode 批准」）。第三方插件注册的工具（如 `dsh-codex-su
   `bash` / `pwsh` / `str_replace_editor` 由 flavor 表（而非 `TOOL_DESC_ZH`）分派，
   按「任一表分派即已覆盖」才算正确。这两处修正后审计脚本报
   「词典未覆盖的官方工具: 0」。
+
+**2026-11-28 补全（0.11.5）：DSH 0.2.3 新增段落与工具**
+
+- **persona**：0.2.3 的 standard / ptc / cordis persona prefix 在旧句后追加
+  「You help the user customize DeepSeek Harness itself.」；0.11.5 收录两句版本，
+  旧的单句匹配键保留（老会话与旧宿主仍能译）。
+- **新增系统段落**：`timeline:planning`（timeline bundle 的规划指导段）、
+  `computer-use:dsh-cua`（CUA 工具指引段；文本与平台相关，收录 **Windows 版**并以
+  首句守卫，其它平台保持原文）、`mcp:codegraph`（codegraph MCP 服务器说明，逐段
+  替换，**保留**服务器尾部动态追加的版本提示）。
+- **新增工具说明**：`timeline_tree` / `timeline_tasks` / `timeline_pull` /
+  `timeline_read` / `timeline_reply`、`cordis_inspect`（0.2.3 取代
+  cordis_inspect_list / cordis_inspect_query）、`enter_worktree` / `exit_worktree`
+  （取代 create_worktree / working_directory）、`cua_run_code`；以及默认 profile
+  里出现的第三方 `codex_image_generate` / `codex_sketch` /
+  `codex_subscription_preferences` 与 `mcp__codegraph__codegraph_explore`。
+- **守卫不变**：所有条目仍要求原文含精确特征片段；上游改版即回退英文，不会半中半英。
+  实测（2026-11-28，0.2.3-alpha.3）：某个标准会话的首条 system/message 里 30 个段落
+  只剩 codegraph 版本提示是英文（动态信息，刻意保留），67 个工具说明全部为中文。
 
 **2026-10-18 修复（0.10.3）：两类「提示词没汉化 / 错乱」的根因**
 

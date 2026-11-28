@@ -27,6 +27,11 @@
 // 段，段落级改写一律被丢弃；此时只中文化工具说明并提示一次。
 import { getModelState } from './chinese-prompt.js'
 import { ensureAssemblePatch, registerAssembleRewriter } from './assemble-patch.js'
+import {
+  CODEGRAPH_SECTION_REPLACEMENTS, CUA_SECTION_MATCH, CUA_SECTION_ZH,
+  PERSONA_PREFIX_023_EN, PERSONA_PREFIX_023_ZH,
+  TIMELINE_PLANNING_MATCH, TIMELINE_PLANNING_ZH, TOOL_DESC_ZH_EXTRA,
+} from './prompt-zh-extra.js'
 import { log, warn } from './util.js'
 import type { HostContext } from './types.js'
 
@@ -68,6 +73,10 @@ const PERSONA_SUFFIX_ZH = '你的工作目录是 {{cwd}}。'
 const PERSONA_PREFIX_ZH: Record<string, string> = {
   [STANDARD_PERSONA_PREFIX_EN]: '你是一个由 {{model}} 模型驱动的编码代理。',
   [MINIMAL_PERSONA_PREFIX_EN]: '你是一位乐于助人的软件工程师助手。',
+  // 0.2.3 起 standard/ptc/cordis 的 persona prefix 追加了第二句
+  // 「You help the user customize DeepSeek Harness itself.」；旧会话/旧宿主仍是
+  // 一句版本，两个键都要保留。
+  [PERSONA_PREFIX_023_EN]: PERSONA_PREFIX_023_ZH,
 }
 
 // ============ 默认工具说明中文版 ============
@@ -184,6 +193,10 @@ const TOOL_DESC_ZH: Record<string, string> = {
   // 与 `PATH`、`pnpm` 保持原文。
   load_workspace_dependencies: '获取随附 Python 与库目录的绝对路径，以及随附 Python 发行版的版本号。当运行时提供了这些路径时，也会包含 Node.js 与 pnpm 的路径。Python 包含 numpy、pandas、python-docx、python-pptx、openpyxl、Pillow、lxml 与 XlsxWriter。除非用户或工作区指令另选了环境，处理 Office 文件请使用这些库。返回 Node.js 与 pnpm 路径时，请用该 Node 可执行文件与 pnpm 脚本路径运行 pnpm。本工具不改变 PATH 或包管理器设置。',
 }
+
+// 0.2.3 起新增/改名的工具说明（timeline 五件套、cordis_inspect、enter/exit_worktree、
+// codex_*、MCP 工具等），文本单独放 prompt-zh-extra.ts，避免本文件继续膨胀。
+Object.assign(TOOL_DESC_ZH, TOOL_DESC_ZH_EXTRA)
 
 // ============ 官方描述特征片段 ============
 // 每个工具名对应 DSH 官方源码里注册描述的特征片段。localizeTools 用
@@ -307,6 +320,26 @@ const TOOL_MATCH: Record<string, string> = {
   // 三个 web preset 在 POSIX 平台挂的就是这个包，此前完全没有译文。
   // 片段取首句逐字（含 `bash -c`），第三方同名 bash 工具不会撞上。
   bash: 'Execute a bash command (`bash -c`) and return its stdout/stderr',
+  // ---- 0.2.3 新增/改名工具（2026-11-28 对齐）----
+  // 来源：packages/experimental/tool-timeline（timeline bundle）。
+  timeline_tree: 'Start and select a new task tree',
+  timeline_tasks: 'Patch tasks in one tree',
+  timeline_pull: 'Check what remains before closing the current goal',
+  timeline_read: 'Read the selected plan, its discussions',
+  timeline_reply: 'Save one reply after addressing a discussion',
+  // 来源：packages/tool/cordis-inspect（0.2.3 起取代 list/query 两个工具）。
+  cordis_inspect: 'Inspect runtime APIs before writing or configuring plugins',
+  // 来源：packages/experimental/tool-worktree（0.2.3 用 enter/exit 取代 create_worktree）。
+  enter_worktree: 'Change this session\'s working directory to a Git worktree',
+  exit_worktree: 'Change this session\'s working directory from the worktree',
+  // 来源：packages/mcp/mcp-client 的 codegraph 服务器说明（第三方，文本漂移时回退英文）。
+  mcp__codegraph__codegraph_explore: 'PRIMARY TOOL — call FIRST',
+  // 来源：第三方 codex-subscription bundle；同样按特征片段守卫。
+  codex_image_generate: 'Generate or edit images when the user asks for image output',
+  codex_sketch: 'Edit the sketch board in this session',
+  codex_subscription_preferences: 'Read the Codex subscription response preferences',
+  // 来源：packages/computer-use/tool-cua。
+  cua_run_code: 'Run a TypeScript program to observe and operate desktop applications',
 }
 
 // ============ 多 flavor 官方工具描述 ============
@@ -955,6 +988,21 @@ const SECTION_ZH: Record<string, SectionRule> = {
   'team:policy': {
     zh: TEAM_POLICY_ZH,
     match: TEAM_POLICY_MATCH,
+  },
+  // ---- 0.2.3 新增段落（2026-11-28 对齐）----
+  // timeline bundle 的规划指导段（standard 会话默认出现）。
+  'timeline:planning': {
+    zh: TIMELINE_PLANNING_ZH,
+    match: TIMELINE_PLANNING_MATCH,
+  },
+  // codegraph MCP 服务器自带说明：逐段替换，保留服务器尾部动态追加的版本提示。
+  'mcp:codegraph': {
+    replacements: CODEGRAPH_SECTION_REPLACEMENTS,
+  },
+  // CUA 工具指导段：平台相关（Windows 版），匹配首句守卫；其它平台保持原文。
+  'computer-use:dsh-cua': {
+    zh: CUA_SECTION_ZH,
+    match: CUA_SECTION_MATCH,
   },
 }
 

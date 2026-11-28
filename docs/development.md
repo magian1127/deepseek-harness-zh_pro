@@ -136,7 +136,10 @@ require(esm) 会撞「not yet fully loaded」且同步重试无效；本模块�
 `src/lib/hot-reload.ts`、
 `src/lib/chinese-prompt.ts`、`src/lib/assemble-patch.ts`（systemPrompt.assemble 的唯一
 包装管线，chinese-prompt 与 model-locale 都以改写器形式注册）、`src/lib/model-locale.ts`
-（模型请求中文化：persona/系统段落/工具说明/指引段落改写）、
+（模型请求中文化：persona/系统段落/工具说明/指引段落改写；匹配键、段落规则与工具名
+映射在这一层组装）、`src/lib/prompt-zh-extra.ts`（0.2.3 新增/变动的长文本：
+两句 persona、`timeline:planning`、CUA 指引段、codegraph 分段替换、新工具说明；
+只放文本，不进匹配逻辑）、
 `src/lib/context-locale.ts`（上下文注入中文化：
 runtime-context 正文（contexts）改写 + 注入消息的 agent/pre-step 行级替换，见下文专节）、
 `src/lib/hot-mount.ts`、`src/lib/trash.ts`（跨平台回收站）、
@@ -863,13 +866,21 @@ WCAG 相对亮度公式算「底色 vs 文字」比值（正文要求 ≥ 4.5）
     必被丢弃：监听器检测到后 warn 一次并跳过段落翻译（工具说明不受影响）。
     守护：`verify-cli.mjs` 的 model-locale stub 会派发 `system-prompt/assemble` 链，
     段落断言因此走真实接缝。
+- **0.11.5 补全（DSH 0.2.3）**：长文本放 `prompt-zh-extra.ts`——两句 persona、
+  `timeline:planning`、`computer-use:dsh-cua`（Windows 版，首句守卫；其它平台保持原文）、
+  `mcp:codegraph`（逐段替换，保留服务器尾部动态版本提示），以及 `timeline_*` 五件套、
+  `cordis_inspect`、`enter_worktree`/`exit_worktree`、`cua_run_code` 与默认 profile
+  中出现的 `codex_*` / `mcp__codegraph__codegraph_explore` 工具说明。第三方条目与官方
+  条目用同一套精确特征片段守卫：上游文本一变即回退英文。守护：`verify-cli.mjs` 的
+  0.2.3 补全块（persona 两句、timeline/CUA/codegraph 段落、五个新工具）。
 - **开关1（zhAgentPrompt）**：`deployment:persona` 通过 `PERSONA_ZH` 精确文本匹配，覆盖默认代理；占位符保留。系统级官方段落继续由 `SYSTEM_SECTION_ZH` 处理。persona 匹配键不得带尾部换行；运行时文本先原样查、失败再 trim。
  - **开关2（zhToolDesc）**：工具说明（`TOOL_DESC_ZH` + `TOOL_FLAVOR_DESC_ZH`）+ 官方工具指引
     段落（`SECTION_ZH`，`tool:*` sections、`tools:ptc-only`、`tools:sdk`、`plan:policy` 与
     `team:policy`——Agent Teams 协作策略，官方包
     `@deepseek-ai/dsh-experimental-tool-agent-team` 注册，2026-09-23 补齐；**包名带
     `experimental` 不等于第三方**，判定看注册者）。
-    **只翻译 DSH 官方内容，两层都带官方特征守卫**：工具描述用 `TOOL_MATCH` 单特征表或
+    **以 DSH 官方内容为主（0.11.5 起含默认 profile 中少量稳定的第三方条目），两层都带
+    特征守卫**：工具描述用 `TOOL_MATCH` 单特征表或
     `TOOL_FLAVOR_DESC_ZH` 多 flavor 表（同一工具名的多种官方描述逐 flavor 匹配：极简模式
     persistent `pwsh`/`bash` 的包默认与 preset 覆盖两套、`str_replace_editor` 默认描述、
     PTC 模式 `run_code` 的 TS/Python 两语言、Agent Teams 与 subagent-control 重名的

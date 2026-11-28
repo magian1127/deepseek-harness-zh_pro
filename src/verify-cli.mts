@@ -1066,6 +1066,12 @@ try {
             { name: 'bash', description: 'Execute a bash command (`bash -c`) and return its stdout/stderr. Each call runs in a fresh shell; pass `workdir` instead of using `cd`. Managed `$DSH_*` variables expose current harness environment facts. Long output is truncated to its tail; the full output is saved to a file whose path is reported when available. Provide `description` before `command` in the arguments. Before any delete or move, verify that the resolved absolute target path is the intended one; never run it against a computed path you have not checked. An unset variable expands to an empty string, so guard variables in such paths with `${VAR:?}`. Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]`, a policy denial: do not retry another way.', parameters: { type: 'object', properties: {} } },
             // 第三方同名 bash（描述不含官方特征）→ 必须保持原样。
             { name: 'bash', description: 'A third-party bash wrapper with its own wording.', parameters: { type: 'object', properties: {} } },
+            // ---- 0.2.3 新增工具（2026-11-28 对齐）----
+            { name: 'timeline_tree', description: 'Start and select a new task tree, or select an existing tree for the goal. Add or edit tasks with timeline_tasks.', parameters: { type: 'object', properties: {} } },
+            { name: 'enter_worktree', description: 'Change this session\'s working directory to a Git worktree of the checkout it is in. An existing worktree named name is entered as it is.', parameters: { type: 'object', properties: {} } },
+            { name: 'cua_run_code', description: 'Run a TypeScript program to observe and operate desktop applications. The global cua object is ready to use.', parameters: { type: 'object', properties: {} } },
+            { name: 'codex_sketch', description: 'Edit the sketch board in this session using native editable strokes and layers. Use for @sketch requests.', parameters: { type: 'object', properties: {} } },
+            { name: 'mcp__codegraph__codegraph_explore', description: 'PRIMARY TOOL — call FIRST for almost any question OR before an edit: how does X work, architecture, a bug.', parameters: { type: 'object', properties: {} } },
           ],
         }
         const transformed = await runLocaleWaterfall(pending, assembleArgs ?? {})
@@ -1291,6 +1297,46 @@ try {
         check(forkOut.includes('将任务委派给继承本对话的子代理'), true, 'subagent_fork 基座段换成中文（分段替换）')
         check(forkOut.includes('你收到的是其结果而非中间步骤。'), true, 'subagent_fork 结果语义段换成中文')
         check(forkOut.includes('This tool starts an independently managed'), false, 'subagent_fork 英文残留清除')
+      }
+      // ---- 0.2.3 新增/变动段落与工具（2026-11-28 对齐）----
+      // persona 第二句、timeline 规划段、CUA 指引段、codegraph 服务器说明，
+      // 以及 timeline/enter_worktree/cua_run_code/codex/codegraph 工具说明。
+      {
+        const extra = await import('./lib/prompt-zh-extra.js')
+        const savedFactory = stubSectionsFactory
+        stubSectionsFactory = function () {
+          return savedFactory().concat([
+            { name: 'deployment:persona-prefix', text: extra.PERSONA_PREFIX_023_EN },
+            { name: 'timeline:planning', text: `${extra.TIMELINE_PLANNING_MATCH}\n\nBefore substantive multi-step work, reuse the goal's tree.` },
+            { name: 'computer-use:dsh-cua', text: `${extra.CUA_SECTION_MATCH}\n\nUse cua to observe and operate native applications.` },
+            {
+              name: 'mcp:codegraph',
+              text: `### MCP server: codegraph\n\n${extra.CODEGRAPH_SECTION_REPLACEMENTS.map((part: { en: string }) => part.en).join('\n\n')}\n\n---\nCodeGraph v1.6.5 is available (this server is running v1.6.4).`,
+            },
+          ])
+        }
+        try {
+          localeAssembly = await localeSystemPrompt.assemble({ agent: newAgent, scope: newAgent })
+          const sectionText = function (name: string) {
+            return localeAssembly.sections.filter((s: { name: string }) => s.name === name)
+              .map((s: { text: string }) => s.text).join('\n---\n')
+          }
+          check(sectionText('deployment:persona-prefix').includes('你帮助用户定制 DeepSeek Harness 本身'), true, '0.2.3 两句话 persona 换成中文')
+          check(sectionText('timeline:planning').includes('用 Timeline 做任务规划'), true, 'timeline:planning 换成中文')
+          check(sectionText('timeline:planning').includes('Task planning with Timeline'), false, 'timeline:planning 英文残留清除')
+          check(sectionText('computer-use:dsh-cua').includes('## 辅助功能树'), true, 'computer-use:dsh-cua 换成中文')
+          check(sectionText('computer-use:dsh-cua').includes('## Accessibility tree'), false, 'CUA 英文标题清除')
+          check(sectionText('mcp:codegraph').includes('SQLite 知识图谱'), true, 'codegraph 服务器说明换成中文')
+          check(sectionText('mcp:codegraph').includes('CodeGraph v1.6.5 is available'), true, 'codegraph 版本提示保留原样（不吞动态信息）')
+          const byName3 = Object.fromEntries(localeAssembly.tools.map(t => [t.name, t]))
+          check(byName3.timeline_tree.description.includes('新的任务树'), true, 'timeline_tree 说明换成中文')
+          check(byName3.enter_worktree.description.includes('Git worktree'), true, 'enter_worktree 说明换成中文')
+          check(byName3.cua_run_code.description.includes('TypeScript 程序'), true, 'cua_run_code 说明换成中文')
+          check(byName3.codex_sketch.description.includes('草图板'), true, 'codex_sketch 说明换成中文')
+          check(byName3.mcp__codegraph__codegraph_explore.description.includes('首选工具'), true, 'codegraph_explore 说明换成中文')
+        } finally {
+          stubSectionsFactory = savedFactory
+        }
       }
       // 老会话：不重新注入
       localeAssembly = await localeSystemPrompt.assemble({ agent: oldAgent, scope: oldAgent })
