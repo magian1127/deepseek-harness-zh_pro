@@ -91,7 +91,7 @@ CLI 和官方 remove 都会删除依赖声明。主机监督器发现本包被�
 | --- | --- |
 | 中文补全、思考显示、统计、归档视图、会话删除/多选、服务监控、卡片展开态 | 设置页 → 浏览器 store → localStorage → DOM/locale/轮询效果 |
 | 代理角色/工具说明/上下文注入中文化、提示词开关/文本/目标、自动归档天数 | 设置页 → `configForms` → 行 config（入口 id `dsh-zh`）→ 主机 volatile 变更 |
-| `system` 注入 | 主机包装 `systemPrompt.assemble`，修改最终 assembly sections |
+| `system` 注入 | 主机用 `systemPrompt.section()` 注册 `dsh-zh:language` 真段（order = 排序位置 + 0.5）；关闭/清空/切目标即 dispose，官方提交退役通知 |
 | `user` 注入 | 主机在 `agent/pre-step` 插入一条 notice `user/message` |
 
 临时热行不注册提示词 settings 或 pre-step 监听，避免自迁移窗口中重复注册。

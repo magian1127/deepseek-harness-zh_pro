@@ -5,7 +5,7 @@
 **语言 / Language:** [中文](README.md) · [English](README.en.md)
 
 <p align="center">
-    <img alt="版本 0.11.3" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.11.3-5965d8">
+    <img alt="版本 0.11.4" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.11.4-5965d8">
   <img alt="界面 中文" src="https://img.shields.io/badge/%E7%95%8C%E9%9D%A2-%E4%B8%AD%E6%96%87-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -191,7 +191,7 @@ npx -y deepseek-harness-zh_pro remove --profile web
 | 代理角色提示中文化、工具说明中文化、上下文注入中文化、网络搜索、搜索后端优先级、每查询返回条数、免 Key 网页读取、读取后端优先级、提示词开关/文本/目标、自动归档天数 | DSH `settings.yaml`，命名空间 `dsh-zh` |
 | Tavily 官方 API 密钥（可选，启用后搜索优先走 Tavily） | DSH 凭据：`${DSH_HOME:-~/.dsh}/.credentials.yaml` 的 `refs:` 段键 `TAVILY_API_KEY`，或同名环境变量（插件每次调用现查，不缓存）；也可直接在设置页「网络搜索」卡片里填写/清除（写同一位置，界面只回脱敏提示） |
 
-插件不上传数据；模型工具注册仅限网络搜索的 `web_search` 工具壳（随开关装卸，见功能表）。除网络搜索与用户显式开启的提示词注入、代理角色提示中文化、工具说明中文化与上下文注入中文化外，其余功能不会修改模型请求；上下文注入中文化替换注入会话历史的官方英文文本，关闭后新注入恢复英文，已写入会话的部分按官方行为保留。
+插件不上传数据；模型工具注册仅限网络搜索的 `web_search` 工具壳（随开关装卸，见功能表）。除网络搜索与用户显式开启的提示词注入、代理角色提示中文化、工具说明中文化与上下文注入中文化外，其余功能不会修改模型请求。其中提示词注入与代理角色提示中文化会把中文写进该会话的 system 提示（经官方准入持久化：关闭开关后已写入的部分按官方行为保留，提示词注入会收到一条退役通知）；上下文注入中文化替换注入会话历史的官方英文文本，关闭后新注入恢复英文，已写入会话的部分同样保留。
 网络搜索开启时，搜索查询会发送到所选后端；接管后端选择时本插件还会把 `web` 行的 `searchProvider` 写成 `dsh-zh-web`（经官方 settings 通道，持久化在 profile patch 里），关闭开关或卸载时还原接管前的值。查询按优先级列表逐个尝试：未安装或不可用的后端直接跳过，失败的后端记降级诊断后继续下一个，因此一次查询最多触达列表里靠前的若干个后端。智谱插件在场且可用时发往智谱（由智谱插件处理），配了凭据 `TAVILY_API_KEY` 时发往 Tavily 官方 API（密钥只进 `Authorization` 请求头），否则发往公开的 DuckDuckGo/Yandex/Bing/Wikipedia 端点；本插件不存储查询与结果，也不把密钥写入配置、日志或诊断快照。
 免 Key 网页读取开启时同理接管 `web` 行的 `fetchProvider`（写成 `dsh-zh-web-fetch`，关闭/卸载还原）。默认顺序里 DeepSeek 云端读取与智谱 webReader 未安装/未配 Key 时自动跳过，免 Key 环按 Exa → Parallel → Keenable 依次尝试（单端点超时 30 秒，限流端点 60 秒内跳过）；抓取请求的 URL 会发给所选后端（免 Key 端点是公共云服务），正文前后包「外部网页内容（不可信）」边界标记，本插件不存储 URL 与正文。
 中文补全只在中文界面生效；其余界面增强在英文界面同样生效。提示词注入仍只由自身开关决定。

@@ -431,22 +431,29 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
 
 - **注入段落点**（`chinese-prompt.ts`）：`zhPromptOrder`（-9999–9999，默认 `100`）与官方
   `SECTION_ORDERS` 同一坐标系。默认 `100` 落在 `deployment:persona-prefix`（order 0）之后、
-  首个工具说明（`TOOL_BASH` 1000）之前。注入通过官方 `system-prompt/assemble` 装配瀑布在
-  **组装内部**完成（`ctx.on('system-prompt/assemble', ...)`）：DSH 0.2.3 起模型请求的
-  system/message 来自 `assemble()` 内部生成的 `systemUpdates()` 快照，在 `assemble()` 返回后
-  再改 `assembly.sections` 不会被采纳——这正是旧实现「初始系统提示」静默失效的根因，也是
-  本模块从「包装 assemble 的返回对象」改为「装配瀑布监听器」的原因。落点用 `order + 0.5`
-  的空隙：官方装配按 order、再按名称排序，+0.5 保证注入段落在目标官方档位之后、下一档
-  之前，且不受名称排序影响。`AssembledSection` 自 DSH 0.2.3 起自带 `order`，
-  `resolveInsertIndex` 优先用它；旧宿主回退「官方段名 → SECTION_ORDERS 键名」表
-  （`OFFICIAL_SECTION_ORDER_NAMES` 与运行时 `getSectionOrder`；MCP 段按 `mcp:` 前缀归到
-  `MCP_SERVERS`）。`complete: true` persona（如 minimal preset）会在瀑布之后恢复为唯一段、
-  丢弃本段；需要在该组合注入时改用 `user` 目标。守护在 `verify-cli.mjs`：除既有排序/负数/
-  钳制/去重断言外，新增断言「注入段必须出现在 `assembly.systemUpdates()` 快照里」，旧实现
-  会在此失败。
+  首个工具说明（`TOOL_BASH` 1000）之前。
+  0.11.4 起注入改为**注册真实段**：`installChinesePrompt` 用
+  `systemPrompt.section({ name: 'dsh-zh:language', order: state.order + 0.5, text: () => state.text,
+  interpolate, retirement })`，由 `reconcilePromptSection` 在 `loader/volatile-update` 与
+  `system-prompt/assemble` 入口收敛（开关/文本/目标/order/interpolate 变化才重挂，关闭即
+  dispose）。理由：DSH 0.2.3 起模型请求的 system/message 来自 `assemble()` 内部生成的
+  `systemUpdates()` 快照，装配返回后再改 `assembly.sections` 不会被采纳（旧实现「初始系统
+  提示」静默失效的根因）；而只把段塞进瀑布也不产生注册语义——它不会随开关关闭被撤回，
+  旧文本会留在会话里直到压缩。注册段天然获得排序、准入与**退役通知**。
+  落点用 `order + 0.5` 的空隙：官方装配按 order、再按名称排序，+0.5 保证注入段落在目标
+  官方档位之后、下一档之前，且不受名称排序影响（官方档位都是整数）；注册段自带 order，
+  因此 0.11.3 的「官方段名 → SECTION_ORDERS 键名」反查表（`OFFICIAL_SECTION_ORDER_NAMES`
+  与 `OFFICIAL_SECTION_ORDER_FALLBACK`）与手工下标 `resolveInsertIndex` 已删除——它们只对
+  「装配返回后 splice」的旧实现有意义。
+  `complete: true` persona（如 minimal preset）在瀑布之后用**瀑布前捕获的副本**恢复为唯一
+  段，注册段同样被丢弃；需要在该组合注入时改用 `user` 目标。
+  守护在 `verify-cli.mjs`：0.2.3 契约 stub 模拟 `section()` 注册/退役、`systemUpdates()`
+  快照与 committed 去重，断言「注入段进入快照」「关闭后变成退役段且只退役一次」「同文本
+  二次装配不重复追加」「complete persona 下被丢弃」；`verify-pairs.cjs` 断言注入实现里仍有
+  `state.order + 0.5`、走 `section()`、且不再有反查表/手工下标。
   负数下界的理由：官方最小 order 是 `HARNESS_IDENTITY`（-1000），下界取 -9999 让用户
-  能把注入段放到 system prompt 绝对最前；`resolveInsertIndex` 本身对 `targetOrder` 无假设，
-  归一化只做钳制，因此放开下界不需要改落点算法。
+  能把注入段放到 system prompt 绝对最前；官方排序对 order 无下界假设，归一化只做钳制，
+  因此放开下界不需要改落点算法。
 
 ## DOM 文本层
 
@@ -841,6 +848,21 @@ WCAG 相对亮度公式算「底色 vs 文字」比值（正文要求 ≥ 4.5）
 - **会话语言锁定（regime）**：`Map<sessionId, 'zh' | 'en'>`。会话首次请求时按当前
   开关状态判定：会话已产生过 `assistant/message` 视为老会话锁 `'en'`，否则锁
   `'zh'`；锁定后开关翻转不再影响该会话。regime 表是进程内存，随插件实例生命周期存在。
+- **两条接缝（0.11.4 起，DSH 0.2.3 契约）**：
+  - 段落级（persona / `SYSTEM_SECTION_ZH` / `SECTION_ZH`）注册
+    `ctx.on('system-prompt/assemble', ...)`，在瀑布**内部**原地改 `entry.text`。
+    必须在这里：`assemble()` 在瀑布之后立刻生成 `systemUpdates()` 快照
+    （`packages/core/system-prompt/src/index.ts` 的 renderedSections → systemUpdates
+    闭包），装配返回后的改写进不了请求。代价是这些译文会随快照写进会话历史，开关
+    打开时老会话出现一次 replacement 更新。
+  - 工具说明（`localizeTools`）留在 `assemble-patch.ts` 的返回后改写里：瀑布拿到的
+    `PromptPresentation` 只有 sections/contexts/variables，而 agent-loop 直接用
+    `assembly.tools` 构造请求（`packages/core/agent-loop/src/agent.ts` 的 buildRequest），
+    这条路径仍然有效。
+  - `complete: true` persona（minimal）用**瀑布前捕获的副本**恢复唯一段，段落级改写
+    必被丢弃：监听器检测到后 warn 一次并跳过段落翻译（工具说明不受影响）。
+    守护：`verify-cli.mjs` 的 model-locale stub 会派发 `system-prompt/assemble` 链，
+    段落断言因此走真实接缝。
 - **开关1（zhAgentPrompt）**：`deployment:persona` 通过 `PERSONA_ZH` 精确文本匹配，覆盖默认代理；占位符保留。系统级官方段落继续由 `SYSTEM_SECTION_ZH` 处理。persona 匹配键不得带尾部换行；运行时文本先原样查、失败再 trim。
  - **开关2（zhToolDesc）**：工具说明（`TOOL_DESC_ZH` + `TOOL_FLAVOR_DESC_ZH`）+ 官方工具指引
     段落（`SECTION_ZH`，`tool:*` sections、`tools:ptc-only`、`tools:sdk`、`plan:policy` 与
@@ -987,10 +1009,13 @@ Host 半边热通道（2026-10-17 重写，逐层实测后的结论；实现见 
 - **`Session.append` 接缝**：包装会话的 `append`，兜住链序之外的注入（典型是比本插件
   更外层注册的 `time-context`、`tmux-context`）。只处理 `user/message` + 官方注入
   kind，其余事件与用户消息原样透传；`.d.ts` 与 `id` 不变。
-- **assemble 改写器（0.1.x 兼容）**：按 context 注册名
-  （`sandbox:policy` / `approval:policy` / `subagent:delegation`）把官方英文正文换成
-  中文（workspace-write 的动态路径用正则提取拼入）。0.2.1 下 `refreshContext` 会覆盖
-  它，仅保留给旧部署与未走 refreshContext 的消费者。
+- **~~assemble 改写器~~（0.11.4 已删除）**：0.2.1 起 agent-loop 每步用
+  `systemPrompt.refreshContext` 按注册 provider 原文重建 `assembly.contexts`，
+  assemble 返回后对 contexts 的任何改写都会被覆盖；0.1.x 已不在 `engines.dsh` 范围，
+  因此 `localizeContexts`、按名分派的 `CONTEXT_ZH` 函数表与那条 `registerAssembleRewriter`
+  注册一并删除。快照正文只经上面的投影层与 append 接缝翻译。相应回归断言在
+  `verify-cli.mjs` 里同步删除，并保留一条「context-locale 不再替换
+  `systemPrompt.assemble`」的反向守卫。
 - **`agent/pre-step` 行级替换**：监听以 `prepend: true` 注册在链头，对 `next()` 返回的
   decision.messages 做整行锚定模板替换（捕获组重建动态值），覆盖链内官方注入
   （`agent-instructions` / `skill-catalog` / `user-approval` / `compact-checkpoint` /

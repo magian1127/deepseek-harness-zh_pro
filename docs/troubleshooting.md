@@ -195,14 +195,17 @@ time-context 三行均为中文。
 
 按下面三步分开原因：
 
-1. `/dsh-zh/api/diagnostics` 看 `localeSync.runs`：连续两次请求之间**不增** → 改写器
-   没进 assemble 链（宿主换了 assemble 实现，或包装被别的插件顶掉）。这种情形下**所有**
-   工具说明都该是英文，而不是「一部分」。
+1. `/dsh-zh/api/diagnostics` 看 `localeSync.runs`：连续两次请求之间**不增** → 工具说明
+   改写器没进 assemble 链（宿主换了 assemble 实现，或包装被别的插件顶掉）。这种情形下
+   **所有**工具说明都该是英文，而不是「一部分」。（0.11.4 起段落级中文化走
+   `system-prompt/assemble` 瀑布，不再经过该计数器：段落类问题直接看下一条。）
 2. `runs` 在增，而 `englishTools` 里列着**官方工具名** → 特征片段过期：
    `description.includes(match)` 不成立，`localizeTools` 整条跳过。按部署包
    （`resources/app.asar` 里的 `@deepseek-ai/dsh-*`）的新描述改 `TOOL_MATCH` 并同步
    译文。第三方工具（`codex_*`、`mcp__*`）按设计始终英文，列在这里不算缺口。
-3. system 段落**整段**英文 → `SECTION_ZH` 的 `match` 守卫过期（上游改了文案）；
+3. system 段落**整段**英文 → `SECTION_ZH` 的 `match` 守卫过期（上游改了文案），或该会话
+   的 persona 是 `complete: true`（minimal preset：官方在装配后恢复唯一段，段落级中文
+   化对该会话不生效，启动时有一条 warn）；
    段落**半中半英** → `replacements` 的 `en` 片段过期（前半句命中、后半句没命中）。
    两者都按部署包新原文改 `match`/`en`，译文同步。
 
@@ -229,7 +232,7 @@ time-context 三行均为中文。
 | 开关禁用 | `configForms` 不可用，或 `dsh-zh` 未进入 configurable provider allowlist；检查客户端依赖、主机日志和提供方注册 |
 | Models 出现内部提供方行 | 目录用于 settings allowlist；中文界面的 DOM 隐藏效果可能未加载，刷新 bundle |
 | 修改后 UI 不刷新 | 检查 store 是否在 scope 通知时返回新的绑定对象引用 |
-| `system` 不注入 | 检查 `systemPrompt` 服务和 assemble 包装警告 |
+| `system` 不注入 | 检查 `systemPrompt` 服务与 `section()` 注册（0.11.4 起注入走注册真段，不再包装 assemble）；`complete: true` persona 会丢弃本段，改用 `user` 目标 |
 | `user` 重复或缺失 | 检查 source/form、会话 surface 去重和 `agent/pre-step` 决策；DSH 0.1.7 起自身消息的 `source.kind` 是 `plugin:deepseek-harness-zh_pro`，去重同时兼容旧 `kind:'plugin'` 形态 |
 | 临时热装时报重复注册 | 确认 `dsh-zh-hot` 没有注册 settings 或 pre-step 监听 |
 
@@ -336,7 +339,8 @@ issue #10 的命中项是 `--dsw-alias-surface-primary`（全 checkout 零定义
 而 persona 与 `tool:cordis` 等段落已正常中文。
 
 **原因**：对 `systemPrompt.assemble` 的包装被改写了两次。历史上 chinese-prompt 与
-model-locale 各自包装 assemble，快速连续热重载（一次构建改写多个 lib 文件）时，
+model-locale 各自包装 assemble（0.11.4 起只有 model-locale 的工具说明仍走该包装），
+快速连续热重载（一次构建改写多个 lib 文件）时，
 旧包装器的 dispose 因链头易主而无法还原，又被新一代包装再包一层；段落在第一次
 改写中已变中文，第二次改写的 `keep()` 在中文上匹配失败，`{keep}` 被清空。
 

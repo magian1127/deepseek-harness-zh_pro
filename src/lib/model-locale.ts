@@ -10,10 +10,21 @@
 // 「新会话生效、老会话不重新注入」：以会话是否产生过 assistant/message
 // 判定新旧，首次请求时按当前开关状态锁定语言（regime），锁定后开关翻转
 // 不再影响该会话（regime 表为进程内存，随插件实例生命周期存在）。
-// 实现位置：systemPrompt.assemble 返回后原地改写 assembly（chinese-prompt 的
-// 提示词注入已改为装配瀑布监听，不走本路径）。complete persona（minimal）在
-// assemble 内部的 waterfall 之后才恢复为唯一 section，因此不能只用 waterfall
-// 监听，必须等 assemble 完整返回后再改写。
+// 实现位置（两条接缝，见 installModelLocale）：
+// - **段落级**（persona / 系统段 / 工具指引段）：必须在官方
+//   `system-prompt/assemble` 装配瀑布**内部**改写。DSH 0.2.3 起发给模型的
+//   system/message 由 `assemble()` 内部依据当时 sections 生成的
+//   `systemUpdates()` 快照决定（packages/core/system-prompt/src/index.ts 的
+//   renderedSections → systemUpdates 闭包）；装配返回后再改 assembly.sections
+//   进不了请求（0.11.3 的「瀑布里 splice」实现同理——只改返回对象也没用）。
+// - **工具说明级**：留在 assemble 包装里。`PromptPresentation` 只有
+//   sections/contexts/variables，瀑布拿不到工具 schema；而 agent-loop 直接用
+//   `assembly.tools` 构造请求（packages/core/agent-loop/src/agent.ts 的
+//   buildRequest），装配返回后的改写仍然生效。
+// 因此段落中文化会写进会话历史（开关打开时老会话出现一次 replacement 更新），
+// 与旧版「只改写请求、不写历史」不同：这是 0.2.3 契约下唯一可行的位置。
+// complete persona（minimal preset）在瀑布之后用**瀑布前捕获的副本**恢复为唯一
+// 段，段落级改写一律被丢弃；此时只中文化工具说明并提示一次。
 import { getModelState } from './chinese-prompt.js'
 import { ensureAssemblePatch, registerAssembleRewriter } from './assemble-patch.js'
 import { log, warn } from './util.js'
@@ -76,6 +87,10 @@ const TOOL_DESC_ZH: Record<string, string> = {
   read: '读取一个 UTF-8 文本文件并返回带行号的内容。',
   write: '创建或完全替换一个 UTF-8 文本文件。',
   edit: '通过替换字面文本编辑现有的 UTF-8 文本文件。',
+  // 0.2.3-alpha.2 起 `tool-fs.applyPatch` 默认取解析后的 `edit` 值（见
+  // docs/upgrade-guide/v0.2.3-alpha.2/apply-patch-default-on），standard/ptc/
+  // cordis 会话因此在 edit 旁多出 apply_patch；此前完全未收录，整段英文。
+  apply_patch: '用一个补丁创建、更新、删除或移动 UTF-8 文本文件；当改动跨多个文件或文件内相隔较远的区域时，优先用它而不是多次 edit 调用。',
   glob: '查找路径与 glob 模式匹配的文件。返回匹配的文件路径——绝不返回目录——包括隐藏与忽略文件（VCS 元数据目录除外）。最多 100 个路径按修改时间顺序返回；结果更大时按修改时间顺序返回前 100 个路径，并说明情况、报告完整排序列表的保存位置。此工具不枚举目录条目。',
   grep: '用 ripgrep 正则表达式搜索文件内容。返回带行号、按文件分组的匹配行。前 250 个匹配内联返回；结果被截断时会报告完整匹配列表的保存位置。对匹配文件使用 read 获取周围上下文。',
   job_output: '读取一个后台任务。流式任务只返回自上次读取以来的输出；最终输出任务在结束后返回其结果。每次响应都以 `[status: ...]` 结尾。除非 `wait: true`，否则读取是非阻塞的，`wait: true` 最多等待到配置的上限。',
@@ -180,6 +195,8 @@ const TOOL_MATCH: Record<string, string> = {
   read: 'Read a UTF-8 text file and return line-numbered content',
   write: 'Create or fully replace a UTF-8 text file',
   edit: 'Edit an existing UTF-8 text file by replacing literal text',
+  // 官方描述首句逐字（packages/fs/tool-fs/src/apply-patch.ts:27）。
+  apply_patch: 'Create, update, delete, or move UTF-8 text files with one patch',
   read_image: 'Read a PNG/JPEG/WebP/GIF file and return the image itself',
   // rc.2 起官方描述明确「文件而非目录，含隐藏与忽略文件」。
   glob: 'Find files, not directories, whose paths match a glob pattern',
@@ -761,6 +778,12 @@ const SECTION_ZH: Record<string, SectionRule> = {
     zh: '用 edit 工具对现有 UTF-8 文本文件做针对性修改。它用 old_string 替换 new_string；默认 old_string 必须恰好出现一次。如果 old_string 出现多次，请提供更具体的 old_string 或设置 replace_all 为 true。先读取文件（默认 fs-observation-policy 要求如此），除非你在本会话刚创建或编辑过它。',
     match: 'unless you just created or edited it in this session',
   },
+  // 0.2.3-alpha.2 起默认出现在 edit 旁（tool-fs.applyPatch 默认跟随 edit）。
+  // 原文：packages/fs/tool-fs/src/apply-patch.ts 的 guidance.text。
+  'tool:apply_patch': {
+    zh: '改动跨多个文件或文件内相隔较远的区域时，优先用 apply_patch 而不是多次 edit 调用。每个补丁块要给足上下文字段，使其只匹配当前文件中的一处。整份补丁会先整体校验（语法、块匹配、文件是否存在），被拒绝的补丁不产生任何改动；一旦开始应用，各操作按顺序执行，遇到第一个失败即停止且不回滚，因此必要时在重试前重新读取受影响的文件。',
+    match: 'Prefer apply_patch over separate edit calls',
+  },
   'tool:glob': {
     zh: '用 glob 工具（而不是 shell 的 find）按路径模式发现文件。不含 "/" 的模式会匹配任意深度的 basename，因此 "*" 匹配树中的每个文件而不是顶层。结果只含文件、绝不包含目录，并包含隐藏与忽略文件：适配的结果按修改时间顺序返回，更大的结果保留按修改时间排序的头部。',
     match: 'Use the glob tool — not shell find —',
@@ -1169,9 +1192,9 @@ function recordLocaleSync(state: ReturnType<typeof getModelState>, assembly: unk
 }
 
 /**
- * 装配「模型请求中文化」：通过共享 assemble 管线在官方组装返回后按会话
- * regime 改写 persona 与工具说明。开关全关时不产生任何改动；失败只 warn
- * 一次，绝不阻断模型请求。
+ * 装配「模型请求中文化」：段落级走装配瀑布（快照在瀑布之后生成）、工具说明级
+ * 走共享 assemble 管线（瀑布拿不到工具 schema）。两者都按会话 regime 门控，
+ * 开关全关时不产生任何改动；失败只 warn 一次，绝不阻断模型请求。
  */
 export function installModelLocale(ctx: HostContext): void {
   const state = getModelState()
@@ -1184,6 +1207,42 @@ export function installModelLocale(ctx: HostContext): void {
     warn('systemPrompt 服务不可用，模型请求中文化功能未启用')
     return
   }
+  // ---- 段落级中文化：必须在 `system-prompt/assemble` 瀑布内部 ----
+  // 瀑布的 context 就是 assemble() 的 AssembleContext（agent/scope/session 都在），
+  // 与旧改写器用 assemble 实参判断 regime 同源：老会话不重新注入。
+  let sectionWarningShown = false
+  let completeWarningShown = false
+  // next() 只在 try 之外调用一次：cordis 对重复 next() 会抛
+  // `next() called multiple times`，把下游错误吞成误报更糟。
+  ctx.on('system-prompt/assemble', function (assembly: any, context: any, next: any) {
+    try {
+      const st = getModelState()
+      if ((st.zhAgentPrompt === true || st.zhToolDesc === true)
+        && regimeOf(context?.agent ?? context?.scope) === 'zh') {
+        const sections = Array.isArray(assembly?.sections) ? assembly.sections : []
+        // complete persona：官方在瀑布之后用**瀑布前捕获的副本**恢复唯一段
+        // （system-prompt/src/index.ts 的 completeSection 快照 + 覆盖），
+        // 段落级改写必被丢弃 → 跳过并只提示一次。
+        if (sections.some(function (section: any) { return section?.complete === true })) {
+          if (!completeWarningShown) {
+            completeWarningShown = true
+            warn('当前会话 persona 为 complete: true（如 minimal preset）：官方会在装配后恢复为唯一段，段落级中文化对该会话不生效（工具说明不受影响）。')
+          }
+        } else {
+          if (st.zhAgentPrompt === true) localizePersona(assembly)
+          if (st.zhAgentPrompt === true) localizeSystemSections(assembly)
+          if (st.zhToolDesc === true) localizeSections(assembly)
+        }
+      }
+    } catch (error) {
+      if (!sectionWarningShown) {
+        sectionWarningShown = true
+        warn(`段落中文化失败，本次请求沿用原内容: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    return next()
+  })
+  // ---- 工具说明级中文化：留在共享 assemble 管线 ----
   // 改写器通过共享的 assemble-patch 管线生效：全插件只包一层 assemble，
   // 热重载竞态不再产生嵌套包装（嵌套曾导致段落被改写两次、动态值清空）。
   let localeWarningShown = false
@@ -1191,7 +1250,8 @@ export function installModelLocale(ctx: HostContext): void {
     return registerAssembleRewriter(function (assembly, assembleArgs) {
       try {
         const st = getModelState()
-        if (st.zhAgentPrompt !== true && st.zhToolDesc !== true) {
+        // 段落级已移到瀑布（见上）；这里只负责工具说明。
+        if (st.zhToolDesc !== true) {
           recordLocaleSync(st, assembly, true)
           return
         }
@@ -1200,15 +1260,12 @@ export function installModelLocale(ctx: HostContext): void {
           recordLocaleSync(st, assembly, true)
           return
         }
-        if (st.zhAgentPrompt === true) localizePersona(assembly)
-        if (st.zhAgentPrompt === true) localizeSystemSections(assembly)
-        if (st.zhToolDesc === true) localizeTools(assembly)
-        if (st.zhToolDesc === true) localizeSections(assembly)
+        localizeTools(assembly)
         recordLocaleSync(st, assembly, false)
       } catch (error) {
         if (!localeWarningShown) {
           localeWarningShown = true
-          warn(`模型请求中文化失败，本次请求沿用原内容: ${error instanceof Error ? error.message : String(error)}`)
+          warn(`工具说明中文化失败，本次请求沿用原内容: ${error instanceof Error ? error.message : String(error)}`)
         }
       }
     })

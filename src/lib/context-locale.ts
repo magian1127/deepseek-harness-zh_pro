@@ -15,6 +15,9 @@
 //    在每次请求前用 systemPrompt.refreshContext 按注册 provider 原文重建
 //    assembly.contexts 再渲染快照，assemble 后对 contexts 的改写会在这一步
 //    被覆盖（0.1.7 时代的 assemble 改写路径已静默失效，属升版回归）。
+//    0.11.4 起该死路径（registerAssembleRewriter + localizeContexts）已删除：
+//    引擎范围是 >=0.2.0-rc.2，0.1.x 部署不再支持，留着只会造成「看起来在改」
+//    的错觉。
 //    快照头行（0.2.2-rc.2 起是 `<system-reminder>` 包装 + "The following
 //    information describes your current session…" 自然语言引导）由投影层硬编码
 //    拼接，官方渲染侧永远是英文：按用户需求在行级规则中翻译它。
@@ -42,7 +45,6 @@
 // 后注册者先执行），因此翻译发生在 next()（下游注入器已插入英文消息）之后、
 // decision.messages append 进会话之前——恰好是唯一的正确插入点。
 import { getModelState } from './chinese-prompt.js'
-import { ensureAssemblePatch, registerAssembleRewriter } from './assemble-patch.js'
 import { regimeOf } from './model-locale.js'
 import { log, warn } from './util.js'
 import type { HostContext } from './types.js'
@@ -80,55 +82,14 @@ const TEAM_MEMBER_RE = /^You are teammate "(.+?)"\.\nYour Team Lead is named "le
 // tool:subagent:depth（深度用尽，动态 toolName 与数字）。
 const DEPTH_RE = /^Delegation depth for `(.+?)`: current (\d+), maximum (\d+), remaining levels 0\. Do not call `(.+?)` at this depth; carry out the work directly\.$/
 
-const CONTEXT_ZH: Record<string, (text: string) => string> = {
-  'sandbox:policy': function (text: string): string {
-    if (text === SANDBOX_READ_ONLY_EN) return SANDBOX_READ_ONLY_ZH
-    if (text === SANDBOX_DANGER_EN) return SANDBOX_DANGER_ZH
-    const m = text.match(SANDBOX_WRITE_RE)
-    if (m !== null) return `当前 DSH 文件策略：workspace-write。DSH 文件沙箱强制执行的任何可用操作都可以修改会话工作区内的文件：${m[1]}。某些平台临时区域可能也可写。`
-    return text
-  },
-  'approval:policy': function (text: string): string {
-    if (text === APPROVAL_NEVER_EN) return APPROVAL_NEVER_ZH
-    if (text === APPROVAL_ASK_EN) return APPROVAL_ASK_ZH
-    return text
-  },
-  'subagent:delegation': function (text: string): string {
-    return text === DELEGATION_EN ? DELEGATION_ZH : text
-  },
-  'working-directory:current': function (text: string): string {
-    const m = text.match(WORKDIR_RE)
-    return m === null ? text : `当前工作目录：${m[1]}。`
-  },
-  'team:identity': function (text: string): string {
-    const lead = text.match(TEAM_LEAD_RE)
-    if (lead !== null) {
-      return `你是名为 "${lead[1]}" 的 Team Lead。\n用 list_agents({}) 查找你的 teammates 及其名字。\n要向另一个 teammate 发消息，使用 send_message({ target: "<teammate 名字>", message: "..." })。`
-    }
-    const member = text.match(TEAM_MEMBER_RE)
-    if (member !== null) {
-      return `你是 teammate "${member[1]}"。\n你的 Team Lead 名为 "lead"。\n要向你的 Team Lead 发消息，使用 send_message({ target: "lead", message: "..." })。\n用 list_agents({}) 查找你的 teammates 及其名字。\n要向另一个 teammate 发消息，使用 send_message({ target: "<teammate 名字>", message: "..." })。`
-    }
-    return text
-  },
-  // 0.2.1 起 harness:source / app:web-surface 的路径与 URL 从段落搬进同名
-  // context（段落文本改为「值由 runtime context 给出」）。
-  'harness:source': function (text: string): string {
-    const m = text.match(HARNESS_SOURCE_CTX_RE)
-    return m === null ? text : `当前 DeepSeek Harness 实现检出目录：${m[1]}。`
-  },
-  'app:web-surface': function (text: string): string {
-    const m = text.match(WEB_SURFACE_CTX_RE)
-    return m === null ? text : `当前 DeepSeek Harness Web GUI URL：${m[1]}。`
-  },
-}
-
 // 快照正文重译使用的「动态 context」规则（多行文本，不进 CONTEXT_ZH_VALUES
 // 逐字表；在 localizeSnapshotBody 按行前缀识别后整段正则重建）。
-// 注：`tool:subagent:depth` / `tool:subagent_fork:depth` 两个 context 名不在
-// CONTEXT_ZH 里按名收录——它们的注册名随 toolName 配置变化，且文本是动态的，
-// 因此统一由下面的 DEPTH_RE 按内容识别（覆盖审计脚本会把这两个名字报为
-// 「未覆盖」，属预期：注册名匹配不是它们的分派方式）。
+// 注：`tool:subagent:depth` / `tool:subagent_fork:depth` 不按注册名收录——
+// 它们的注册名随 toolName 配置变化，且文本是动态的，因此统一由下面的 DEPTH_RE
+// 按内容识别（覆盖审计脚本会把这两个名字报为「未覆盖」，属预期）。
+// 按注册名分派的 `CONTEXT_ZH` 函数表已随 assemble 改写路径一起删除（0.11.4）：
+// 快照正文现在只经 localizeSnapshotBody 的「逐行规则 + 动态规则」翻译（按内容
+// 匹配、不依赖注册名），上面的英文常量与正则同时是那些规则的键与覆盖审计清单。
 const SNAPSHOT_DYNAMIC_CONTEXT_RULES: ReadonlyArray<{ test: RegExp; zh: (m: RegExpMatchArray) => string }> = [
   {
     // team:identity Lead 形态（多行）。
@@ -153,21 +114,6 @@ const SNAPSHOT_DYNAMIC_CONTEXT_RULES: ReadonlyArray<{ test: RegExp; zh: (m: RegE
   },
 ]
 
-/** 按 context 注册名把 assembly.contexts 的官方正文换成中文（未收录的保持原样）。 */
-function localizeContexts(assembly: unknown): void {
-  const contexts = (assembly as { contexts?: unknown[] } | undefined)?.contexts
-  if (!Array.isArray(contexts)) return
-  for (const context of contexts) {
-    if (context === null || typeof context !== 'object') continue
-    const entry = context as { name?: unknown; text?: unknown }
-    if (typeof entry.name !== 'string') continue
-    const rule = CONTEXT_ZH[entry.name]
-    if (rule === undefined) continue
-    if (typeof entry.text !== 'string' || entry.text === '') continue
-    entry.text = rule(entry.text)
-  }
-}
-
 // ============ runtime-context 快照（0.2.1 refreshContext 回归修复） ============
 // DSH 0.2.1 起 agent-loop 在每次请求前用 systemPrompt.refreshContext 按注册
 // provider 的**原文**重建 assembly.contexts，再渲染快照——assemble 后对
@@ -183,7 +129,7 @@ function localizeContexts(assembly: unknown): void {
 // 只替换命中的行）。段落的顺序与注册 order 一致，但翻译按内容匹配、
 // 不依赖顺序，未来插入新 context 也不会错位。
 
-/** 把一条 runtime-context 快照消息的正文按 CONTEXT_ZH 规则重译。
+/** 把一条 runtime-context 快照消息的正文按行级规则与动态规则重译。
  * 按 `\n\n` 分块（各 context 渲染文本之间的分隔；team:identity 等多行
  * context 自身只含单行换行，不会被拆散）：每块先走 LINE_RULES 单行规则
  * 与动态规则（team:identity / delegation depth），再按已知英文键逐字替换；
@@ -308,7 +254,7 @@ function localizeMessage(message: unknown, isSnapshot: boolean): unknown {
   return { ...entry, ...content === entry.content ? {} : { content }, source: nextSource }
 }
 
-/** CONTEXT_ZH 的「英文原文 → 中文」直查表（含 workspace-write 正则之外的
+/** 逐字键的「英文原文 → 中文」直查表（含 workspace-write 正则之外的
  * 全部逐字键；workspace-write 用单独正则处理动态路径）。 */
 const CONTEXT_ZH_VALUES = new Map<string, string>([
   [SANDBOX_READ_ONLY_EN, SANDBOX_READ_ONLY_ZH],
@@ -910,9 +856,9 @@ function ensureAgentLocale(agent: unknown): void {
  *    同时保证落盘历史与投影一致。
  * 3. **pre-step 行级替换**：覆盖链内官方注入（工作区指令帧、skill 目录帧等）。
  *
- * assemble 改写器保留为 0.1.x 兼容路径（0.2.1 的 refreshContext 会用原文重建
- * contexts、覆盖该路径的改写）。开关关闭或 regime 非 zh 时零改动；任何失败只
- * warn 一次并沿用原文，绝不阻断模型请求。
+ * 0.11.4 起不再注册 assemble 改写器：0.2.1 的 refreshContext 会用 provider 原文
+ * 重建 contexts，那条路径改什么都会被覆盖（0.1.x 已不在 engines 范围）。开关
+ * 关闭或 regime 非 zh 时零改动；任何失败只 warn 一次并沿用原文，绝不阻断请求。
  */
 export function installContextLocale(ctx: HostContext): void {
   const state = getModelState()
@@ -926,32 +872,7 @@ export function installContextLocale(ctx: HostContext): void {
     warningShown = true
     warn(`上下文注入中文化失败（${where}），本次沿用原内容: ${error instanceof Error ? error.message : String(error)}`)
   }
-  // 1) runtime-context 正文：0.1.x 兼容路径（assemble 后改写 contexts）。
-  //    DSH 0.2.1 起 agent-loop 每次请求前用 refreshContext 原文重建 contexts，
-  //    本路径的改写会被覆盖；主路径是下面 pre-step 的 localizeSnapshotBody
-  //    （对最终快照消息按段重译）。保留本路径覆盖 0.1.x 部署与未走
-  //    refreshContext 的 assemble 消费者。
-  const systemPrompt = ctx.get('systemPrompt')
-  let assembleReady = false
-  if (systemPrompt === null || systemPrompt === undefined || typeof systemPrompt?.assemble !== 'function') {
-    warn('systemPrompt 服务不可用：runtime-context 正文中文化不可用（注入消息中文化仍可用）')
-  } else {
-    ctx.effect(function () {
-      return registerAssembleRewriter(function (assembly: unknown, assembleArgs: unknown[]) {
-        try {
-          if (getModelState().zhContextInject !== true) return
-          const arg0 = (assembleArgs.length > 0 ? assembleArgs[0] : undefined) as { agent?: unknown; scope?: unknown } | undefined
-          if (regimeOf(arg0?.agent ?? arg0?.scope) !== 'zh') return
-          localizeContexts(assembly)
-        } catch (error) {
-          noteFailure('contexts', error)
-        }
-      })
-    }, 'dsh-zh: context locale rewriter')
-    assembleReady = ensureAssemblePatch(ctx, systemPrompt)
-    if (!assembleReady) warn('systemPrompt.assemble 包装失败：runtime-context 正文中文化不可用')
-  }
-  // 2) 注入消息：agent/pre-step 返回前替换。Cordis waterfall 先注册的监听器在
+  // 1) 注入消息：agent/pre-step 返回前替换。Cordis waterfall 先注册的监听器在
   //    外层；zh_pro 晚于核心注入器注册，默认落在最内层（next() 直达 executor，
   //    官方注入发生在更外层，翻译器套不住——实测 persona（assemble 路径不受影响）
   //    中文而注入消息仍英文即此因）。prepend: true 把监听器移到链头：先执行，

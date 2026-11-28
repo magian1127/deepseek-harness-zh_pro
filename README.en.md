@@ -5,7 +5,7 @@
 **语言 / Language:** [中文](README.md) · [English](README.en.md)
 
 <p align="center">
-    <img alt="Version 0.11.3" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.11.3-5965d8">
+    <img alt="Version 0.11.4" src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.11.4-5965d8">
   <img alt="Interface Chinese" src="https://img.shields.io/badge/%E7%95%8C%E9%9D%A2-%E4%B8%AD%E6%96%87-4aa3ff">
   <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-3b7a57">
 </p>
@@ -217,8 +217,11 @@ Removal is profile-scoped; short-lived profiles stop loading it on their next in
 The plugin uploads no data; its only model-tool registration is the `web_search` tool shell
 of web search (installed and removed with the toggle, see the feature table). Except for web
 search and explicitly enabled prompt injection, agent-role localization, tool-description
-localization, and injected-context localization, no feature modifies model requests;
-injected-context localization replaces DSH-injected official English text before it enters
+localization, and injected-context localization, no feature modifies model requests. Prompt
+injection and agent-role localization write Chinese into that session's system prompt (admitted
+through the official pipeline: closing a toggle keeps text already admitted, and prompt
+injection receives a retirement notice); injected-context localization replaces DSH-injected
+official English text before it enters
 session history (closing the toggle restores English for new injections, while already-written
 history stays as official behavior). When web search is on, search queries are sent to the
 backends in the priority list, tried top to bottom: a backend that is not installed or

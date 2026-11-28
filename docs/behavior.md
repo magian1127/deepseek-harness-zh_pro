@@ -147,7 +147,16 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
 
 两个独立开关（`zhAgentPrompt` 代理角色提示中文化、`zhToolDesc` 工具说明中文化），
 默认关闭，存于 `settings.yaml` 命名空间 `dsh-zh`，与界面语言无关（同「提示词注入」）。
-开启后只改写**发往模型的请求内容**，不写会话历史、不注册模型工具：
+0.11.4 起两条接缝分工不同（实现见 `docs/development.md`）：
+
+- **段落级**（persona、系统段落、`tool:*` 指引段、`tools:*`）在官方
+  `system-prompt/assemble` 装配瀑布内部改写，因此会**写进会话历史**：开关打开时，老会话
+  的 system prompt 会出现一次 replacement 更新，之后新会话直接是中文。0.11.3 及更早的
+  「装配返回后再改」在 DSH 0.2.3 上不进入请求，属于静默失效。
+- **工具说明级**（工具 schema 的 description）仍只改写发往模型的请求，不写历史。
+- 两者都不注册模型工具。**minimal preset（`complete: true` persona）**：官方在装配后用
+  瀑布前捕获的副本恢复唯一段，段落级中文化对该会话不生效（启动时提示一次），工具说明
+  不受影响。
 
 - `zhAgentPrompt`：默认代理（standard / ptc / minimal / cordis）在组装后按精确英文原文换成中文；保留 `{{model}}` 等动态占位符，自定义 persona 不匹配则原样保留。
   DSH 0.2.1 起三个 web preset 的 persona 统一为同一句短文本（cordis 旧版长文 persona 已删除）；persona suffix 各 preset 均不再设置，`deployment:persona-suffix` 规则仅覆盖自定义部署显式配置的英文 suffix。
@@ -156,7 +165,9 @@ confirm 文案自 0.1.2-alpha.2 起由上游本地化，本插件不再覆盖（
   `harness:source` 与 `app:web-surface` 各有两个变体：0.1.x 形态把检出路径 / GUI URL 内联在段落里（动态值提取后拼入译文），0.2.1 起这些值搬进了同名运行时上下文、段落文本改为「值由 runtime context 给出」——两种形态都能翻译，因此老会话已 admitted 的旧段落不会被漏掉。
 - `zhToolDesc`：注入模型请求的工具说明按工具名替换为**DSH 官方工具**的中文版本，同时把
     system prompt 里的官方工具指引段落（`tool:*` sections）替换为中文。段落覆盖：
-    `tool:read` / `tool:write` / `tool:edit` / `tool:glob` / `tool:grep` / `tool:pwsh` /
+    `tool:read` / `tool:write` / `tool:edit` / `tool:apply_patch`（DSH 0.2.3-alpha.2 起
+    `apply_patch` 默认跟随 `edit` 出现在会话里，0.11.4 补上译文）/ `tool:glob` /
+    `tool:grep` / `tool:pwsh` /
     `tool:jobs` / `tool:pty` / `tool:pty-panel` / `tool:schedule` / `tool:lsp` /
     `tool:web_search` / `tool:web_fetch` /
     `tool:goal` / `tool:ralph` / `tool:subagent` / `tool:subagent_fork` / `tool:workflow` /
@@ -722,19 +733,28 @@ execute 走官方 web seam，因此自动获得上述后端级联与智谱联动
 
 提示词从设置变更后的后续模型请求开始生效，目标二选一：
 
-- `system`：在官方 `system-prompt/assemble` 装配瀑布内部，把文本作为 `dsh-zh:language`
-  section 写进最终 system prompt，不产生可见上下文消息。注入必须在官方组装**内部**完成：
-  模型请求的 system/message 由组装过程生成的 `systemUpdates()` 快照决定，组装返回后再改
-  sections 不会进入请求（DSH 0.2.3 起的契约）。落点由「排序位置」（`zhPromptOrder`，
-  -9999–9999，默认 **100**）决定，与 DSH 官方 `SECTION_ORDERS` 同一坐标系（数值越小
-  越靠前）：默认 `100` 落在 `deployment:persona-prefix`（order 0，即「你是一个由 … 模型
-  驱动的编码代理。」）之后、官方政策与工具说明区之前；改成 `-1001` 及更小则越过
-  `harness:identity`（order -1000，即「你是由 DeepSeek Harness 驱动的 AI 代理。」）排到
-  整段 system prompt 的**最前面**；`-1`～`-1000` 落在 identity 与 persona 之间（等于某段
-  order 时按「之后」处理）。设置页只在 `system` 目标下显示该输入框；输入在失焦或回车时
-  提交，非整数回弹为当前值，超出范围的数字钳到 -9999 或 9999。落点按「第一个 order 更大的
-  系统自带段之前」计算。`complete: true` persona（如 minimal preset）会在瀑布之后恢复为
-  唯一段并丢弃本段，这种组合请改用 `user` 目标。
+- `system`：用官方 `systemPrompt.section()` 注册一个**真实段** `dsh-zh:language`，文本
+  写进最终 system prompt，不产生可见上下文消息。必须在官方注册表里做：模型请求的
+  system/message 由 `assemble()` 内部生成的 `systemUpdates()` 快照决定，装配返回后再改
+  sections 不会进入请求（DSH 0.2.3 起的契约；0.11.4 之前「瀑布里 splice」的写法同样
+  无效，因为瀑布内的临时段不产生注册与退役语义）。
+  落点由「排序位置」（`zhPromptOrder`，-9999–9999，默认 **100**）决定，与 DSH 官方
+  `SECTION_ORDERS` 同一坐标系（数值越小越靠前）：实际注册的 order 是「排序位置 + 0.5」，
+  因此稳定落在该档位之后、下一档之前。默认 `100` 落在 `deployment:persona-prefix`
+  （order 0，即「你是一个由 … 模型驱动的编码代理。」）之后、官方政策与工具说明区之前；
+  改成 `-1001` 及更小则越过 `harness:identity`（order -1000，即「你是由 DeepSeek
+  Harness 驱动的 AI 代理。」）排到整段 system prompt 的**最前面**；`-1`～`-1000` 落在
+  identity 与 persona 之间（等于某段 order 时按「之后」处理）。设置页只在 `system`
+  目标下显示该输入框；输入在失焦或回车时提交，非整数回弹为当前值，超出范围的数字钳到
+  -9999 或 9999。
+  **撤回语义（0.11.4 起）**：关闭开关、清空文本或切到 `user` 目标时注册被释放，下一个
+  模型步骤起该段不再出现在 system prompt 中，官方随即提交一条退役通知（此后不再重复）；
+  注入过的文本因此不会像 0.11.3 那样留在会话里直到压缩。若只看得到设置保存、等不到
+  `loader/volatile-update`，最迟在**下一步装配**时收敛。
+  `{{…}}` 占位符：除 `{{model}}` 外的任何 `{{name}}` 都会把整段降级为原样不插值
+  （保守策略，避免未注册变量让请求在准入前抛错）。
+  `complete: true` persona（如 minimal preset）在装配后恢复为唯一段并丢弃本段，这种组合
+  请改用 `user` 目标。
 - `user`：不修改 system sections，在 `agent/pre-step` 插入一条来源为
   `deepseek-harness-zh_pro`、form 为 `notice` 的 `user/message`；聊天记录可展开查看全文。
   该消息的 `source.kind` 为 `plugin:deepseek-harness-zh_pro`（DSH 0.1.7 起会话格式 v4

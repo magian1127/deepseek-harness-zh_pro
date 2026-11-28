@@ -222,11 +222,15 @@ try {
   for (const key of Object.keys(configState))
     configRef[key] = { get: function () { return configState[key] } }
   configRef.zhPromptOrder = { get: function () { return configState.zhPromptOrder } }
-  // 模拟 DSH 0.2.3 的 systemPrompt 契约：sections 带 order；`assemble` 内部先
-  // 派发 `system-prompt/assemble` 装配瀑布，再按 order/名称排序，并在**此时刻**
-  // 生成 `systemUpdates()` 快照——agent-loop 提交给模型的 system/message 就来自
-  // 这个快照。旧实现（装配返回后改 assembly.sections）因此进不了模型请求；
-  // 本测试据此守住「注入段必须出现在 systemUpdates 里」。
+  // 模拟 DSH 0.2.3 的 systemPrompt 契约（packages/core/system-prompt/src/index.ts）：
+  // - `section()` 注册真实段，装配时同名取**最后一个存活注册**；
+  // - `assemble` 先收集注册段，再派发 `system-prompt/assemble` 瀑布，随后按
+  //   order、同 order 按名称排序；`complete: true` 的段在瀑布之后用**瀑布前
+  //   捕获的副本**恢复为唯一段；
+  // - `systemUpdates()` 快照在返回前定格（返回后改 sections 进不了快照），并按
+  //   committed 状态去重（官方 admission 只提交变化的段）；
+  // - 曾准入、且已无存活注册的段变成退役段（带 retirement 文本）。
+  // 0.11.4 的注入实现用 `section()` 注册真段，因此这些语义都必须被守住。
   const BASE_SECTIONS = [
     { name: 'harness:identity', order: -1000, text: 'identity' },
     { name: 'deployment:persona-prefix', order: 0, text: 'persona' },
@@ -237,40 +241,113 @@ try {
   function compareSectionNames(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0 }
   const handlers = {}
   const effects = []
-  const originalAssemble = async function () {
-    let assembly = {
-      sections: BASE_SECTIONS.map(function (section) { return { ...section } }),
+  /** 按 cordis waterfall 顺序执行某事件的监听器（prepend 在前、各自逆序；其余按注册顺序）。 */
+  function makeWaterfallRunner(eventHandlers) {
+    return async function (assembly, context) {
+      const all = eventHandlers['system-prompt/assemble'] ?? []
+      const chain = all.filter(function (entry) { return entry.prepend }).reverse().map(function (entry) { return entry.handler })
+        .concat(all.filter(function (entry) { return !entry.prepend }).map(function (entry) { return entry.handler }))
+      const call = async function (index, current) {
+        if (index >= chain.length) return current
+        return chain[index](current, context, function () { return call(index + 1, current) })
+      }
+      return call(0, assembly)
+    }
+  }
+  const runHostWaterfall = makeWaterfallRunner(handlers)
+  /** 注册段（插入序；同名取最后一个 live）。 */
+  const registeredSections: Array<{ def: any; live: boolean }> = []
+  /** 已准入的段名（真实 Session 的 committed sections）。 */
+  const admittedSections = new Set<string>()
+  /** 最近一次被销毁的注册（提供退役态文本）。 */
+  const lastDisposed = new Map<string, any>()
+  /** 已提交的 section 状态（systemUpdates 的去重基准）。 */
+  const committedSectionState = new Map<string, { text: string; order: number; retired: boolean }>()
+  const originalAssemble = async function (assembleArgs?: any) {
+    const byName = new Map<string, any>()
+    for (const entry of registeredSections) if (entry.live) byName.set(entry.def.name, entry.def)
+    const collected: any[] = BASE_SECTIONS.map(function (section: any) { return { ...section } })
+    for (const def of byName.values()) {
+      const section: any = {
+        name: def.name, order: def.order,
+        text: typeof def.text === 'function' ? def.text({}) : def.text,
+      }
+      if (def.interpolate === false) section.interpolate = false
+      if (def.complete === true) section.complete = true
+      collected.push(section)
+    }
+    // 退役：曾准入 + 已无存活注册（官方 retained/retirement 语义）。
+    for (const [name, def] of lastDisposed) {
+      if (byName.has(name) || !admittedSections.has(name)) continue
+      collected.push({
+        name, order: def.order, retire: true, interpolate: false,
+        text: def.retirement ?? `The earlier instructions from ${name} no longer apply.`,
+      })
+    }
+    // complete 段在瀑布**之前**就被克隆（官方 completeSection 快照），
+    // 因此瀑布内的任何改写都不会进入最终提示。
+    const completeCopy = collected.filter(function (section: any) { return section.complete === true })
+      .map(function (section: any) { return { ...section } })[0]
+    // 真实 assembly 总带 variables（renderPrompt 的插值依据）。
+    const pending = {
+      sections: collected,
       contexts: [],
-      // 真实 assembly 总带 variables（renderPrompt 的插值依据）。chinese-prompt
-      // 的 {{…}} 防护要读它判断「文本里有没有解析不了的占位符」，因此 stub 必须
-      // 提供同一形状的字段；只给 model，cwd 不可解析，正是 0.2.1 的常规形状。
       variables: { model: 'deepseek-v4.1-flash' },
     }
-    // 按 cordis waterfall 顺序执行 system-prompt/assemble 监听（prepend 在前，
-    // 其余按注册顺序；先执行者为外层，next() 携带内层改动）。
-    const all = handlers['system-prompt/assemble'] ?? []
-    const chain = all.filter(function (entry) { return entry.prepend }).reverse().map(function (entry) { return entry.handler })
-      .concat(all.filter(function (entry) { return !entry.prepend }).map(function (entry) { return entry.handler }))
-    const call = async function (index, current) {
-      if (index >= chain.length) return current
-      return chain[index](current, {}, function () { return call(index + 1, current) })
-    }
-    assembly = await call(0, assembly)
-    // 官方 assemble 最后按 order、再按名称排序（DSH README 的两级排序）。
-    const sections = [...assembly.sections].sort(function (a, b) { return (a.order - b.order) || compareSectionNames(a.name, b.name) })
-    const rendered = sections.map(function (section) {
-      return { name: section.name, order: section.order, text: section.text, ...(section.interpolate === false ? { interpolate: false } : {}) }
+    const transformed = await runHostWaterfall(pending, assembleArgs ?? {})
+    let sections = [...transformed.sections].sort(function (a: any, b: any) {
+      return (a.order - b.order) || compareSectionNames(a.name, b.name)
+    })
+    if (completeCopy !== undefined) sections = [completeCopy]
+    const rendered = sections.map(function (section: any) {
+      return {
+        name: section.name, order: section.order, text: section.text,
+        ...(section.interpolate === false ? { interpolate: false } : {}),
+        ...(section.retire === true ? { retire: true } : {}),
+      }
     })
     return {
-      ...assembly,
+      ...transformed,
       sections,
       // 快照在此刻定格：之后对返回对象 sections 的任何改写都不会进入这里。
       systemUpdates: function () {
-        return [{ type: 'system-message', sections: rendered.map(function (section) { return { ...section } }) }]
+        const updates: any[] = []
+        const next = new Map<string, { text: string; order: number; retired: boolean }>()
+        for (const section of rendered) {
+          const retired = section.retire === true
+          next.set(section.name, { text: section.text, order: section.order, retired })
+          const previous = committedSectionState.get(section.name)
+          if (previous !== undefined && previous.text === section.text
+            && previous.order === section.order && previous.retired === retired) continue
+          updates.push({ ...section })
+        }
+        for (const [name, state] of next) {
+          committedSectionState.set(name, state)
+          if (state.retired) admittedSections.delete(name)
+          else admittedSections.add(name)
+        }
+        return [{ type: 'system-message', sections: updates }]
       },
     }
   }
-  const systemPrompt = { assemble: originalAssemble }
+  const systemPrompt = {
+    assemble: originalAssemble,
+    // 官方 section() 由 ctx.effect 拥有，disposer 随 fiber 释放；这里同样
+    // 把 disposer 放进 effects，卸载断言才有意义。
+    section: function (def: any) {
+      const entry = { def, live: true }
+      registeredSections.push(entry)
+      let disposed = false
+      const dispose = function () {
+        if (disposed) return
+        disposed = true
+        entry.live = false
+        if (def.retirement !== undefined) lastDisposed.set(def.name, def)
+      }
+      effects.push(dispose)
+      return dispose
+    },
+  }
   const hostCtx = {
     fiber: { entry: { options: { id: 'dsh-zh' } } },
     loader: { entries: function () { return [] } },
@@ -416,9 +493,11 @@ try {
   for (const entry of handlers['loader/volatile-update'] ?? [])
     entry.handler([])
   assembly = await systemPrompt.assemble({})
-  check(assembly.sections.map(function (section) { return section.name }),
+  // 切到 user 目标会 dispose 注入段的注册：若该段曾被准入，官方在下一装配里
+  // 以 `retire: true` 的退役段出现（不计入「活跃段」），一次之后不再出现。
+  check(assembly.sections.filter(function (section) { return section.retire !== true }).map(function (section) { return section.name }),
     ['harness:identity', 'deployment:persona-prefix', 'tool:read', 'ui:deliverable-file-references', 'deployment:persona-suffix'],
-    'user 目标不写 system prompt（注入段被移除，其余段落原样）')
+    'user 目标不写 system prompt（注入段已撤回，其余段落原样）')
   const claimed = { role: 'user', id: 'claimed', content: [{ type: 'text', text: '问题' }] }
     const dispatchPreStep = makePreStepDispatcher(handlers)
     const decision = await dispatchPreStep({
@@ -455,6 +534,66 @@ try {
     signal: { throwIfAborted: function () {} },
   }, async function () { return { kind: 'enter', messages: [claimed, currentOwn] } })
   check(currentDecision.messages.length, 2, '当前 kind 形态的自身消息被识别、不重复插入')
+
+  // ---- 撤回语义（0.11.4）：注册真段 → 去重 → 关闭即退役 ----
+  {
+    Object.assign(configState, { zhPrompt: true, zhPromptTarget: 'system', zhPromptText: '中文优先' })
+    for (const entry of handlers['loader/volatile-update'] ?? []) entry.handler([])
+    const active = await systemPrompt.assemble({})
+    check(active.sections.some(function (section: any) {
+      return section.name === 'dsh-zh:language' && section.retire !== true && section.text === '中文优先'
+    }), true, '开启后注入段是活跃的注册段，文本现读配置')
+    check(active.systemUpdates().flatMap(function (update: any) { return update.sections })
+      .filter(function (section: any) { return section.name === 'dsh-zh:language' }).length, 1,
+      '首次装配把注入段提交进 systemUpdates')
+    // 同文本二次装配：官方按 committed 状态去重，不重复追加。
+    const again = await systemPrompt.assemble({})
+    check(again.systemUpdates().flatMap(function (update: any) { return update.sections })
+      .filter(function (section: any) { return section.name === 'dsh-zh:language' }).length, 0,
+      '同文本二次装配不重复追加（admission 去重）')
+    // 关闭开关：volatile 快速路径当场 dispose 注册 → 官方在下一装配提交退役通知。
+    configState.zhPrompt = false
+    for (const entry of handlers['loader/volatile-update'] ?? []) entry.handler([])
+    const retiredAssembly = await systemPrompt.assemble({})
+    const retiredSection = retiredAssembly.sections.find(function (section: any) { return section.name === 'dsh-zh:language' })
+    check(retiredSection?.retire, true, '关闭开关后注入段变成退役段（不再作为活跃段进入提示）')
+    check(retiredAssembly.sections.some(function (section: any) {
+      return section.name === 'dsh-zh:language' && section.retire !== true
+    }), false, '退役后不再有活跃注入段')
+    const retireUpdates = retiredAssembly.systemUpdates().flatMap(function (update: any) { return update.sections })
+    check(retireUpdates.some(function (section: any) {
+      return section.name === 'dsh-zh:language' && section.retire === true
+        && typeof section.text === 'string' && section.text.includes('不再适用')
+    }), true, '退役通知进入 systemUpdates（真正提交给模型），文本非空')
+    // 退役只提交一次：之后该段彻底消失（与官方 retained 清理一致）。
+    const settledAssembly = await systemPrompt.assemble({})
+    check(settledAssembly.sections.some(function (section: any) { return section.name === 'dsh-zh:language' }), false,
+      '退役一次之后该段彻底消失')
+    check(settledAssembly.systemUpdates().flatMap(function (update: any) { return update.sections })
+      .some(function (section: any) { return section.name === 'dsh-zh:language' }), false,
+      '退役后不再重复提交更新')
+    Object.assign(configState, { zhPrompt: true, zhPromptText: '始终使用中文' })
+    for (const entry of handlers['loader/volatile-update'] ?? []) entry.handler([])
+    await systemPrompt.assemble({})
+  }
+
+  // ---- complete persona（minimal preset）：本段被官方丢弃 ----
+  {
+    const persona = BASE_SECTIONS.find(function (section: any) { return section.name === 'deployment:persona-prefix' }) as any
+    persona.complete = true
+    Object.assign(configState, { zhPrompt: true, zhPromptTarget: 'system', zhPromptText: '始终使用中文' })
+    for (const entry of handlers['loader/volatile-update'] ?? []) entry.handler([])
+    const completeAssembly = await systemPrompt.assemble({})
+    check(completeAssembly.sections.length, 1, 'complete persona 恢复为唯一段')
+    check(completeAssembly.sections.some(function (section: any) { return section.name === 'dsh-zh:language' }), false,
+      'complete persona 下注入段被丢弃（官方 complete 语义，文档要求改用 user 目标）')
+    check(completeAssembly.systemUpdates().flatMap(function (update: any) { return update.sections })
+      .some(function (section: any) { return section.name === 'dsh-zh:language' }), false,
+      'complete persona 下注入段也不会进入 systemUpdates')
+    persona.complete = false
+    for (const entry of handlers['loader/volatile-update'] ?? []) entry.handler([])
+    await systemPrompt.assemble({})
+  }
   for (let i = effects.length - 1; i >= 0; i -= 1) await effects[i]()
   check(systemPrompt.assemble, originalAssemble, '卸载后恢复 systemPrompt.assemble')
   check((handlers['loader/volatile-update'] ?? []).length, 0, '卸载后取消 volatile 监听')
@@ -851,8 +990,13 @@ try {
             { name: 'tool:subagent', text: 'Start independent delegations with `subagent` or `subagent_fork` together in one assistant message and continue useful work while they run. When only waiting for their results remains, end your turn instead of sleeping or polling; the next result starts a new turn. Collect the subagent results required to complete the task before giving the user a final answer.\n\nBash, formatters, code generators, and scripts can overwrite concurrent edits without conflict detection; coordinate their changes explicitly. The agent integrating the work must review the final diff and run relevant tests.' },
         ]
       }
-      const localeOriginal = async function () {
-        return {
+      const localeHandlers = {}
+      const runLocaleWaterfall = makeWaterfallRunner(localeHandlers)
+      const localeOriginal = async function (assembleArgs?: any) {
+        // 0.11.4 起段落级中文化在 `system-prompt/assemble` 瀑布内部完成
+        // （systemUpdates 快照在瀑布之后生成），因此 stub 必须派发这条链；
+        // 工具说明仍由 assemble 包装在返回后改写（瀑布拿不到 tools）。
+        const pending: any = {
           sections: stubSectionsFactory(),
           // renderPrompt 用 assembly.variables 判「未注册变量」，persona suffix
           // 的 {{cwd}} 分支按它分流，因此 stub 必须提供同一形状的字段。
@@ -924,6 +1068,8 @@ try {
             { name: 'bash', description: 'A third-party bash wrapper with its own wording.', parameters: { type: 'object', properties: {} } },
           ],
         }
+        const transformed = await runLocaleWaterfall(pending, assembleArgs ?? {})
+        return { ...pending, ...transformed }
       }
     const localeSystemPrompt = { assemble: localeOriginal }
     const localeEffects = []
@@ -935,7 +1081,10 @@ try {
         if (name === 'systemPrompt') return localeSystemPrompt
         return undefined
       },
-      on: function () {},
+      on: function (name, handler, options) {
+        if (!Array.isArray(localeHandlers[name])) localeHandlers[name] = []
+        localeHandlers[name].push({ handler, prepend: options?.prepend === true })
+      },
       effect: function (setup) {
         const dispose = setup()
         if (typeof dispose === 'function') localeEffects.push(dispose)
@@ -1471,30 +1620,16 @@ try {
         }
         const zhAgent = { session: { id: 'ctx-zh', events: [] } }
         const enAgent = { session: { id: 'ctx-old', events: [{ type: 'assistant/message' }] } }
-        // 开关关：contexts 与注入消息都零改动
-        let ctxAssembly = await ctxSystemPrompt.assemble({ agent: zhAgent, scope: zhAgent })
-        check(ctxAssembly.contexts[0].text.includes('danger-full-access. The DSH file sandbox'), true, '开关关时 contexts 保持英文')
         const ctxDispatch = makePreStepDispatcher(ctxHandlers)
+        // 0.11.4 起 runtime-context 正文只经投影层与 append 接缝翻译：0.2.1 的
+        // agent-loop 会用 refreshContext 按 provider 原文重建 contexts，assemble
+        // 后改 contexts 必被覆盖，因此那条分支与其断言已删除。这里只断言
+        // 「assemble 不再被 context-locale 包装」（见下方卸载检查）。
         let ctxDecision = await ctxDispatch({ agent: zhAgent, signal: { throwIfAborted: function () {} } }, async function () { return { kind: 'enter', messages: [] } })
         check(ctxDecision.messages.length, 1, '开关关时 fake 注入器仍追加消息（zh_pro 零改动）')
         check(ctxDecision.messages[0], fakeInjectorMsg, '开关关时注入消息保持英文原样')
-        // 开关开 + 新会话：contexts 正文换中文，未知 context 保留
         ctxState.zhContextInject = true
-        ctxAssembly = await ctxSystemPrompt.assemble({ agent: zhAgent, scope: zhAgent })
-        check(ctxAssembly.contexts[0].text, '当前 DSH 文件策略：danger-full-access。DSH 文件沙箱不限制可用操作对文件的修改。', '文件策略 context 换成中文')
-        check(ctxAssembly.contexts[1].text, '本会话已禁用审批提示：需要审批的操作会被自动拒绝——不要请求沙箱升级（不要设置 `sandbox_permissions`）。', '审批策略 context 换成中文')
-        check(ctxAssembly.contexts[2].text, 'Some future context stays English.', '未收录 context 保持英文')
-          // workspace-write 动态路径保留（切工厂不换 assemble，包装链不动）
-          ctxContextsFactory = function () {
-            return [{ name: 'sandbox:policy', text: 'Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: "D:\\ws". Some platform temporary areas may also be writable.' }]
-          }
-          ctxAssembly = await ctxSystemPrompt.assemble({ agent: zhAgent, scope: zhAgent })
-          check(ctxAssembly.contexts[0].text.includes('当前 DSH 文件策略：workspace-write。'), true, 'workspace-write context 换成中文')
-          check(ctxAssembly.contexts[0].text.includes('"D:\\ws"'), true, 'workspace-write 保留动态工作区路径')
-          ctxContextsFactory = ctxDefaultContexts
-          // 老会话：contexts 不改写（仍走同一包装链）
-          ctxAssembly = await ctxSystemPrompt.assemble({ agent: enAgent, scope: enAgent })
-          check(ctxAssembly.contexts[0].text.includes('The DSH file sandbox'), true, '老会话 contexts 不改写')
+        check(ctxSystemPrompt.assemble, ctxOriginal, 'context-locale 不再包装 systemPrompt.assemble')
         // pre-step：工作区指令帧 / skill 目录帧 / 审批切换 / budget marker 换中文
         const wsFrame = ['<system-reminder>',
           'The following workspace instructions may be relevant to your work. Use them as guidance when applicable. More specific instructions take precedence over broader ones. They do not override system, developer, or direct user instructions.',
@@ -1906,9 +2041,10 @@ try {
           projState.zhContextInject = prevInject
           projState.ready = prevReady
         }
-        // 卸载后恢复原 assemble
+        // 卸载清理：context-locale 已不再包装 assemble（0.11.4），检查仍然成立，
+        // 用来守住「将来若有人把 assemble 改写加回来」的反向回归。
         for (let i = ctxEffects.length - 1; i >= 0; i -= 1) await ctxEffects[i]()
-        check(ctxSystemPrompt.assemble, ctxOriginal, '卸载后恢复 context-locale 的 assemble')
+        check(ctxSystemPrompt.assemble, ctxOriginal, 'context-locale 全程未替换 systemPrompt.assemble')
         // 还原共享状态
         ctxState.ready = false
         ctxState.zhContextInject = false

@@ -969,12 +969,16 @@ check(locale.lookup('dsh-zh-settings', 'promptOrderInvalid'), '请输入 -9999�
   check(/DEFAULT_PROMPT_ORDER\s*=\s*100/.test(clientSource), true, '客户端排序位置默认值与主机一致（100）')
   check(/PROMPT_ORDER_MIN\s*=\s*-9999/.test(clientSource), true, '客户端排序位置下界与主机一致（-9999）')
   check(/PROMPT_ORDER_MAX\s*=\s*9999/.test(clientSource), true, '客户端排序位置上界与主机一致（9999）')
-  // 默认 100 必须落在 persona（官方 order 0）之后、首个工具说明（1000）之前。
+  // 落点机制（0.11.4）：注入段是 `systemPrompt.section()` 注册的**真实段**，
+  // order 取「排序位置 + 0.5」。官方装配按 order 升序、同 order 再按名称，
+  // 因此 +0.5 稳定落在该官方档位之后、下一档之前；0.11.3 的「官方段名 →
+  // SECTION_ORDERS 键名」反查表与 `resolveInsertIndex` 已删除（注册段自带 order）。
   const hostPrompt = fs.readFileSync(__dirname + '/lib/chinese-prompt.js', 'utf8')
-  check(/HARNESS_IDENTITY:\s*-1000\b/.test(hostPrompt), true, '回退表里 harness:identity 的 order 为 -1000')
-  check(/DEPLOYMENT_PERSONA_PREFIX:\s*0\b/.test(hostPrompt), true, '回退表里 persona-prefix 的 order 为 0')
-  check(/TOOL_BASH:\s*1000\b/.test(hostPrompt), true, '回退表里首个工具说明的 order 为 1000')
-  check(100 > 0 && 100 < 1000, true, '默认排序位置 100 落在 persona（0）之后、工具说明区（≥1000）之前')
+  check(/state\.order \+ 0\.5/.test(hostPrompt), true, '注入段 order 取「排序位置 + 0.5」（落在该档位之后）')
+  check(/service\.section\(/.test(hostPrompt), true, '注入走 systemPrompt.section() 注册真实段')
+  check(/OFFICIAL_SECTION_ORDER_FALLBACK/.test(hostPrompt), false, '不再保留按名反查的 order 回退表')
+  check(/resolveInsertIndex\(/.test(hostPrompt), false, '不再依赖手工插入下标（注册段由官方排序）')
+  check(100 + 0.5 > 0 && 100 + 0.5 < 1000, true, '默认 100（+0.5）落在 persona（0）之后、工具说明区（≥1000）之前')
 }
 
 // 默认展开行数（thinkMaxLines）：设置行渲染 + 思考正文折叠/展开/收起

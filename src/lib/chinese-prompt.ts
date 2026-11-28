@@ -1,11 +1,11 @@
 // 注册「中文优先提示」：插件 Config（DSH 0.1.7 起，字段全 volatile，客户端
 // 开关写入 profile 行 config）+ 按注入目标（zhPromptTarget）二选一注入：
-// 1) `system`（默认，初始系统提示）：在官方 `system-prompt/assemble` 装配瀑布
-//    **内部**把提示文本作为 `dsh-zh:language` section 写进 sections —— 即实际
-//    提交给模型的 system prompt。必须发生在官方组装内部：agent-loop 提交的
-//    system/message 由 `assemble()` 内部基于此刻 sections 生成的 `systemUpdates()`
-//    快照决定，装配返回后再改 `assembly.sections` 不会被采纳（DSH 0.2.3 起的
-//    `systemUpdates` 契约，也是旧实现「初始系统提示」静默失效的根因）。
+// 1) `system`（默认，初始系统提示）：用官方 `systemPrompt.section()` 注册一个
+//    **真实段** `dsh-zh:language`（order = 排序位置 + 0.5），即实际提交给模型的
+//    system prompt。不能改用「assemble 返回后改 assembly.sections」：DSH 0.2.3
+//    起 system/message 由 `assemble()` 内部生成的 `systemUpdates()` 快照决定，
+//    装配返回后的改写不会被采纳（0.11.2 静默失效的根因）。注册段参与官方准入
+//    与退役：关闭开关/清空文本时 dispose 注册，官方随即提交退役通知。
 //    此目标下不插入可见上下文消息。
 // 2) `user`（首用户提示词）：不写 sections，在 agent/pre-step 插入一条
 //    user/message notice 上下文消息，聊天记录显示来自 deepseek-harness-zh_pro
@@ -26,113 +26,11 @@ import { applyWebFetchSelection } from './web-fetch.js'
 import { applyWebSearchSelection } from './web-search.js'
 import { log, warn } from './util.js'
 import type { HostContext } from './types.js'
-// ============ 「排序位置」的落点计算 ============
-// assemble 分配的 sections 按官方 order 升序排列。DSH 0.2.3 起每个
-// AssembledSection 自带 order；更早的宿主只带 name/text/interpolate，需要用
-// 「官方段名 → SECTION_ORDERS 键名」的表反查。两种来源都归一为 order 后再定位。
-// 表里没收录的第三方新增段只在没有 order 字段时被跳过、不参与定位。
-const OFFICIAL_SECTION_ORDER_NAMES: Record<string, string> = {
-  'harness:identity': 'HARNESS_IDENTITY',
-  'deployment:persona-prefix': 'DEPLOYMENT_PERSONA_PREFIX',
-  'plan:policy': 'PLAN_POLICY',
-  'team:policy': 'TEAM_POLICY',
-  'tools:ptc-only': 'PTC_ONLY',
-  'context:file-reference': 'FILE_REFERENCE',
-  'tool:bash': 'TOOL_BASH',
-  'tool:pwsh': 'TOOL_PWSH',
-  'tool:read': 'TOOL_READ',
-  'tool:write': 'TOOL_WRITE',
-  'tool:edit': 'TOOL_EDIT',
-  'tool:glob': 'TOOL_GLOB',
-  'tool:grep': 'TOOL_GREP',
-  'tool:jobs': 'TOOL_JOBS',
-  'tool:pty': 'TOOL_PTY',
-  'tool:web_search': 'TOOL_WEB_SEARCH',
-  'tool:web_fetch': 'TOOL_WEB_FETCH',
-  'tool:lsp': 'TOOL_LSP',
-  'tool:session-query': 'TOOL_SESSION_QUERY',
-  'tool:goal': 'TOOL_GOAL',
-  'tool:workflow': 'TOOL_WORKFLOW',
-  'tool:ralph': 'TOOL_RALPH',
-  'tool:subagent': 'TOOL_SUBAGENT',
-  'tool:report': 'TOOL_REPORT',
-  'tool:structured_output': 'STRUCTURED_OUTPUT',
-  'tool:computer-use': 'TOOL_COMPUTER_USE',
-  'tools:sdk': 'TOOLS_SDK',
-  'ui:deliverable-file-references': 'DELIVERABLE_FILE_REFERENCES',
-  'harness:source': 'HARNESS_SOURCE',
-  'app:web-surface': 'WEB_SURFACE',
-  'deployment:persona-suffix': 'DEPLOYMENT_PERSONA_SUFFIX',
-}
-
-// 宿主没有 getSectionOrder（DSH 0.1.5 之前）时的回退值，抄自 0.2.1 的
-// SECTION_ORDERS；正常宿主一律走运行时读取，官方调整档位时自动跟随。
-const OFFICIAL_SECTION_ORDER_FALLBACK: Record<string, number> = {
-  HARNESS_IDENTITY: -1000,
-  DEPLOYMENT_PERSONA_PREFIX: 0,
-  PLAN_POLICY: 500,
-  TEAM_POLICY: 600,
-  PTC_ONLY: 800,
-  FILE_REFERENCE: 900,
-  TOOL_BASH: 1000,
-  TOOL_PWSH: 1010,
-  TOOL_READ: 1100,
-  TOOL_WRITE: 1200,
-  TOOL_EDIT: 1300,
-  TOOL_GLOB: 1400,
-  TOOL_GREP: 1500,
-  TOOL_JOBS: 1600,
-  TOOL_PTY: 1700,
-  TOOL_WEB_SEARCH: 2000,
-  TOOL_WEB_FETCH: 2100,
-  TOOL_LSP: 2200,
-  TOOL_SESSION_QUERY: 2300,
-  TOOL_GOAL: 2400,
-  TOOL_WORKFLOW: 2600,
-  TOOL_RALPH: 2700,
-  TOOL_SUBAGENT: 2800,
-  TOOL_REPORT: 2900,
-  TOOL_COMPUTER_USE: 3000,
-  MCP_SERVERS: 3100,
-  TOOLS_SDK: 5000,
-  DELIVERABLE_FILE_REFERENCES: 9000,
-  STRUCTURED_OUTPUT: 9900,
-  HARNESS_SOURCE: 10000,
-  WEB_SURFACE: 10100,
-  DEPLOYMENT_PERSONA_SUFFIX: 10200,
-}
-
-/** 读取官方段落在 system prompt 里的 order；非官方段返回 undefined。 */
-function officialSectionOrder(systemPrompt: unknown, name: unknown): number | undefined {
-  if (typeof name !== 'string') return undefined
-  let key = OFFICIAL_SECTION_ORDER_NAMES[name]
-  // mcp-client / mcp-resources 的段名按服务器动态生成（`mcp:<server>`）。
-  if (key === undefined && (name === 'mcp-resource-servers' || name.startsWith('mcp:'))) key = 'MCP_SERVERS'
-  if (key === undefined) return undefined
-  const service = systemPrompt as { getSectionOrder?: (key: string) => unknown } | null | undefined
-  if (service !== undefined && service !== null && typeof service.getSectionOrder === 'function') {
-    try {
-      const order = service.getSectionOrder(key)
-      if (typeof order === 'number' && Number.isFinite(order)) return order
-    } catch { /* 旧宿主或非官方键：落到回退表 */ }
-  }
-  const fallback = OFFICIAL_SECTION_ORDER_FALLBACK[key]
-  return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : undefined
-}
-
-/** 排序位置 → 已排序 sections 里的插入下标（第一个 order 更大的段之前）。
- * DSH 0.2.3 起 `AssembledSection` 自带 `order`，直接用它；旧宿主没有该字段时
- * 再按「官方段名 → SECTION_ORDERS 键名」反查。 */
-function resolveInsertIndex(sections: readonly unknown[], targetOrder: number, systemPrompt: unknown): number {
-  for (let i = 0; i < sections.length; i += 1) {
-    const entry = sections[i] as { name?: unknown; order?: unknown } | null | undefined
-    const order = typeof entry?.order === 'number' && Number.isFinite(entry.order)
-      ? entry.order
-      : officialSectionOrder(systemPrompt, entry?.name)
-    if (order !== undefined && order > targetOrder) return i
-  }
-  return sections.length
-}
+// 「排序位置」：注入段现在通过官方 `systemPrompt.section()` 注册（见下方
+// installChinesePrompt 的「注册真段」一节），`PromptSection.order` 由官方装配
+// 统一排序（0.2.0-rc.2 起所有受支持版本都是 order 升序、同 order 按名称），
+// 因此 0.11.3 里的「官方段名 → SECTION_ORDERS 键名」反查表与手工插入下标
+// `resolveInsertIndex` 已删除：注册段天然带 order，新旧宿主都按它落点。
 
 // 「模型请求中文化」共享状态：由本文件（dsh-zh Config 的唯一维护者）维护，
 // model-locale.js 通过 getModelState() 读取。ready 表示 Config 快照已就绪
@@ -379,10 +277,122 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
       } catch { /* 读取失败沿用上次状态 */ }
     }
     syncFromSnapshot(dereferenceZhConfig(currentConfig()), true)
+    // ============ 「初始系统提示」注入：注册一个真实的 system section ============
+    // DSH 0.2.3 起，发给模型的 system/message 由 `assemble()` 在装配瀑布之后、
+    // 返回之前生成的 `systemUpdates()` 快照决定（packages/core/system-prompt/src/
+    // index.ts 的 renderedSections → systemUpdates 闭包），装配返回后再改
+    // `assembly.sections` 不会被采纳。因此这里改用官方 `systemPrompt.section()`
+    // 注册一个**真实段**：它参与官方排序、准入与退役，是本插件唯一可靠的注入面。
+    //
+    // 落点：order = 用户「排序位置」（zhPromptOrder，默认 100）+ 0.5。
+    // 官方装配按 order 升序、同 order 再按名称排序，而整数 order 的语义是
+    // 「排在该官方档位之后」，+0.5 保证稳定落在该档位之后、下一档之前，且不受
+    // 名称比较影响（官方档位都是整数，最小间隔 10）。默认 100 落在
+    // deployment:persona-prefix（order 0）之后、官方政策与工具说明区之前；
+    // -1001 及更小越过 harness:identity（order -1000）排到最前。
+    //
+    // 生命周期：`text` 是函数、每次装配现读 state.text（改文本不重挂）；只在
+    // 开关/文本/目标/order/interpolate 变化时重挂，关闭或清空即 dispose ——
+    // 官方随后按「曾准入且已无存活注册」提交退役通知，而不是把旧段留在会话里
+    // 直到压缩。注册本身随插件 fiber 自动释放（systemPrompt.section() 内部就是
+    // ctx.effect），这里只保留一个幂等的手动撤回入口。
+    //
+    // complete persona：`complete: true`（如 minimal preset）的段会在瀑布之后用
+    // **瀑布前捕获的副本**恢复成唯一段，任何注册/瀑布注入都会被丢弃；这种组合
+    // 请改用「首用户提示词」目标。
+    //
+    // `{{…}}` 防护（保守策略）：注册段拿不到 per-assembly 的 variables，而
+    // renderPrompt 对解析不了的引用一律**抛错**、不是跳过——用户写 `{{cwd}}`
+    // （0.2.1 起已不是内置变量）会让整个请求在准入前失败。因此除官方 loop 一定
+    // 注册的 `{{model}}` 外，任何 `{{name}}` 都把整段降级为 `interpolate: false`
+    // （原样保留、不解析）。代价：同一段里既有 `{{model}}` 又有未知占位符时，
+    // `{{model}}` 也不再插值——「不失败」优先于「尽量插值」。
+    const GROUP_AT = /^\{\{([^{}]*)\}\}/
+    /** 该文本是否必须原样保留（含 `model` 以外的任何 {{…}}，畸形组同样命中）。 */
+    const needsLiteralText = function (text: string): boolean {
+      let pos = 0
+      for (;;) {
+        const open = text.indexOf('{{', pos)
+        if (open < 0) return false
+        const group = GROUP_AT.exec(text.slice(open))
+        if (group === null) {
+          // 后面没有 `}}`：官方按字面 prose 处理、不抛错；否则是 malformed 组。
+          if (text.indexOf('}}', open + 2) < 0) return false
+          return true
+        }
+        // 名字不是 `model`（含大写、连字符、空名、带空格等 malformed 形态）→ 不插值。
+        if (group[1] !== 'model') return true
+        pos = open + group[0].length
+      }
+    }
+    /** 退役通知：官方在「曾准入 + 已无存活注册」时把这段文本提交为退役段。 */
+    const SECTION_RETIREMENT = 'deepseek-harness-zh_pro 注入的中文提示已停用，此前的语言要求不再适用。'
+    /** 当前挂载的注入段（同一时刻最多一份；重挂前必先撤回）。 */
+    let mountedSection: { order: number; literal: boolean; dispose: () => void } | undefined
+    /** 幂等撤回：官方注册随 fiber 释放后再撤一次也只是空操作。 */
+    const releasePromptSection = function (): void {
+      if (mountedSection === undefined) return
+      const dispose = mountedSection.dispose
+      mountedSection = undefined
+      try { dispose() } catch { /* 已随 fiber 释放 */ }
+    }
+    /** 按当前 state 收敛注册（不读配置）：非活跃即撤回，参数变化先撤后挂。 */
+    const reconcilePromptSection = function (): void {
+      const active = state.enabled === true && state.text !== '' && state.target === ZH_PROMPT_TARGET_SYSTEM
+      const order = state.order + 0.5
+      const literal = needsLiteralText(state.text)
+      if (mountedSection !== undefined
+        && (!active || mountedSection.order !== order || mountedSection.literal !== literal)) {
+        releasePromptSection()
+      }
+      if (!active || mountedSection !== undefined) return
+      const service = systemPrompt as { section?: (section: unknown) => unknown } | null | undefined
+      if (service === null || service === undefined || typeof service.section !== 'function') return
+      const dispose = service.section({
+        name: ZH_PROMPT_SECTION_NAME,
+        order,
+        // 现读 state.text：文本编辑不必重挂，下一次装配即生效。
+        text: function () { return state.text },
+        ...literal ? { interpolate: false } : {},
+        retirement: SECTION_RETIREMENT,
+      })
+      mountedSection = {
+        order, literal,
+        dispose: typeof dispose === 'function' ? (dispose as () => void) : function () {},
+      }
+    }
+    /** 现读配置后收敛（装配入口调用：volatile 事件并不保证送达）。 */
+    const syncPromptSection = function (): void {
+      try { refreshFromLiveConfig() } catch { /* 读取失败沿用上次状态 */ }
+      reconcilePromptSection()
+    }
+    reconcilePromptSection()
+    // 收敛时机：loader/volatile-update（快速路径，不保证送达）+ 装配入口（每步
+    // 一次的兜底）。装配入口的监听器在官方「已收集 sections」之后执行，所以
+    // **若只靠它**，开关切换要晚一步生效（本步仍用旧段，退役通知下一步提交）；
+    // volatile 送达时就当场重挂，下一步即生效。
+    let assemblyWarningShown = false
+    ctx.on('system-prompt/assemble', async function (_assembly: any, _context: any, next: any) {
+      try {
+        syncPromptSection()
+      } catch (error) {
+        if (!assemblyWarningShown) {
+          assemblyWarningShown = true
+          warn(`同步初始系统提示失败，当前请求沿用已注册的 system prompt: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      return next()
+    })
+    if (systemPrompt === null || systemPrompt === undefined) {
+      warn('systemPrompt 服务不可用：初始系统提示目标不可用，首用户提示词目标仍可用')
+    }
     // 实时配置：宿主把 volatile 变更提交进 entry config 并派发
     // loader/volatile-update（仅本 fiber）；现读 entry 的 config 再收敛状态。
     ctx.on('loader/volatile-update', function () {
       syncFromSnapshot(dereferenceZhConfig(currentConfig()), false)
+      // 设置页保存后的快速路径：立刻按新配置重挂/撤回注入段。该事件不保证
+      // 送达（诊断 volatileCount 恒为 0 的场景），因此装配入口还会兜底收敛一次。
+      reconcilePromptSection()
     })
 
     // 注入上下文消息：只在模型真正开始新一步前插入，并复用 agent-instructions
@@ -428,96 +438,6 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
         },
       }
     }
-    // 把提示同步进已组装的 system prompt sections。仅「初始系统提示」目标
-    // 生效，落点由「排序位置」（zhPromptOrder，默认 100）决定：与官方
-    // SECTION_ORDERS 同一坐标系，默认排在 deployment:persona-prefix（order 0，
-    // 「你是一个由 … 模型驱动的编码代理。」）之后、官方政策与工具说明区之前；
-    // 填负数可前移，-1001 及更小越过 harness:identity（-1000）排到最前。
-    // 目标切走、开关关闭或文本为空时移除同名 section。
-    // 该方法在 `system-prompt/assemble` 装配瀑布内部执行（早于 `systemUpdates()`
-    // 快照）；`complete: true` persona 会在瀑布之后恢复为唯一段并丢弃本段。
-    //
-    // `{{…}}` 防护（DSH 0.2.1 起）：这里是**用户自定义文本**，而 renderPrompt
-    // 对解析不了的引用一律抛错、不是跳过——用户若在设置里写 `{{cwd}}`（0.2.1
-    // 已移除该内置变量），整个请求会在准入前失败，且失败点远离用户输入、极难排查。
-    // 官方给出的手段是该 section/context 的 `interpolate: false`（原样保留、
-    // 不解析）。但一律标 false 会让用户**有意**写的 `{{model}}` 也不再插值，
-    // 因此只在文本里含有当前 assembly 解析不了的引用时才降级为不插值。
-    //
-    // 判据严格照抄官方 interpolate()（system-prompt/src/index.ts）的三条失败路径：
-    //   GROUP_AT = /^\{\{([^{}]*)\}\}/     —— 先捞出 {{…}} 组
-    //   VARIABLE_NAME = /^[a-z][a-z0-9_]*$/ —— 组名不合规 → malformed
-    //        （大写 / 连字符 / 空名 / 带空格 全在此列，实测都会 throw，
-    //          不能当成「安全文本」放过）
-    //   未注册 → unknown；已注册但值 undefined → has no value
-    // `{{` 后完全找不到 `}}` 时官方按字面 prose 处理（不 throw）；但若中间夹花括号
-    // 导致「有 }} 却凑不出合规组」，走的是 malformed 路径。
-    const GROUP_AT = /^\{\{([^{}]*)\}\}/
-    const VARIABLE_NAME = /^[a-z][a-z0-9_]*$/
-    /** 该文本在 renderPrompt 下是否可能抛错（保守：能抛出就返回 true）。 */
-    const wouldFailInterpolation = function (text, variables) {
-      let pos = 0
-      for (;;) {
-        const open = text.indexOf('{{', pos)
-        if (open < 0) return false
-        const group = GROUP_AT.exec(text.slice(open))
-        if (group === null) {
-          // 后面没有 `}}`：字面 prose，安全；否则是 malformed 组。
-          if (text.indexOf('}}', open + 2) < 0) return false
-          return true
-        }
-        const name = group[1]
-        if (!VARIABLE_NAME.test(name)) return true
-        const value = variables !== null && typeof variables === 'object' ? variables[name] : undefined
-        if (typeof value !== 'string') return true
-        pos = open + group[0].length
-      }
-    }
-    const syncAssemblySection = function (assembly) {
-      if (assembly === null || typeof assembly !== 'object' || !Array.isArray(assembly.sections)) return
-      // 每次组装前先按**当前**配置重同步一次。不能只靠 loader/volatile-update：
-      // 实测该事件在设置页保存后并不会送达本插件（诊断 volatileCount 恒为 0），
-      // 只依赖它就会让 state 永远停在 apply 时的值——用户改的设置要等下次
-      // 重启/重载才生效，表现就是「新会话注入的总是上一版」。
-      refreshFromLiveConfig()
-      // 每次同步都先摘掉旧段、再按当前排序位置重新插入：用户改了位置、或
-      // 其它改写器调整过段落顺序时，原地替换索引会留下错位。
-      const existing = assembly.sections.findIndex(function (section) { return section?.name === ZH_PROMPT_SECTION_NAME })
-      if (existing >= 0) assembly.sections.splice(existing, 1)
-      if (state.enabled !== true || state.text === '' || state.target !== ZH_PROMPT_TARGET_SYSTEM) return
-      const unsafe = wouldFailInterpolation(state.text, assembly?.variables)
-      // 官方装配先按 order、再按名称排序。用户设置的整数 order 语义是「排在该
-      // 官方档位之后」，故落点用 order + 0.5 的空隙，稳定落在该档位之后、下一
-      // 官方档位之前（官方档位均为整数且间隔 ≥10，不会被跨过）。
-      const section: { name: string; order: number; text: string; interpolate?: boolean } = {
-        name: ZH_PROMPT_SECTION_NAME, order: state.order + 0.5, text: state.text,
-      }
-      if (unsafe) section.interpolate = false
-      assembly.sections.splice(resolveInsertIndex(assembly.sections, state.order, systemPrompt), 0, section)
-    }
-    // 通过官方 `system-prompt/assemble` 装配瀑布写入最终 system prompt。必须是
-    // 装配**内部**的监听器——`assemble()` 会在瀑布之后依据当时的 sections 生成
-    // `systemUpdates()` 快照，agent-loop 正是用该快照提交 system/message；装配
-    // 返回后再改 `assembly.sections` 不会被采纳（DSH 0.2.3 起的契约，也是本插件
-    // 旧实现「初始系统提示」静默失效的根因）。
-    // `complete: true` persona（如 minimal preset）会在瀑布之后恢复成唯一段并丢弃
-    // 本段，这种组合请改用「首用户提示词」目标。
-    let assemblyWarningShown = false
-    ctx.on('system-prompt/assemble', async function (assembly: any, _context: any, next: any) {
-      try {
-        syncAssemblySection(assembly)
-      } catch (error) {
-        if (!assemblyWarningShown) {
-          assemblyWarningShown = true
-          warn(`同步初始系统提示失败，本次请求将沿用原 system prompt: ${error instanceof Error ? error.message : String(error)}`)
-        }
-      }
-      return next()
-    })
-    if (systemPrompt === null || systemPrompt === undefined) {
-      warn('systemPrompt 服务不可用：初始系统提示目标不可用，首用户提示词目标仍可用')
-    }
-
     // 注入上下文消息（仅「首用户提示词」目标）：只在模型真正开始新一步前
     // 插入，并复用 agent-instructions 的「插到最后一个 claimed 消息之后」
     // 位置，保证用户消息仍在最前。目标为「初始系统提示」时 makePromptMessage
