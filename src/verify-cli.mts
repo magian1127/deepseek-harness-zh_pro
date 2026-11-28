@@ -222,27 +222,55 @@ try {
   for (const key of Object.keys(configState))
     configRef[key] = { get: function () { return configState[key] } }
   configRef.zhPromptOrder = { get: function () { return configState.zhPromptOrder } }
+  // 模拟 DSH 0.2.3 的 systemPrompt 契约：sections 带 order；`assemble` 内部先
+  // 派发 `system-prompt/assemble` 装配瀑布，再按 order/名称排序，并在**此时刻**
+  // 生成 `systemUpdates()` 快照——agent-loop 提交给模型的 system/message 就来自
+  // 这个快照。旧实现（装配返回后改 assembly.sections）因此进不了模型请求；
+  // 本测试据此守住「注入段必须出现在 systemUpdates 里」。
+  const BASE_SECTIONS = [
+    { name: 'harness:identity', order: -1000, text: 'identity' },
+    { name: 'deployment:persona-prefix', order: 0, text: 'persona' },
+    { name: 'tool:read', order: 1100, text: 'read' },
+    { name: 'ui:deliverable-file-references', order: 9000, text: 'refs' },
+    { name: 'deployment:persona-suffix', order: 10200, text: 'suffix' },
+  ]
+  function compareSectionNames(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0 }
+  const handlers = {}
+  const effects = []
   const originalAssemble = async function () {
-    // 真实 assembly 总带 variables（renderPrompt 的插值依据）。chinese-prompt
-    // 的 {{…}} 防护要读它判断「文本里有没有解析不了的占位符」，因此 stub 必须
-    // 提供同一形状的字段；只给 model，cwd 不可解析，正是 0.2.1 的常规形状。
-    // sections 按官方 order 升序（与真实 assemble 返回一致）：identity(-1000)
-    // → persona-prefix(0) → tool:read(1100) → ui:deliverable-file-references
-    // (9000) → persona-suffix(10200)，用来验证「排序位置」的落点。
-    return {
-      sections: [
-        { name: 'harness:identity', text: 'identity' },
-        { name: 'deployment:persona-prefix', text: 'persona' },
-        { name: 'tool:read', text: 'read' },
-        { name: 'ui:deliverable-file-references', text: 'refs' },
-        { name: 'deployment:persona-suffix', text: 'suffix' },
-      ],
+    let assembly = {
+      sections: BASE_SECTIONS.map(function (section) { return { ...section } }),
+      contexts: [],
+      // 真实 assembly 总带 variables（renderPrompt 的插值依据）。chinese-prompt
+      // 的 {{…}} 防护要读它判断「文本里有没有解析不了的占位符」，因此 stub 必须
+      // 提供同一形状的字段；只给 model，cwd 不可解析，正是 0.2.1 的常规形状。
       variables: { model: 'deepseek-v4.1-flash' },
+    }
+    // 按 cordis waterfall 顺序执行 system-prompt/assemble 监听（prepend 在前，
+    // 其余按注册顺序；先执行者为外层，next() 携带内层改动）。
+    const all = handlers['system-prompt/assemble'] ?? []
+    const chain = all.filter(function (entry) { return entry.prepend }).reverse().map(function (entry) { return entry.handler })
+      .concat(all.filter(function (entry) { return !entry.prepend }).map(function (entry) { return entry.handler }))
+    const call = async function (index, current) {
+      if (index >= chain.length) return current
+      return chain[index](current, {}, function () { return call(index + 1, current) })
+    }
+    assembly = await call(0, assembly)
+    // 官方 assemble 最后按 order、再按名称排序（DSH README 的两级排序）。
+    const sections = [...assembly.sections].sort(function (a, b) { return (a.order - b.order) || compareSectionNames(a.name, b.name) })
+    const rendered = sections.map(function (section) {
+      return { name: section.name, order: section.order, text: section.text, ...(section.interpolate === false ? { interpolate: false } : {}) }
+    })
+    return {
+      ...assembly,
+      sections,
+      // 快照在此刻定格：之后对返回对象 sections 的任何改写都不会进入这里。
+      systemUpdates: function () {
+        return [{ type: 'system-message', sections: rendered.map(function (section) { return { ...section } }) }]
+      },
     }
   }
   const systemPrompt = { assemble: originalAssemble }
-  const handlers = {}
-  const effects = []
   const hostCtx = {
     fiber: { entry: { options: { id: 'dsh-zh' } } },
     loader: { entries: function () { return [] } },
@@ -280,6 +308,12 @@ try {
   check(assembly.sections.map(function (section) { return section.name }),
     ['harness:identity', 'deployment:persona-prefix', 'dsh-zh:language', 'tool:read', 'ui:deliverable-file-references', 'deployment:persona-suffix'],
     'system 目标写入最终提示，未配置排序位置时按默认 100 落在 persona 之后、官方工具说明之前')
+  // 关键回归：注入段必须进入 `systemUpdates()` 快照（agent-loop 用它提交
+  // system/message 给模型），而不是只停留在 assembly.sections —— 旧实现是在
+  // 装配返回后才改 sections，此时快照已定格，注入静默丢失（本 bug 的根因）。
+  const committedSections = assembly.systemUpdates().flatMap(function (update) { return update.sections })
+  check(committedSections.some(function (section) { return section.name === 'dsh-zh:language' && section.text === '始终使用中文' }), true,
+    'system 目标注入进入 systemUpdates 快照（真正提交给模型），而非只改 assembly.sections')
   // ---- 排序位置（zhPromptOrder）：与官方 SECTION_ORDERS 同一坐标系 ----
   // sections 已按官方 order 升序，注入段插在「第一个 order 更大的官方段」之前。
   {
@@ -339,6 +373,8 @@ try {
     const unsafe = assembly.sections.find(s => s.name === 'dsh-zh:language')
     check(unsafe?.interpolate, false, '注入文本含未注册 {{cwd}} 时降级为 interpolate:false（否则请求准入前被拒）')
     check(unsafe?.text, '工作目录是 {{cwd}}。', '降级时文本原样保留、不丢用户内容')
+    const unsafeCommitted = assembly.systemUpdates().flatMap(function (update) { return update.sections }).find(function (section) { return section.name === 'dsh-zh:language' })
+    check(unsafeCommitted?.interpolate, false, '{{cwd}} 降级同样进入 systemUpdates 快照（模型实际收到原样文本）')
     Object.assign(configState, { zhPromptText: '你是 {{model}} 模型。' })
     for (const entry of handlers['loader/volatile-update'] ?? []) entry.handler([])
     assembly = await systemPrompt.assemble({})

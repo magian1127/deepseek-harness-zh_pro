@@ -1,10 +1,12 @@
 // 注册「中文优先提示」：插件 Config（DSH 0.1.7 起，字段全 volatile，客户端
 // 开关写入 profile 行 config）+ 按注入目标（zhPromptTarget）二选一注入：
-// 1) `system`（默认，初始系统提示）：把提示文本同步进 decision.assembly
-//    的 sections —— 即实际发送的 system prompt。这一步发生在
-//    SystemPrompt.assemble 完成之后，因此即使 anchored-standard 的
-//    persona 是 `complete: true`（官方组装会把其它全局 section 丢弃），
-//    第一次对话也会带上提示。此目标下不插入可见上下文消息。
+// 1) `system`（默认，初始系统提示）：在官方 `system-prompt/assemble` 装配瀑布
+//    **内部**把提示文本作为 `dsh-zh:language` section 写进 sections —— 即实际
+//    提交给模型的 system prompt。必须发生在官方组装内部：agent-loop 提交的
+//    system/message 由 `assemble()` 内部基于此刻 sections 生成的 `systemUpdates()`
+//    快照决定，装配返回后再改 `assembly.sections` 不会被采纳（DSH 0.2.3 起的
+//    `systemUpdates` 契约，也是旧实现「初始系统提示」静默失效的根因）。
+//    此目标下不插入可见上下文消息。
 // 2) `user`（首用户提示词）：不写 sections，在 agent/pre-step 插入一条
 //    user/message notice 上下文消息，聊天记录显示来自 deepseek-harness-zh_pro
 //    的上下文行，展开可见注入文本。
@@ -20,17 +22,15 @@ import {
   ZH_PROVIDER_KEY, ZH_SEARCH_ORDER_DEFAULT, ZH_SEARCH_ORDER_MAX,
   ZH_SEARCH_PER_QUERY_MAX, ZH_SETTINGS_NS,
 } from './constants.js'
-import { ensureAssemblePatch, registerAssembleRewriter } from './assemble-patch.js'
 import { applyWebFetchSelection } from './web-fetch.js'
 import { applyWebSearchSelection } from './web-search.js'
 import { log, warn } from './util.js'
 import type { HostContext } from './types.js'
 // ============ 「排序位置」的落点计算 ============
-// assemble 返回的 sections 已按官方 order 升序排列，但 AssembledSection 只带
-// name/text/interpolate、不带 order。要把用户设置的排序位置落成数组下标，
-// 只能用「官方段名 → SECTION_ORDERS 键名」的表反查每段的 order。
-// 表里没收录的段（第三方插件新增段）跳过、不参与定位——注入段会落在它后面
-// 最近的官方段之前，宁可按官方坐标系近似，也不猜第三方数值。
+// assemble 分配的 sections 按官方 order 升序排列。DSH 0.2.3 起每个
+// AssembledSection 自带 order；更早的宿主只带 name/text/interpolate，需要用
+// 「官方段名 → SECTION_ORDERS 键名」的表反查。两种来源都归一为 order 后再定位。
+// 表里没收录的第三方新增段只在没有 order 字段时被跳过、不参与定位。
 const OFFICIAL_SECTION_ORDER_NAMES: Record<string, string> = {
   'harness:identity': 'HARNESS_IDENTITY',
   'deployment:persona-prefix': 'DEPLOYMENT_PERSONA_PREFIX',
@@ -120,11 +120,15 @@ function officialSectionOrder(systemPrompt: unknown, name: unknown): number | un
   return typeof fallback === 'number' && Number.isFinite(fallback) ? fallback : undefined
 }
 
-/** 排序位置 → 已排序 sections 里的插入下标（第一个 order 更大的段之前）。 */
+/** 排序位置 → 已排序 sections 里的插入下标（第一个 order 更大的段之前）。
+ * DSH 0.2.3 起 `AssembledSection` 自带 `order`，直接用它；旧宿主没有该字段时
+ * 再按「官方段名 → SECTION_ORDERS 键名」反查。 */
 function resolveInsertIndex(sections: readonly unknown[], targetOrder: number, systemPrompt: unknown): number {
   for (let i = 0; i < sections.length; i += 1) {
-    const entry = sections[i] as { name?: unknown } | null | undefined
-    const order = officialSectionOrder(systemPrompt, entry?.name)
+    const entry = sections[i] as { name?: unknown; order?: unknown } | null | undefined
+    const order = typeof entry?.order === 'number' && Number.isFinite(entry.order)
+      ? entry.order
+      : officialSectionOrder(systemPrompt, entry?.name)
     if (order !== undefined && order > targetOrder) return i
   }
   return sections.length
@@ -430,7 +434,8 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
     // 「你是一个由 … 模型驱动的编码代理。」）之后、官方政策与工具说明区之前；
     // 填负数可前移，-1001 及更小越过 harness:identity（-1000）排到最前。
     // 目标切走、开关关闭或文本为空时移除同名 section。
-    // 该方法在 assemble 之后执行，因此 complete persona 无法把它丢弃。
+    // 该方法在 `system-prompt/assemble` 装配瀑布内部执行（早于 `systemUpdates()`
+    // 快照）；`complete: true` persona 会在瀑布之后恢复为唯一段并丢弃本段。
     //
     // `{{…}}` 防护（DSH 0.2.1 起）：这里是**用户自定义文本**，而 renderPrompt
     // 对解析不了的引用一律抛错、不是跳过——用户若在设置里写 `{{cwd}}`（0.2.1
@@ -481,28 +486,35 @@ export function installChinesePrompt(ctx: HostContext, config: Record<string, un
       if (existing >= 0) assembly.sections.splice(existing, 1)
       if (state.enabled !== true || state.text === '' || state.target !== ZH_PROMPT_TARGET_SYSTEM) return
       const unsafe = wouldFailInterpolation(state.text, assembly?.variables)
-      const section: { name: string; text: string; interpolate?: boolean } = { name: ZH_PROMPT_SECTION_NAME, text: state.text }
+      // 官方装配先按 order、再按名称排序。用户设置的整数 order 语义是「排在该
+      // 官方档位之后」，故落点用 order + 0.5 的空隙，稳定落在该档位之后、下一
+      // 官方档位之前（官方档位均为整数且间隔 ≥10，不会被跨过）。
+      const section: { name: string; order: number; text: string; interpolate?: boolean } = {
+        name: ZH_PROMPT_SECTION_NAME, order: state.order + 0.5, text: state.text,
+      }
       if (unsafe) section.interpolate = false
       assembly.sections.splice(resolveInsertIndex(assembly.sections, state.order, systemPrompt), 0, section)
     }
-    // 官方 complete persona 会在 SystemPrompt.assemble 返回前把其它 section
-    // 全部丢弃。这里在共享 assemble 管线上注册改写器：在官方组装返回之后、
-    // agent-loop 使用之前，把提示同步进最终 assembly —— 首次模型调用就会带上，
-    // 且任何 preset 都无法在后续 waterfall 中把它移除。
+    // 通过官方 `system-prompt/assemble` 装配瀑布写入最终 system prompt。必须是
+    // 装配**内部**的监听器——`assemble()` 会在瀑布之后依据当时的 sections 生成
+    // `systemUpdates()` 快照，agent-loop 正是用该快照提交 system/message；装配
+    // 返回后再改 `assembly.sections` 不会被采纳（DSH 0.2.3 起的契约，也是本插件
+    // 旧实现「初始系统提示」静默失效的根因）。
+    // `complete: true` persona（如 minimal preset）会在瀑布之后恢复成唯一段并丢弃
+    // 本段，这种组合请改用「首用户提示词」目标。
     let assemblyWarningShown = false
-    ctx.effect(function () {
-      return registerAssembleRewriter(function (assembly) {
-        try {
-          syncAssemblySection(assembly)
-        } catch (error) {
-          if (!assemblyWarningShown) {
-            assemblyWarningShown = true
-            warn(`同步初始系统提示失败，本次请求将沿用原 system prompt: ${error instanceof Error ? error.message : String(error)}`)
-          }
+    ctx.on('system-prompt/assemble', async function (assembly: any, _context: any, next: any) {
+      try {
+        syncAssemblySection(assembly)
+      } catch (error) {
+        if (!assemblyWarningShown) {
+          assemblyWarningShown = true
+          warn(`同步初始系统提示失败，本次请求将沿用原 system prompt: ${error instanceof Error ? error.message : String(error)}`)
         }
-      })
-    }, 'dsh-zh: chinese-prompt rewriter')
-    if (!ensureAssemblePatch(ctx, systemPrompt)) {
+      }
+      return next()
+    })
+    if (systemPrompt === null || systemPrompt === undefined) {
       warn('systemPrompt 服务不可用：初始系统提示目标不可用，首用户提示词目标仍可用')
     }
 

@@ -12,8 +12,8 @@
  * 4. 「中文优先提示」（默认关闭）：插件 Config（DSH 0.1.7 起，行 id
  *    `dsh-zh` 的行 config，字段 `zhPrompt` 默认 false、`zhPromptText` 注入
  *    文本、`zhPromptTarget` 注入目标，客户端经 configForms 读写）。注入目标
- *    二选一（客户端下拉框）：`system`（初始系统提示，默认）——包装
- *    systemPrompt.assemble 把文本写进最终 system prompt 的 sections；
+ *    二选一（客户端下拉框）：`system`（初始系统提示，默认）——经官方
+ *    system-prompt/assemble 装配瀑布把文本写进最终 system prompt 的 sections；
  *    `user`（首用户提示词）——在 `agent/pre-step` 阶段把用户文本作为一条
  *    `user/message` 上下文消息插入（source = deepseek-harness-zh_pro，
  *    form = notice），聊天记录出现「上下文注入 deepseek-harness-zh_pro」

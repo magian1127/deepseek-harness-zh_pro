@@ -2,7 +2,7 @@
 // 该开关、注入文本与注入目标都不走 localStorage，而是经宿主 configForms
 // 服务按入口 id `dsh-zh` 取 ConfigForm（字段 `zhPrompt` 开关 /
 // `zhPromptText` 文本 / `zhPromptTarget` 注入目标），由主机半边按目标注入：
-// `system` 包装 systemPrompt.assemble 写入实际 system prompt；`user` 在
+// `system` 经官方 system-prompt/assemble 装配瀑布写入实际 system prompt；`user` 在
 // agent/pre-step 阶段作为 user/message 上下文消息插入（聊天界面可见）。
 // 客户端在 configForms 就绪后把 scope 放入本 store，设置页据此渲染；服务
 // 缺失时保持 null，设置页显示禁用的开关行，插件其余功能不受影响。

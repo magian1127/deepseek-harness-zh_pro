@@ -431,17 +431,19 @@ DSH 每个版本都会继续把更多 zh 词典和硬编码文案就地本地化
 
 - **注入段落点**（`chinese-prompt.ts`）：`zhPromptOrder`（-9999–9999，默认 `100`）与官方
   `SECTION_ORDERS` 同一坐标系。默认 `100` 落在 `deployment:persona-prefix`（order 0）之后、
-  首个工具说明（`TOOL_BASH` 1000）之前。`AssembledSection` 只带 name/text/interpolate、**不带
-  order**，因此模块内维护「官方段名 → SECTION_ORDERS 键名」表
-  （`OFFICIAL_SECTION_ORDER_NAMES`）：优先用运行时 `systemPrompt.getSectionOrder(key)`
-  取真实数值（官方调整档位时自动跟随），旧宿主回退 `OFFICIAL_SECTION_ORDER_FALLBACK`；
-  MCP 段按 `mcp:` 前缀归到 `MCP_SERVERS`。插入位置 = 第一个 order 更大的官方段之前，
-  未收录的第三方新增段不参与定位。DSH 新增官方段或调档时同步这张表；守护在
-  `verify-cli.mjs`（缺省走默认 100 落在 persona 之后、负数落点（-1/-500/-1000/-1001）、
-  负小数四舍五入与 `-0` 归零、等于官方 order 时的先后、越界钳制、非数字回退、反复同步
-  不产生双份）与 `verify-pairs.cjs`（双侧默认值/范围一致，含设置页 setter 允许的负数下界）。
-  **不得**回到「按名字硬插在 persona 之前」的旧实现：那会让注入段越过所有系统自带
-  段落排到最前面。
+  首个工具说明（`TOOL_BASH` 1000）之前。注入通过官方 `system-prompt/assemble` 装配瀑布在
+  **组装内部**完成（`ctx.on('system-prompt/assemble', ...)`）：DSH 0.2.3 起模型请求的
+  system/message 来自 `assemble()` 内部生成的 `systemUpdates()` 快照，在 `assemble()` 返回后
+  再改 `assembly.sections` 不会被采纳——这正是旧实现「初始系统提示」静默失效的根因，也是
+  本模块从「包装 assemble 的返回对象」改为「装配瀑布监听器」的原因。落点用 `order + 0.5`
+  的空隙：官方装配按 order、再按名称排序，+0.5 保证注入段落在目标官方档位之后、下一档
+  之前，且不受名称排序影响。`AssembledSection` 自 DSH 0.2.3 起自带 `order`，
+  `resolveInsertIndex` 优先用它；旧宿主回退「官方段名 → SECTION_ORDERS 键名」表
+  （`OFFICIAL_SECTION_ORDER_NAMES` 与运行时 `getSectionOrder`；MCP 段按 `mcp:` 前缀归到
+  `MCP_SERVERS`）。`complete: true` persona（如 minimal preset）会在瀑布之后恢复为唯一段、
+  丢弃本段；需要在该组合注入时改用 `user` 目标。守护在 `verify-cli.mjs`：除既有排序/负数/
+  钳制/去重断言外，新增断言「注入段必须出现在 `assembly.systemUpdates()` 快照里」，旧实现
+  会在此失败。
   负数下界的理由：官方最小 order 是 `HARNESS_IDENTITY`（-1000），下界取 -9999 让用户
   能把注入段放到 system prompt 绝对最前；`resolveInsertIndex` 本身对 `targetOrder` 无假设，
   归一化只做钳制，因此放开下界不需要改落点算法。
